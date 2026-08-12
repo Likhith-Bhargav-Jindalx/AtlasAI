@@ -19,14 +19,19 @@ export interface RecordingStep {
   offset_ms: number | null
 }
 
+export interface RecordingPage {
+  page_index: number
+  has_video: boolean
+  video_asset_id: string | null
+  duration_seconds: number | null
+  steps: RecordingStep[]
+}
+
 export interface RecordingDetail {
   id: string
   status: string
   role: string
-  duration_seconds: number | null
-  has_video: boolean
-  video_asset_id: string | null
-  steps: RecordingStep[]
+  pages: RecordingPage[]
 }
 
 export function useRecordings(orgId: string, status?: string) {
@@ -62,7 +67,7 @@ export function useStopRecording() {
   })
 }
 
-export function recordingVideoUrl(recordingId: string): string {
+export function recordingVideoUrl(recordingId: string, pageIndex: number): string {
   const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
-  return `${base}/recordings/${recordingId}/video`
+  return `${base}/recordings/${recordingId}/video/${pageIndex}`
 }
