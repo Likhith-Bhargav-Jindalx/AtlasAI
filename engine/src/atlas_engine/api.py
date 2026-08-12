@@ -12,7 +12,12 @@ from atlas_engine.db import session_scope
 from atlas_engine.db.models import User
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
-from atlas_engine.recording_service import claim_recording_request, create_recording_request, list_recording_requests
+from atlas_engine.recording_service import (
+    claim_recording_request,
+    create_recording_request,
+    get_recording_detail,
+    list_recording_requests,
+)
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
 app = FastAPI(title="Atlas Engine Local API")
@@ -204,3 +209,28 @@ def start_recording_endpoint(body: StartRecordingBody) -> StartRecordingResponse
 def stop_recording_endpoint(capture_session_id: str) -> StopRecordingResponse:
     recording_id = stop_live_capture(uuid.UUID(capture_session_id))
     return StopRecordingResponse(recording_id=str(recording_id))
+
+
+class RecordingStepResponse(BaseModel):
+    order_index: int
+    caption: str | None = None
+    offset_ms: int | None = None
+
+
+class RecordingDetailResponse(BaseModel):
+    id: str
+    status: str
+    role: str
+    duration_seconds: int | None = None
+    has_video: bool
+    video_asset_id: str | None = None
+    steps: list[RecordingStepResponse]
+
+
+@app.get("/recordings/{recording_id}", response_model=RecordingDetailResponse)
+def get_recording_endpoint(recording_id: str) -> RecordingDetailResponse:
+    try:
+        detail = get_recording_detail(uuid.UUID(recording_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return RecordingDetailResponse(**detail)

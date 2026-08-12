@@ -119,6 +119,31 @@ def persist_recording(
     return recording_id
 
 
+def get_recording_detail(recording_id: uuid.UUID) -> dict:
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        if recording is None:
+            raise ValueError(f"No such recording: {recording_id}")
+
+        video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one_or_none()
+        steps = []
+        if video_asset is not None:
+            steps = [
+                {"order_index": s.order_index, "caption": s.caption_text, "offset_ms": s.offset_ms}
+                for s in sorted(video_asset.steps, key=lambda s: s.order_index)
+            ]
+
+        return {
+            "id": str(recording.id),
+            "status": recording.status,
+            "role": recording.role,
+            "duration_seconds": recording.duration_seconds,
+            "has_video": video_asset is not None,
+            "video_asset_id": str(video_asset.id) if video_asset is not None else None,
+            "steps": steps,
+        }
+
+
 def _caption_for(action: RecordedAction) -> str:
     selector = action.selector_candidates[0]["selector"] if action.selector_candidates else "the page"
     if action.kind == "click":
