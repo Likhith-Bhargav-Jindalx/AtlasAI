@@ -9,6 +9,7 @@ from atlas_engine.db import Base, PortableJSON
 
 SECRET_PROVIDERS = ("env", "azure_keyvault")
 RECORDING_STATUSES = ("capturing", "captured", "failed", "discarded")
+RECORDING_ROLES = ("demo", "authoring")
 
 
 class PortalProfile(Base):
@@ -54,6 +55,10 @@ class Recording(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
     portal_profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portal_profiles.id", ondelete="CASCADE"))
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("recording_requests.id", ondelete="SET NULL"), default=None
+    )
+    role: Mapped[str] = mapped_column(Enum(*RECORDING_ROLES, name="recording_role"), default="demo")
     status: Mapped[str] = mapped_column(Enum(*RECORDING_STATUSES, name="recording_status"), default="capturing")
     capture_blob_prefix: Mapped[str]
     has_audio: Mapped[bool] = mapped_column(default=False)

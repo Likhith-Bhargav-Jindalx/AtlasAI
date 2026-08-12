@@ -8,6 +8,7 @@ from atlas_engine.db import Base, PortableJSON
 
 ORG_PLANS = ("internal", "team", "enterprise")
 USER_ROLES = ("owner", "admin", "member")
+JOB_FUNCTIONS = ("operations_agent", "developer")
 
 
 class Organization(Base):
@@ -33,6 +34,7 @@ class User(Base):
     email: Mapped[str]
     password_hash: Mapped[str]
     role: Mapped[str] = mapped_column(Enum(*USER_ROLES, name="user_role"), default="member")
+    job_function: Mapped[str | None] = mapped_column(Enum(*JOB_FUNCTIONS, name="job_function"), default=None)
     display_name: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

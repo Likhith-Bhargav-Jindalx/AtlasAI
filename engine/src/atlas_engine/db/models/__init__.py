@@ -7,6 +7,7 @@ from atlas_engine.db.models.portal import (
     ReferenceTrajectory,
     SecretsRef,
 )
+from atlas_engine.db.models.requests import RecordingRequest
 from atlas_engine.db.models.scripts import ActionCache, GoldenScript, HealEvent
 from atlas_engine.db.models.video import VideoAsset, VideoStep
 
@@ -18,6 +19,7 @@ __all__ = [
     "Organization",
     "PortalProfile",
     "Recording",
+    "RecordingRequest",
     "ReferenceTrajectory",
     "Run",
     "SecretsRef",
