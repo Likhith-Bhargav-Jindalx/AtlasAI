@@ -1,5 +1,6 @@
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -21,6 +22,18 @@ from atlas_engine.storage import LocalRunStore
 from atlas_engine.trajectory.extract import extract_trajectory
 
 
+@dataclass
+class PageCapture:
+    """One extra tab/popup opened during a recording, beyond the main
+    page persist_recording already handles. page_index must be unique
+    per recording and greater than 0 (0 is always the main page)."""
+    page_index: int
+    actions: list[RecordedAction]
+    video_path: Path | None = None
+    video_started_at_ms: int | None = None
+    video_ended_at_ms: int | None = None
+
+
 def persist_recording(
     org_id: str,
     start_url: str,
@@ -31,13 +44,14 @@ def persist_recording(
     video_path: Path | None = None,
     video_started_at_ms: int | None = None,
     video_ended_at_ms: int | None = None,
+    additional_pages: list[PageCapture] | None = None,
 ) -> uuid.UUID:
     """Persists a captured recording — actions.json, the extracted
-    trajectory, an optional video, and the Recording/ReferenceTrajectory/
-    VideoAsset/VideoStep rows — without running any authoring. This is
-    the recording module's one entrypoint; authoring_service.
-    author_from_recording is the only thing that consumes what this
-    produces.
+    trajectory, one VideoAsset per page (main plus any tabs/popups opened
+    during capture), and the Recording/ReferenceTrajectory rows — without
+    running any authoring. This is the recording module's one entrypoint;
+    authoring_service.author_from_recording is the only thing that
+    consumes what this produces.
     """
     store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="recordings")
@@ -46,13 +60,6 @@ def persist_recording(
     trajectory = extract_trajectory(actions)
     trajectory_path = run_dir.path / "trajectory.json"
     trajectory_path.write_text(json.dumps(trajectory_to_dict(trajectory), indent=2))
-
-    video_blob_ref = None
-    duration_seconds = None
-    if video_path is not None and video_path.exists() and video_path.stat().st_size > 0:
-        video_blob_ref = run_dir.write_bytes("video.webm", video_path.read_bytes())
-        if video_started_at_ms is not None and video_ended_at_ms is not None:
-            duration_seconds = max(0, round((video_ended_at_ms - video_started_at_ms) / 1000))
 
     profile_data = infer_portal_profile(start_url, actions)
 
@@ -72,7 +79,6 @@ def persist_recording(
             capture_blob_prefix=run_dir.blob_ref,
             request_id=request_id,
             role=role,
-            duration_seconds=duration_seconds,
         )
         session.add(recording)
         session.flush()
@@ -85,36 +91,17 @@ def persist_recording(
             )
         )
 
-        if video_blob_ref is not None:
-            video_asset = VideoAsset(
-                org_id=uuid.UUID(org_id),
-                recording_id=recording.id,
-                kind="raw",
-                storage_ref=video_blob_ref,
-                started_at_ms=video_started_at_ms,
-                duration_seconds=duration_seconds,
-                status="ready",
-            )
-            session.add(video_asset)
-            session.flush()
+        recording.duration_seconds = _persist_video_asset(
+            session, org_id, recording.id, run_dir, "video.webm", 0,
+            video_path, video_started_at_ms, video_ended_at_ms, actions,
+        )
 
-            for action in actions:
-                offset_ms = None
-                if video_started_at_ms is not None:
-                    offset_ms = max(0, action.timestamp_ms - video_started_at_ms)
-                session.add(
-                    VideoStep(
-                        video_asset_id=video_asset.id,
-                        order_index=action.index,
-                        dom_action_event={
-                            "kind": action.kind,
-                            "selector_candidates": action.selector_candidates,
-                            "value": action.value,
-                        },
-                        caption_text=_caption_for(action),
-                        offset_ms=offset_ms,
-                    )
-                )
+        for page_capture in (additional_pages or []):
+            _persist_video_asset(
+                session, org_id, recording.id, run_dir, f"video-page{page_capture.page_index}.webm",
+                page_capture.page_index, page_capture.video_path,
+                page_capture.video_started_at_ms, page_capture.video_ended_at_ms, page_capture.actions,
+            )
 
         if request_id is not None:
             request = session.get(RecordingRequest, request_id)
@@ -124,6 +111,57 @@ def persist_recording(
         recording_id = recording.id
 
     return recording_id
+
+
+def _persist_video_asset(
+    session, org_id: str, recording_id: uuid.UUID, run_dir, filename: str, page_index: int,
+    video_path: Path | None, video_started_at_ms: int | None, video_ended_at_ms: int | None,
+    actions: list[RecordedAction],
+) -> int | None:
+    """Writes one page's video (if any) into storage and creates its
+    VideoAsset/VideoStep rows. Returns the computed duration_seconds (or
+    None if there was no usable video) so the main page's call site can
+    also stamp it onto Recording.duration_seconds."""
+    if video_path is None or not video_path.exists() or video_path.stat().st_size == 0:
+        return None
+
+    video_blob_ref = run_dir.write_bytes(filename, video_path.read_bytes())
+    duration_seconds = None
+    if video_started_at_ms is not None and video_ended_at_ms is not None:
+        duration_seconds = max(0, round((video_ended_at_ms - video_started_at_ms) / 1000))
+
+    video_asset = VideoAsset(
+        org_id=uuid.UUID(org_id),
+        recording_id=recording_id,
+        kind="raw",
+        storage_ref=video_blob_ref,
+        page_index=page_index,
+        started_at_ms=video_started_at_ms,
+        duration_seconds=duration_seconds,
+        status="ready",
+    )
+    session.add(video_asset)
+    session.flush()
+
+    for action in actions:
+        offset_ms = None
+        if video_started_at_ms is not None:
+            offset_ms = max(0, action.timestamp_ms - video_started_at_ms)
+        session.add(
+            VideoStep(
+                video_asset_id=video_asset.id,
+                order_index=action.index,
+                dom_action_event={
+                    "kind": action.kind,
+                    "selector_candidates": action.selector_candidates,
+                    "value": action.value,
+                },
+                caption_text=_caption_for(action),
+                offset_ms=offset_ms,
+            )
+        )
+
+    return duration_seconds
 
 
 def list_recordings(org_id: str, status: str | None = None) -> list[dict]:

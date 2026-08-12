@@ -170,6 +170,57 @@ def test_persist_recording_ignores_an_empty_video_file(tmp_path, fixture_portal_
         assert recording.duration_seconds is None
 
 
+def test_persist_recording_creates_a_video_asset_per_additional_page(tmp_path, fixture_portal_url):
+    from atlas_engine.recording_service import PageCapture
+
+    main_video = tmp_path / "main.webm"
+    main_video.write_bytes(b"main-bytes")
+    popup_video = tmp_path / "popup.webm"
+    popup_video.write_bytes(b"popup-bytes")
+
+    with session_scope() as session:
+        org = Organization(name="Multi Page Org", slug=f"multi-page-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    main_actions = [
+        RecordedAction(0, "click", [{"selector": "#login-btn", "rank": 0}], None,
+                        start_url, start_url, "", "", timestamp_ms=1000),
+    ]
+    popup_actions = [
+        RecordedAction(0, "click", [{"selector": "#report-link", "rank": 0}], None,
+                        start_url, start_url, "", "", timestamp_ms=5000),
+    ]
+
+    recording_id = persist_recording(
+        org_id, start_url, main_actions,
+        video_path=main_video, video_started_at_ms=0, video_ended_at_ms=2000,
+        additional_pages=[
+            PageCapture(
+                page_index=1, actions=popup_actions,
+                video_path=popup_video, video_started_at_ms=4000, video_ended_at_ms=6000,
+            ),
+        ],
+    )
+
+    with session_scope() as session:
+        assets = (
+            session.query(VideoAsset)
+            .filter_by(recording_id=recording_id)
+            .order_by(VideoAsset.page_index)
+            .all()
+        )
+        assert [a.page_index for a in assets] == [0, 1]
+        assert (settings.run_root / assets[0].storage_ref).read_bytes() == b"main-bytes"
+        assert (settings.run_root / assets[1].storage_ref).read_bytes() == b"popup-bytes"
+
+        popup_step = session.query(VideoStep).filter_by(video_asset_id=assets[1].id).one()
+        assert popup_step.offset_ms == 1000  # action at 5000ms, popup video started at 4000ms
+        assert popup_step.caption_text == "Click #report-link"
+
+
 def test_create_list_and_claim_recording_request(fixture_portal_url):
     from atlas_engine.db.models import RecordingRequest, User
     from atlas_engine.recording_service import (
