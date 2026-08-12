@@ -38,7 +38,7 @@ npm install
 
 ```bash
 npm install react-router-dom @tanstack/react-query lucide-react
-npm install @fontsource/inter @fontsource-variable/general-sans
+npm install @fontsource/inter @fontsource-variable/outfit
 npm install -D tailwindcss@^3 postcss autoprefixer
 npm install -D vitest @testing-library/react @testing-library/jest-dom jsdom @vitest/ui
 npx tailwindcss init -p
@@ -56,7 +56,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        display: ['"General Sans Variable"', 'system-ui', 'sans-serif'],
+        display: ['"Outfit Variable"', 'system-ui', 'sans-serif'],
         sans: ['Inter', 'system-ui', 'sans-serif'],
       },
       colors: {
@@ -100,7 +100,7 @@ Replace `frontend/src/index.css`:
 @import '@fontsource/inter/400.css';
 @import '@fontsource/inter/500.css';
 @import '@fontsource/inter/600.css';
-@import '@fontsource-variable/general-sans';
+@import '@fontsource-variable/outfit';
 
 @tailwind base;
 @tailwind components;
