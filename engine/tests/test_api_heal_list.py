@@ -34,3 +34,4 @@ def test_list_heal_events_filters_by_status(fixture_portal_url):
     body = response.json()
     assert len(body) == 1
     assert body[0]["id"] == str(pending_id)
+    assert body[0]["portal_domain"] is not None

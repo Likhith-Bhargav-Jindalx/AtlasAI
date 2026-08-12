@@ -202,14 +202,18 @@ def list_heal_events(org_id: str, status: str | None = None) -> list[dict]:
         query = session.query(HealEvent).filter_by(org_id=uuid.UUID(org_id))
         if status is not None:
             query = query.filter_by(status=status)
-        return [
-            {
+
+        results = []
+        for event in query.order_by(HealEvent.created_at.desc()).all():
+            golden_script = session.get(GoldenScript, event.golden_script_id)
+            profile = session.get(PortalProfile, golden_script.portal_profile_id) if golden_script else None
+            results.append({
                 "id": str(event.id),
                 "golden_script_id": str(event.golden_script_id),
+                "portal_domain": profile.domain if profile is not None else None,
                 "trigger": event.trigger,
                 "status": event.status,
                 "diff_summary": event.diff_summary,
                 "created_at": event.created_at.isoformat(),
-            }
-            for event in query.order_by(HealEvent.created_at.desc()).all()
-        ]
+            })
+        return results
