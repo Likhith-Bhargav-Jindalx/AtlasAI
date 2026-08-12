@@ -49,7 +49,7 @@ def persist_recording(
 
     video_blob_ref = None
     duration_seconds = None
-    if video_path is not None and video_path.exists():
+    if video_path is not None and video_path.exists() and video_path.stat().st_size > 0:
         video_blob_ref = run_dir.write_bytes("video.webm", video_path.read_bytes())
         if video_started_at_ms is not None and video_ended_at_ms is not None:
             duration_seconds = max(0, round((video_ended_at_ms - video_started_at_ms) / 1000))

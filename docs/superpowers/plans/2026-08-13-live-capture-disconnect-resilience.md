@@ -492,7 +492,80 @@ git commit -m "feat: surface stop-recording failures instead of failing silently
 
 ---
 
-### Task 6: Manual verification and finish branch
+### Task 6: `persist_recording` rejects an empty video file
+
+**Files:**
+- Modify: `engine/src/atlas_engine/recording_service.py`
+- Test: `engine/tests/test_recording_service.py`
+
+**Found during manual verification of Task 3:** when the browser is killed before it can flush any frames to the `ffmpeg` process muxing the video (a `SIGKILL`-abrupt disconnect leaves no time for that), Playwright still pre-allocates the video file path, so `video_path.exists()` is `True` even though the file is 0 bytes. `persist_recording` was treating that as a valid video — the recording detail endpoint reported `has_video: true` for a file with nothing playable in it. The fix is one extra condition: a video only counts if it has actual bytes.
+
+**Interfaces:**
+- Produces: no signature change — `persist_recording` now checks `video_path.stat().st_size > 0` in addition to `video_path.exists()` before creating a `VideoAsset`/setting `duration_seconds`. A recording whose video never got any frames now correctly reports `has_video: false`, same as if no `video_path` had been passed at all.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# add to engine/tests/test_recording_service.py
+def test_persist_recording_ignores_an_empty_video_file(tmp_path, fixture_portal_url):
+    video_file = tmp_path / "session.webm"
+    video_file.touch()  # exists, but zero bytes — as if the browser died before any frame was muxed
+
+    with session_scope() as session:
+        org = Organization(name="Empty Video Org", slug=f"empty-video-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(
+        org_id, f"{fixture_portal_url}/login.html", [],
+        video_path=video_file, video_started_at_ms=0, video_ended_at_ms=1000,
+    )
+
+    with session_scope() as session:
+        assert session.query(VideoAsset).filter_by(recording_id=recording_id).one_or_none() is None
+        recording = session.get(Recording, recording_id)
+        assert recording.duration_seconds is None
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd engine && .venv/bin/pytest tests/test_recording_service.py::test_persist_recording_ignores_an_empty_video_file -v`
+Expected: FAIL — a `VideoAsset` row gets created for the empty file today.
+
+- [ ] **Step 3: Implement**
+
+In `engine/src/atlas_engine/recording_service.py`, change the video-detection condition:
+
+```python
+    if video_path is not None and video_path.exists() and video_path.stat().st_size > 0:
+        video_blob_ref = run_dir.write_bytes("video.webm", video_path.read_bytes())
+        if video_started_at_ms is not None and video_ended_at_ms is not None:
+            duration_seconds = max(0, round((video_ended_at_ms - video_started_at_ms) / 1000))
+```
+
+(Only the `if` condition's third clause, `and video_path.stat().st_size > 0`, is new — the body is unchanged.)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `.venv/bin/pytest tests/test_recording_service.py -v`
+Expected: PASS (all tests in the file, including this new one and the pre-existing video test with a real non-empty file)
+
+- [ ] **Step 5: Run the full suite**
+
+Run: `.venv/bin/pytest -q`
+Expected: all pass
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/atlas_engine/recording_service.py tests/test_recording_service.py
+git commit -m "fix: persist_recording ignores a video file that exists but has no frames"
+```
+
+---
+
+### Task 7: Manual verification and finish branch
 
 **Files:** none (verification task)
 
@@ -502,7 +575,7 @@ The backend process currently running has an orphaned background thread from tod
 
 - [ ] **Step 2: Reproduce the exact scenario that caused today's incident**
 
-As the operations agent: start a new recording against any real page, close the browser window yourself (don't click Stop first), then go back to the Atlas tab and click "Stop and review." Confirm it now completes promptly with a real recording (video may be partial or absent depending on how much Chromium managed to flush before exiting, but the DOM actions captured up to that point should be there) — instead of hanging for 30 seconds and erroring.
+As the operations agent: start a new recording against any real page, close the browser window yourself (don't click Stop first), then go back to the Atlas tab and click "Stop and review." Confirm it now completes promptly with a real recording — instead of hanging for 30 seconds and erroring. A recording killed this abruptly may legitimately have `has_video: false` (Task 6) since Chromium never got to flush any frames; that's correct behavior, not a bug, and is why Task 7's next step (a normal stop) is what proves video capture itself still works.
 
 - [ ] **Step 3: Confirm the normal path still works**
 

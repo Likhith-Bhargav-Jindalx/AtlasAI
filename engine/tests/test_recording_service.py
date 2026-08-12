@@ -149,6 +149,27 @@ def test_persist_recording_without_video_creates_no_video_asset(fixture_portal_u
         assert session.query(VideoAsset).filter_by(recording_id=recording_id).one_or_none() is None
 
 
+def test_persist_recording_ignores_an_empty_video_file(tmp_path, fixture_portal_url):
+    video_file = tmp_path / "session.webm"
+    video_file.touch()  # exists, but zero bytes — as if the browser died before any frame was muxed
+
+    with session_scope() as session:
+        org = Organization(name="Empty Video Org", slug=f"empty-video-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(
+        org_id, f"{fixture_portal_url}/login.html", [],
+        video_path=video_file, video_started_at_ms=0, video_ended_at_ms=1000,
+    )
+
+    with session_scope() as session:
+        assert session.query(VideoAsset).filter_by(recording_id=recording_id).one_or_none() is None
+        recording = session.get(Recording, recording_id)
+        assert recording.duration_seconds is None
+
+
 def test_create_list_and_claim_recording_request(fixture_portal_url):
     from atlas_engine.db.models import RecordingRequest, User
     from atlas_engine.recording_service import (
