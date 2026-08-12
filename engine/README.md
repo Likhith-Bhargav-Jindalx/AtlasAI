@@ -200,8 +200,9 @@ GET /heal-events?org_id=...&status=...  -> list heal events, newest first
 ```
 
 The API also allows credentialed cross-origin requests from
-`http://localhost:5173` (the Vite dev server default) so the frontend's
-cookie-based session works against this API in local dev.
+`http://localhost:5183` (the frontend's pinned dev-server port — see
+`frontend/vite.config.ts`) so the frontend's cookie-based session works
+against this API in local dev.
 
 ## What's next
 
