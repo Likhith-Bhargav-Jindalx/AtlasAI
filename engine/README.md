@@ -141,6 +141,37 @@ recording — skipping the developer's re-record step — already works today
 without any code change; see `tests/test_authoring_service.py`'s
 `test_author_from_recording_works_directly_on_a_demo_role_recording`.
 
+## Users, login, and live recording
+
+Create a user (dev-only — there's no signup flow yet):
+```bash
+atlas create-user --org-id <id> --email you@example.com --password <password> \
+  --role member --job-function developer
+```
+
+The local API now has real login:
+```
+POST /auth/login   {"email": ..., "password": ...}  -> sets an httpOnly session cookie
+GET  /auth/me                                        -> current identity, or 401
+POST /auth/logout                                    -> clears the cookie
+```
+
+Existing endpoints (`/recording-requests`, `/recordings/{id}/author`, heal
+endpoints) still take explicit `org_id`/`user_id` in their bodies — login
+isn't enforced on them yet, it just gives the frontend a real "who am I."
+
+Live recording — start a headed browser and stop it later, instead of the
+CLI's blocking `atlas record`:
+```
+POST /recordings/start   {"org_id": ..., "start_url": ..., "request_id"?: ..., "role"?: "demo"}
+                          -> {"capture_session_id": ...}
+POST /recordings/{capture_session_id}/stop
+                          -> {"recording_id": ...}
+```
+
+Set `ATLAS_SESSION_SECRET` to something real outside local dev — it
+defaults to an intentionally obvious placeholder.
+
 ## What's next
 
 Phase 0, Phase 1, and the recording-requests workflow together cover:
