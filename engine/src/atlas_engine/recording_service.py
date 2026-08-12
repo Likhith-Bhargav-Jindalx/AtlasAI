@@ -7,7 +7,14 @@ from atlas_engine.brain.serialize import trajectory_to_dict
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import Recording, RecordingRequest, ReferenceTrajectory, VideoAsset, VideoStep
+from atlas_engine.db.models import (
+    PortalProfile,
+    Recording,
+    RecordingRequest,
+    ReferenceTrajectory,
+    VideoAsset,
+    VideoStep,
+)
 from atlas_engine.db.repo import get_or_create_portal_profile
 from atlas_engine.portal_profile.infer import infer_portal_profile
 from atlas_engine.storage import LocalRunStore
@@ -117,6 +124,31 @@ def persist_recording(
         recording_id = recording.id
 
     return recording_id
+
+
+def list_recordings(org_id: str, status: str | None = None) -> list[dict]:
+    with session_scope() as session:
+        query = session.query(Recording).filter_by(org_id=uuid.UUID(org_id))
+        if status is not None:
+            query = query.filter_by(status=status)
+
+        results = []
+        for recording in query.order_by(Recording.created_at.desc()).all():
+            video_asset = session.query(VideoAsset).filter_by(recording_id=recording.id).one_or_none()
+            request = session.get(RecordingRequest, recording.request_id) if recording.request_id else None
+            profile = session.get(PortalProfile, recording.portal_profile_id)
+            results.append({
+                "id": str(recording.id),
+                "status": recording.status,
+                "role": recording.role,
+                "request_id": str(recording.request_id) if recording.request_id else None,
+                "request_title": request.title if request is not None else None,
+                "portal_domain": profile.domain if profile is not None else None,
+                "duration_seconds": recording.duration_seconds,
+                "has_video": video_asset is not None,
+                "created_at": recording.created_at.isoformat(),
+            })
+        return results
 
 
 def get_recording_detail(recording_id: uuid.UUID) -> dict:

@@ -45,3 +45,31 @@ def test_get_recording_detail_404_for_unknown_id():
     client = TestClient(app)
     response = client.get(f"/recordings/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+def test_list_recordings_returns_newest_first_and_filters_by_status(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="List Recordings Org", slug=f"list-recordings-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    older_id = persist_recording(org_id, start_url, [])
+    newer_id = persist_recording(org_id, start_url, [])
+
+    with session_scope() as session:
+        from atlas_engine.db.models import Recording
+        session.get(Recording, older_id).status = "discarded"
+
+    client = TestClient(app)
+    response = client.get(f"/recordings?org_id={org_id}")
+
+    assert response.status_code == 200
+    ids = [r["id"] for r in response.json()]
+    assert ids[0] == str(newer_id)
+    assert str(older_id) in ids
+
+    filtered = client.get(f"/recordings?org_id={org_id}&status=discarded")
+    filtered_ids = [r["id"] for r in filtered.json()]
+    assert filtered_ids == [str(older_id)]

@@ -20,6 +20,7 @@ from atlas_engine.recording_service import (
     create_recording_request,
     get_recording_detail,
     list_recording_requests,
+    list_recordings,
 )
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
@@ -204,6 +205,11 @@ class StartRecordingResponse(BaseModel):
 
 class StopRecordingResponse(BaseModel):
     recording_id: str
+
+
+@app.get("/recordings")
+def list_recordings_endpoint(org_id: str, status: str | None = None) -> list[dict]:
+    return list_recordings(org_id, status=status)
 
 
 @app.post("/recordings/start", response_model=StartRecordingResponse)
