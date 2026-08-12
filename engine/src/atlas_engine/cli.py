@@ -5,9 +5,12 @@ from pathlib import Path
 import click
 from playwright.sync_api import sync_playwright
 
+from atlas_engine.auth.passwords import hash_password
 from atlas_engine.authoring_service import author_from_recording
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.capture.recorder import CaptureSession
+from atlas_engine.db import session_scope
+from atlas_engine.db.models import User
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import (
@@ -162,6 +165,27 @@ def author(recording_id: str) -> None:
         click.echo(f"CERTIFIED golden script: {result['script_path']}")
     else:
         click.echo(f"NOT certified: {result['script_path']}")
+
+
+@main.command("create-user")
+@click.option("--org-id", required=True)
+@click.option("--email", required=True)
+@click.option("--password", required=True)
+@click.option("--role", default="member", type=click.Choice(["owner", "admin", "member"]))
+@click.option("--job-function", default=None, type=click.Choice(["operations_agent", "developer"]))
+def create_user(org_id: str, email: str, password: str, role: str, job_function: str | None) -> None:
+    """Dev-only user creation — no signup flow exists yet."""
+    with session_scope() as session:
+        user = User(
+            org_id=uuid.UUID(org_id),
+            email=email,
+            password_hash=hash_password(password),
+            role=role,
+            job_function=job_function,
+        )
+        session.add(user)
+        session.flush()
+        click.echo(f"User created: {user.id}")
 
 
 if __name__ == "__main__":
