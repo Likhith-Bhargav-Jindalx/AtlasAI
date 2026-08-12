@@ -81,5 +81,16 @@ def downgrade() -> None:
     op.drop_table('authoring_runs')
     # ### end Alembic commands ###
 
+    # sa.Enum on add_column/create_table creates a standalone Postgres TYPE
+    # that drop_column/drop_table does not remove on its own.
+    for enum_name in (
+        'authoring_run_status',
+        'authoring_run_phase',
+        'authoring_run_event_phase',
+        'authoring_run_event_level',
+        'certification_run_status',
+    ):
+        op.execute(f'DROP TYPE IF EXISTS {enum_name}')
+
     # Postgres cannot drop a single value from an existing ENUM type;
     # 'partially_certified' is left in place on downgrade.
