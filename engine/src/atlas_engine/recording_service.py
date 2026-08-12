@@ -195,22 +195,36 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
         if recording is None:
             raise ValueError(f"No such recording: {recording_id}")
 
-        video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one_or_none()
-        steps = []
-        if video_asset is not None:
-            steps = [
-                {"order_index": s.order_index, "caption": s.caption_text, "offset_ms": s.offset_ms}
-                for s in sorted(video_asset.steps, key=lambda s: s.order_index)
-            ]
+        video_assets = (
+            session.query(VideoAsset)
+            .filter_by(recording_id=recording_id)
+            .order_by(VideoAsset.page_index)
+            .all()
+        )
+        by_page_index = {asset.page_index: asset for asset in video_assets}
+
+        pages = []
+        for page_index in sorted(by_page_index.keys() | {0}):
+            video_asset = by_page_index.get(page_index)
+            steps = []
+            if video_asset is not None:
+                steps = [
+                    {"order_index": s.order_index, "caption": s.caption_text, "offset_ms": s.offset_ms}
+                    for s in sorted(video_asset.steps, key=lambda s: s.order_index)
+                ]
+            pages.append({
+                "page_index": page_index,
+                "has_video": video_asset is not None,
+                "video_asset_id": str(video_asset.id) if video_asset is not None else None,
+                "duration_seconds": video_asset.duration_seconds if video_asset is not None else None,
+                "steps": steps,
+            })
 
         return {
             "id": str(recording.id),
             "status": recording.status,
             "role": recording.role,
-            "duration_seconds": recording.duration_seconds,
-            "has_video": video_asset is not None,
-            "video_asset_id": str(video_asset.id) if video_asset is not None else None,
-            "steps": steps,
+            "pages": pages,
         }
 
 
