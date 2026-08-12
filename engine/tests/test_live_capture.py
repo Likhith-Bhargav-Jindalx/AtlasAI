@@ -60,3 +60,21 @@ def test_wait_for_stop_or_disconnect_returns_false_on_explicit_stop():
 
     assert disconnected is False
     page.title.assert_not_called()
+
+
+def test_wait_for_stop_or_disconnect_calls_on_tick_every_iteration_and_at_the_end():
+    from atlas_engine.live_capture import _wait_for_stop_or_disconnect
+
+    stop_event = threading.Event()
+    page = Mock()
+    tick_count = {"n": 0}
+
+    def on_tick():
+        tick_count["n"] += 1
+        if tick_count["n"] == 3:
+            stop_event.set()
+
+    disconnected = _wait_for_stop_or_disconnect(stop_event, page, poll_interval=0.01, on_tick=on_tick)
+
+    assert disconnected is False
+    assert tick_count["n"] == 4  # 3 ticks inside the loop, 1 more after it exits

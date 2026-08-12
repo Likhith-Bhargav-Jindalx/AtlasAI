@@ -1,22 +1,31 @@
 import shutil
 import threading
+import time
 import uuid
 
 from playwright.sync_api import sync_playwright
 
 from atlas_engine.capture.recorder import CaptureSession
-from atlas_engine.capture.video import finalize_video, start_capture_context
-from atlas_engine.recording_service import persist_recording
+from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
+from atlas_engine.recording_service import PageCapture, persist_recording
 
 _sessions: dict[uuid.UUID, "_LiveCaptureSession"] = {}
 _registry_lock = threading.Lock()
 
 
-def _wait_for_stop_or_disconnect(stop_event: threading.Event, page, *, poll_interval: float = 1.0) -> bool:
+def _wait_for_stop_or_disconnect(
+    stop_event: threading.Event, page, *, poll_interval: float = 1.0, on_tick=lambda: None,
+) -> bool:
     """Blocks until stop_event is set (an explicit /stop call) or the
     browser stops responding to a cheap health check (it died on its own —
     most often a human closing the window before clicking Stop) —
     whichever happens first. Returns True if it was the browser that died.
+
+    on_tick is called once per poll iteration and once more after the
+    loop exits, on this same calling thread — used to attach a
+    CaptureSession to any tab/popup that opened since the last tick,
+    since Playwright objects must only ever be touched from the one
+    thread already doing all the other capture work for this session.
 
     Playwright's own "disconnected" event does NOT fire for this case —
     verified empirically: it fires promptly for a self-initiated
@@ -26,10 +35,13 @@ def _wait_for_stop_or_disconnect(stop_event: threading.Event, page, *, poll_inte
     live connection. Only an actual operation against the page reliably
     detects a truly dead browser, so that's what this polls with."""
     while not stop_event.wait(timeout=poll_interval):
+        on_tick()
         try:
             page.title()
         except Exception:
+            on_tick()
             return True
+    on_tick()
     return False
 
 
@@ -58,11 +70,40 @@ class _LiveCaptureSession:
                 context, page, video_started_at_ms, video_dir = start_capture_context(browser)
                 page.goto(self.start_url)
 
+                new_pages: list = []
+                context.on("page", lambda new_page: new_pages.append(new_page))
+
+                extra_captures: list[tuple] = []
+
+                def _attach_new_pages() -> None:
+                    while new_pages:
+                        new_page = new_pages.pop(0)
+                        started_at_ms = int(time.time() * 1000)
+                        capture = CaptureSession(new_page)
+                        capture.__enter__()
+                        extra_captures.append((new_page, capture, started_at_ms))
+
                 with CaptureSession(page) as capture:
-                    if _wait_for_stop_or_disconnect(self.stop_event, page):
+                    if _wait_for_stop_or_disconnect(self.stop_event, page, on_tick=_attach_new_pages):
                         capture.mark_browser_disconnected()
 
                 actions = capture.actions
+
+                additional_pages = []
+                for extra_page, extra_capture, extra_started_at_ms in extra_captures:
+                    try:
+                        extra_page.title()
+                    except Exception:
+                        extra_capture.mark_browser_disconnected()
+                    extra_capture.__exit__(None, None, None)
+                    additional_pages.append(PageCapture(
+                        page_index=len(additional_pages) + 1,
+                        actions=extra_capture.actions,
+                        video_path=video_path_for_page(extra_page),
+                        video_started_at_ms=extra_started_at_ms,
+                        video_ended_at_ms=int(time.time() * 1000),
+                    ))
+
                 video_path, video_ended_at_ms = finalize_video(context, page)
                 try:
                     browser.close()
@@ -75,6 +116,7 @@ class _LiveCaptureSession:
                 video_path=video_path,
                 video_started_at_ms=video_started_at_ms,
                 video_ended_at_ms=video_ended_at_ms,
+                additional_pages=additional_pages,
             )
         except Exception as exc:  # surfaced to the caller of stop()
             self.error = exc
