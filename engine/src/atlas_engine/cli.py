@@ -5,12 +5,14 @@ from pathlib import Path
 import click
 from playwright.sync_api import sync_playwright
 
+from atlas_engine.brain.loop import BrainLoop
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.codegen.emit import emit_golden_script
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, PortalProfile, Recording
+from atlas_engine.llm.client import LlmClient
 from atlas_engine.portal_profile.infer import infer_portal_profile
 from atlas_engine.storage import LocalRunStore
 from atlas_engine.trajectory.extract import extract_trajectory
@@ -68,12 +70,19 @@ def record(url: str, org_id: str) -> None:
         click.echo(f"Actions file: {run_dir.path / 'actions.json'}")
 
 
-def author_from_recorded_actions(org_id: str, start_url: str, actions: list[RecordedAction]) -> dict:
-    """Shared authoring logic used by both the CLI and the local API.
-    Deterministic: capture -> trajectory -> emit -> certify. No brain/LLM
-    involvement on this path since there's no live browser session here to
-    repair against — that happens in `atlas author` (not yet built), which
-    replays the trajectory live via BrainLoop before emitting.
+def author_from_recorded_actions(
+    org_id: str, start_url: str, actions: list[RecordedAction], *, llm: LlmClient | None = None
+) -> dict:
+    """Shared authoring logic used by both the CLI and the local API:
+    capture (already done, passed in as `actions`) -> trajectory ->
+    **live brain validation** -> emit -> certify.
+
+    The trajectory is replayed through a real, fresh browser session via
+    BrainLoop before anything is emitted — this is "the brain" from the
+    architecture spec, not a separate unwired feature: a step that doesn't
+    reproduce live either gets a bounded repair attempt (when `llm` is
+    given) or is left off-track, and a trajectory with any off-track step
+    is never certified, only saved as a draft.
 
     Returns {"status", "script_path", "golden_script_id"}.
     """
@@ -81,22 +90,54 @@ def author_from_recorded_actions(org_id: str, start_url: str, actions: list[Reco
     run_dir = store.new_run_dir(prefix="goldens")
 
     trajectory = extract_trajectory(actions)
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(start_url)
+        outcomes = BrainLoop(page, llm=llm).run(trajectory)
+        browser.close()
+
+    all_on_track = all(outcome.on_track for outcome in outcomes)
+
     script_text = emit_golden_script(trajectory, start_url=start_url)
     script_path = run_dir.path / "golden.py"
     script_path.write_text(script_text)
 
-    certification = certify_golden_script(script_path, runs=2)
-    status = "certified" if certification.is_certified else "draft"
+    if not all_on_track:
+        status = "draft"
+    else:
+        certification = certify_golden_script(script_path, runs=2)
+        status = "certified" if certification.is_certified else "draft"
 
+    domain = start_url.split("/")[2]
     with session_scope() as session:
-        profile = PortalProfile(org_id=uuid.UUID(org_id), domain=start_url.split("/")[2])
-        session.add(profile)
-        session.flush()
+        # Get-or-create: a portal profile is one row per (org, domain),
+        # created once and reused across every future recording/authoring
+        # of that domain — never duplicated (architecture spec §6.3).
+        profile = (
+            session.query(PortalProfile)
+            .filter_by(org_id=uuid.UUID(org_id), domain=domain)
+            .one_or_none()
+        )
+        if profile is None:
+            profile = PortalProfile(org_id=uuid.UUID(org_id), domain=domain)
+            session.add(profile)
+            session.flush()
+
+        latest_version = (
+            session.query(GoldenScript.version)
+            .filter_by(portal_profile_id=profile.id)
+            .order_by(GoldenScript.version.desc())
+            .limit(1)
+            .scalar()
+        )
+        next_version = (latest_version or 0) + 1
 
         golden = GoldenScript(
             org_id=uuid.UUID(org_id),
             portal_profile_id=profile.id,
-            version=1,
+            version=next_version,
             script_blob_ref=str(script_path),
             status=status,
         )
