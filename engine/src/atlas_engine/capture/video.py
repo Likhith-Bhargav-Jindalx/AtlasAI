@@ -22,8 +22,16 @@ def start_capture_context(browser: Browser) -> tuple[BrowserContext, Page, int, 
 def finalize_video(context: BrowserContext, page: Page) -> tuple[Path | None, int]:
     """Closes the context — which flushes the recorded video to disk —
     and returns its path (None if this page had no video recording) plus
-    the wall-clock time recording finished (epoch ms)."""
+    the wall-clock time recording finished (epoch ms). Closing is
+    best-effort: if the browser already disconnected on its own (e.g. a
+    human closed the window before stopping the recording), the context
+    is already gone and there is nothing left to close — that's not a
+    failure worth propagating, since the video path itself doesn't
+    require a live connection to read."""
     video_path = Path(page.video.path()) if page.video else None
-    context.close()
+    try:
+        context.close()
+    except Exception:
+        pass
     ended_at_ms = int(time.time() * 1000)
     return video_path, ended_at_ms
