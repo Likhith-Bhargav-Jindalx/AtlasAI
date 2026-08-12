@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+psycopg://atlas:atlas_dev_password@localhost:5434/atlas"
     run_root: Path = Path.home() / ".atlas" / "runs"
+    session_secret: str = "dev-insecure-secret-change-me-via-ATLAS_SESSION_SECRET"
 
     def ensure_run_root(self) -> Path:
         self.run_root.mkdir(parents=True, exist_ok=True)
