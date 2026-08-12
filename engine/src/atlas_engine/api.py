@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from atlas_engine.auth.passwords import verify_password
@@ -8,8 +9,9 @@ from atlas_engine.auth.session import create_session_token, verify_session_token
 from atlas_engine.authoring_service import author_from_recording
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
+from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import User
+from atlas_engine.db.models import User, VideoAsset
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import (
@@ -234,3 +236,18 @@ def get_recording_endpoint(recording_id: str) -> RecordingDetailResponse:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return RecordingDetailResponse(**detail)
+
+
+@app.get("/recordings/{recording_id}/video")
+def get_recording_video_endpoint(recording_id: str):
+    with session_scope() as session:
+        video_asset = session.query(VideoAsset).filter_by(recording_id=uuid.UUID(recording_id)).one_or_none()
+        if video_asset is None:
+            raise HTTPException(status_code=404, detail="No video for this recording")
+        storage_ref = video_asset.storage_ref
+
+    video_path = settings.run_root / storage_ref
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Video file missing on disk")
+
+    return FileResponse(video_path, media_type="video/webm")
