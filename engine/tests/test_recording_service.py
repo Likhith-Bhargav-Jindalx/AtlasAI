@@ -3,8 +3,16 @@ import uuid
 from pathlib import Path
 
 from atlas_engine.capture.events import RecordedAction
+from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import Organization, PortalProfile, Recording, ReferenceTrajectory
+from atlas_engine.db.models import (
+    Organization,
+    PortalProfile,
+    Recording,
+    ReferenceTrajectory,
+    VideoAsset,
+    VideoStep,
+)
 from atlas_engine.recording_service import persist_recording
 
 
@@ -88,6 +96,57 @@ def test_persist_recording_advances_open_request_to_submitted(fixture_portal_url
     with session_scope() as session:
         assert session.get(Recording, recording_id).request_id == request_id
         assert session.get(RecordingRequest, request_id).status == "submitted"
+
+
+def test_persist_recording_with_video_creates_video_asset_and_steps(tmp_path, fixture_portal_url):
+    video_file = tmp_path / "session.webm"
+    video_file.write_bytes(b"fake-webm-bytes")
+
+    with session_scope() as session:
+        org = Organization(name="Video Org", slug=f"video-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    actions = [
+        RecordedAction(
+            0, "click", [{"selector": "#login-btn", "rank": 0}], None,
+            start_url, f"{fixture_portal_url}/dashboard.html", "", "",
+            timestamp_ms=1000,
+        ),
+    ]
+
+    recording_id = persist_recording(
+        org_id, start_url, actions,
+        video_path=video_file, video_started_at_ms=500, video_ended_at_ms=2500,
+    )
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        assert recording.duration_seconds == 2
+
+        video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one()
+        assert video_asset.status == "ready"
+        assert video_asset.started_at_ms == 500
+        assert (settings.run_root / video_asset.storage_ref).read_bytes() == b"fake-webm-bytes"
+
+        step = session.query(VideoStep).filter_by(video_asset_id=video_asset.id).one()
+        assert step.offset_ms == 500  # action at 1000ms, video started at 500ms
+        assert step.caption_text == "Click #login-btn"
+
+
+def test_persist_recording_without_video_creates_no_video_asset(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="No Video Org", slug=f"no-video-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    with session_scope() as session:
+        assert session.query(VideoAsset).filter_by(recording_id=recording_id).one_or_none() is None
 
 
 def test_create_list_and_claim_recording_request(fixture_portal_url):

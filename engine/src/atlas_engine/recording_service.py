@@ -1,12 +1,13 @@
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from atlas_engine.brain.serialize import trajectory_to_dict
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import Recording, RecordingRequest, ReferenceTrajectory
+from atlas_engine.db.models import Recording, RecordingRequest, ReferenceTrajectory, VideoAsset, VideoStep
 from atlas_engine.db.repo import get_or_create_portal_profile
 from atlas_engine.portal_profile.infer import infer_portal_profile
 from atlas_engine.storage import LocalRunStore
@@ -20,12 +21,16 @@ def persist_recording(
     *,
     request_id: uuid.UUID | None = None,
     role: str = "demo",
+    video_path: Path | None = None,
+    video_started_at_ms: int | None = None,
+    video_ended_at_ms: int | None = None,
 ) -> uuid.UUID:
     """Persists a captured recording — actions.json, the extracted
-    trajectory, and the Recording/ReferenceTrajectory rows — without
-    running any authoring. This is the recording module's one entrypoint;
-    authoring_service.author_from_recording is the only thing that
-    consumes what this produces.
+    trajectory, an optional video, and the Recording/ReferenceTrajectory/
+    VideoAsset/VideoStep rows — without running any authoring. This is
+    the recording module's one entrypoint; authoring_service.
+    author_from_recording is the only thing that consumes what this
+    produces.
     """
     store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="recordings")
@@ -34,6 +39,13 @@ def persist_recording(
     trajectory = extract_trajectory(actions)
     trajectory_path = run_dir.path / "trajectory.json"
     trajectory_path.write_text(json.dumps(trajectory_to_dict(trajectory), indent=2))
+
+    video_blob_ref = None
+    duration_seconds = None
+    if video_path is not None and video_path.exists():
+        video_blob_ref = run_dir.write_bytes("video.webm", video_path.read_bytes())
+        if video_started_at_ms is not None and video_ended_at_ms is not None:
+            duration_seconds = max(0, round((video_ended_at_ms - video_started_at_ms) / 1000))
 
     profile_data = infer_portal_profile(start_url, actions)
 
@@ -53,6 +65,7 @@ def persist_recording(
             capture_blob_prefix=run_dir.blob_ref,
             request_id=request_id,
             role=role,
+            duration_seconds=duration_seconds,
         )
         session.add(recording)
         session.flush()
@@ -65,6 +78,37 @@ def persist_recording(
             )
         )
 
+        if video_blob_ref is not None:
+            video_asset = VideoAsset(
+                org_id=uuid.UUID(org_id),
+                recording_id=recording.id,
+                kind="raw",
+                storage_ref=video_blob_ref,
+                started_at_ms=video_started_at_ms,
+                duration_seconds=duration_seconds,
+                status="ready",
+            )
+            session.add(video_asset)
+            session.flush()
+
+            for action in actions:
+                offset_ms = None
+                if video_started_at_ms is not None:
+                    offset_ms = max(0, action.timestamp_ms - video_started_at_ms)
+                session.add(
+                    VideoStep(
+                        video_asset_id=video_asset.id,
+                        order_index=action.index,
+                        dom_action_event={
+                            "kind": action.kind,
+                            "selector_candidates": action.selector_candidates,
+                            "value": action.value,
+                        },
+                        caption_text=_caption_for(action),
+                        offset_ms=offset_ms,
+                    )
+                )
+
         if request_id is not None:
             request = session.get(RecordingRequest, request_id)
             if request is not None and request.status == "open":
@@ -73,6 +117,15 @@ def persist_recording(
         recording_id = recording.id
 
     return recording_id
+
+
+def _caption_for(action: RecordedAction) -> str:
+    selector = action.selector_candidates[0]["selector"] if action.selector_candidates else "the page"
+    if action.kind == "click":
+        return f"Click {selector}"
+    if action.kind == "fill":
+        return f"Fill {selector}"
+    return f"Navigate to {action.url_after}"
 
 
 def create_recording_request(
