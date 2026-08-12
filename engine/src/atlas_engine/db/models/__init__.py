@@ -15,9 +15,9 @@ from atlas_engine.db.models.video import VideoAsset, VideoStep
 
 __all__ = [
     "ActionCache",
+    "AuditLog",
     "AuthoringRun",
     "AuthoringRunEvent",
-    "AuditLog",
     "CertificationRun",
     "GoldenScript",
     "HealEvent",
