@@ -6,12 +6,13 @@ import click
 from playwright.sync_api import sync_playwright
 
 from atlas_engine.brain.loop import BrainLoop
+from atlas_engine.brain.serialize import trajectory_to_dict
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.codegen.emit import emit_golden_script
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import GoldenScript, PortalProfile, Recording
+from atlas_engine.db.models import GoldenScript, PortalProfile, Recording, ReferenceTrajectory
 from atlas_engine.db.repo import get_or_create_portal_profile, next_golden_script_version
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.portal_profile.infer import infer_portal_profile
@@ -85,12 +86,46 @@ def author_from_recorded_actions(
     given) or is left off-track, and a trajectory with any off-track step
     is never certified, only saved as a draft.
 
+    Persisting the recording and trajectory (not just the emitted script)
+    is what makes on-demand healing possible later — heal_golden_script
+    reloads exactly this trajectory to re-validate a script long after it
+    was authored.
+
     Returns {"status", "script_path", "golden_script_id"}.
     """
     store = LocalRunStore(root=settings.ensure_run_root())
-    run_dir = store.new_run_dir(prefix="goldens")
+    recording_run_dir = store.new_run_dir(prefix="recordings")
+    recording_run_dir.write_json("actions.json", [vars(a) for a in actions])
 
     trajectory = extract_trajectory(actions)
+    trajectory_path = recording_run_dir.path / "trajectory.json"
+    trajectory_path.write_text(json.dumps(trajectory_to_dict(trajectory), indent=2))
+
+    domain = start_url.split("/")[2]
+    with session_scope() as session:
+        profile = get_or_create_portal_profile(session, org_id, domain)
+
+        recording = Recording(
+            org_id=uuid.UUID(org_id),
+            portal_profile_id=profile.id,
+            status="captured",
+            capture_blob_prefix=recording_run_dir.blob_ref,
+        )
+        session.add(recording)
+        session.flush()
+
+        session.add(
+            ReferenceTrajectory(
+                recording_id=recording.id,
+                trajectory_blob_ref=str(trajectory_path),
+                step_count=len(trajectory.steps),
+            )
+        )
+
+        recording_id = recording.id
+        portal_profile_id = profile.id
+
+    goldens_run_dir = store.new_run_dir(prefix="goldens")
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -102,7 +137,7 @@ def author_from_recorded_actions(
     all_on_track = all(outcome.on_track for outcome in outcomes)
 
     script_text = emit_golden_script(trajectory, start_url=start_url)
-    script_path = run_dir.path / "golden.py"
+    script_path = goldens_run_dir.path / "golden.py"
     script_path.write_text(script_text)
 
     if not all_on_track:
@@ -111,16 +146,14 @@ def author_from_recorded_actions(
         certification = certify_golden_script(script_path, runs=2)
         status = "certified" if certification.is_certified else "draft"
 
-    domain = start_url.split("/")[2]
     with session_scope() as session:
-        profile = get_or_create_portal_profile(session, org_id, domain)
-
         golden = GoldenScript(
             org_id=uuid.UUID(org_id),
-            portal_profile_id=profile.id,
-            version=next_golden_script_version(session, profile.id),
+            portal_profile_id=portal_profile_id,
+            version=next_golden_script_version(session, portal_profile_id),
             script_blob_ref=str(script_path),
             status=status,
+            created_from_recording_id=recording_id,
         )
         session.add(golden)
         session.flush()
