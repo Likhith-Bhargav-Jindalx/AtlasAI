@@ -88,3 +88,39 @@ def test_persist_recording_advances_open_request_to_submitted(fixture_portal_url
     with session_scope() as session:
         assert session.get(Recording, recording_id).request_id == request_id
         assert session.get(RecordingRequest, request_id).status == "submitted"
+
+
+def test_create_list_and_claim_recording_request(fixture_portal_url):
+    from atlas_engine.db.models import RecordingRequest, User
+    from atlas_engine.recording_service import (
+        claim_recording_request,
+        create_recording_request,
+        list_recording_requests,
+    )
+
+    with session_scope() as session:
+        org = Organization(name="Request Flow Org", slug=f"request-flow-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        agent = User(org_id=org.id, email=f"agent-{uuid.uuid4()}@example.com", password_hash="x", role="member")
+        developer = User(org_id=org.id, email=f"dev-{uuid.uuid4()}@example.com", password_hash="x", role="member")
+        session.add_all([agent, developer])
+        session.flush()
+        org_id = str(org.id)
+        agent_id = str(agent.id)
+        developer_id = developer.id
+
+    request_id = create_recording_request(
+        org_id, agent_id, f"{fixture_portal_url}/login.html", "Check eligibility", "See the demo recording"
+    )
+
+    open_requests = list_recording_requests(org_id, status="open")
+    assert any(r["id"] == str(request_id) for r in open_requests)
+    assert all(r["claimed_by"] is None for r in open_requests if r["id"] == str(request_id))
+
+    claim_recording_request(request_id, developer_id)
+
+    with session_scope() as session:
+        request = session.get(RecordingRequest, request_id)
+        assert request.claimed_by == developer_id
+        assert request.claimed_at is not None

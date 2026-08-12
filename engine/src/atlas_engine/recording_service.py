@@ -73,3 +73,48 @@ def persist_recording(
         recording_id = recording.id
 
     return recording_id
+
+
+def create_recording_request(
+    org_id: str, requested_by: str, target_url: str, title: str, description: str | None = None
+) -> uuid.UUID:
+    domain = target_url.split("/")[2]
+    with session_scope() as session:
+        profile = get_or_create_portal_profile(session, org_id, domain)
+        request = RecordingRequest(
+            org_id=uuid.UUID(org_id),
+            requested_by=uuid.UUID(requested_by),
+            portal_profile_id=profile.id,
+            target_url=target_url,
+            title=title,
+            description=description,
+        )
+        session.add(request)
+        session.flush()
+        return request.id
+
+
+def list_recording_requests(org_id: str, status: str | None = None) -> list[dict]:
+    with session_scope() as session:
+        query = session.query(RecordingRequest).filter_by(org_id=uuid.UUID(org_id))
+        if status is not None:
+            query = query.filter_by(status=status)
+        return [
+            {
+                "id": str(r.id),
+                "title": r.title,
+                "target_url": r.target_url,
+                "status": r.status,
+                "claimed_by": str(r.claimed_by) if r.claimed_by else None,
+            }
+            for r in query.order_by(RecordingRequest.created_at.desc()).all()
+        ]
+
+
+def claim_recording_request(request_id: uuid.UUID, developer_user_id: uuid.UUID) -> None:
+    with session_scope() as session:
+        request = session.get(RecordingRequest, request_id)
+        if request is None:
+            raise ValueError(f"No such recording request: {request_id}")
+        request.claimed_by = developer_user_id
+        request.claimed_at = datetime.now(timezone.utc).replace(tzinfo=None)
