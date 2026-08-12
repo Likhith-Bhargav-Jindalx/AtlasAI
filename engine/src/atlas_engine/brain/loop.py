@@ -1,9 +1,14 @@
+import hashlib
+import uuid
 from collections.abc import Callable
+from urllib.parse import urlparse
 
+from atlas_engine.brain.cache import ActionCacheStore, compute_cache_key
 from atlas_engine.brain.evaluate import StepOutcome, evaluate
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 from atlas_engine.brain.repair import think
 from atlas_engine.llm.client import LlmClient
+from atlas_engine.llm.sanitize import sanitize_dom
 
 # The recorded selector is expected to match immediately on replay; a short
 # timeout here means a genuinely stale selector fails fast into repair
@@ -57,9 +62,11 @@ class BrainLoop:
     """perceive -> act -> evaluate -> think only if off-track.
 
     Without `llm`, an off-track step is reported via `on_off_track` and
-    left off-track (Task 8 behavior, still used by tests that only exercise
-    the happy path). With `llm`, an off-track step triggers exactly one
-    bounded repair attempt via `think()` before moving on.
+    left off-track (Phase 0 behavior, still used by tests that only
+    exercise the happy path). With `llm`, an off-track step triggers
+    exactly one bounded repair attempt via `think()`. With `action_cache`
+    and `golden_script_id` both given, a repair is tried from the cache
+    first — a cache miss is never fatal, it just falls through to the LLM.
     """
 
     def __init__(
@@ -67,10 +74,14 @@ class BrainLoop:
         page,
         on_off_track: Callable[[TrajectoryStep, StepOutcome], None] | None = None,
         llm: LlmClient | None = None,
+        action_cache: ActionCacheStore | None = None,
+        golden_script_id: uuid.UUID | None = None,
     ):
         self.page = page
         self.on_off_track = on_off_track
         self.llm = llm
+        self.action_cache = action_cache
+        self.golden_script_id = golden_script_id
 
     def run(self, trajectory: ReferenceTrajectory) -> list[StepOutcome]:
         outcomes = []
@@ -89,16 +100,44 @@ class BrainLoop:
             if not outcome.on_track:
                 if self.on_off_track is not None:
                     self.on_off_track(step, outcome)
-                if self.llm is not None:
-                    outcome = self._repair(step, outcome)
+                outcome = self._repair(step, outcome)
 
             outcomes.append(outcome)
         return outcomes
 
+    def _cache_key_for(self, step: TrajectoryStep) -> str:
+        original_selector = step.selector_candidates[0]["selector"] if step.selector_candidates else ""
+        instruction = f"{step.kind} {original_selector}"
+        url_pattern = urlparse(self.page.url).path
+        dom_fingerprint = hashlib.sha256(sanitize_dom(self.page.content()).encode("utf-8")).hexdigest()
+        return compute_cache_key(instruction=instruction, url_pattern=url_pattern, dom_fingerprint=dom_fingerprint)
+
     def _repair(self, step: TrajectoryStep, outcome: StepOutcome) -> StepOutcome:
+        cache_key = None
+        if self.action_cache is not None and self.golden_script_id is not None:
+            cache_key = self._cache_key_for(step)
+            cached = self.action_cache.get(self.golden_script_id, step_index=step.index, cache_key=cache_key)
+            if cached:
+                try:
+                    cached_outcome = run_step(self.page, step, selector=cached[0]["selector"], timeout_ms=1000)
+                    if cached_outcome.on_track:
+                        return cached_outcome
+                except Exception:
+                    pass
+                self.action_cache.record_miss(self.golden_script_id, step_index=step.index, cache_key=cache_key)
+
+        if self.llm is None:
+            return outcome
+
         repair = think(self.llm, step, self.page, outcome)
         if repair.action == "replace_selector":
-            return run_step(self.page, step, selector=repair.selector, timeout_ms=None)
+            result = run_step(self.page, step, selector=repair.selector, timeout_ms=None)
+            if result.on_track and cache_key is not None:
+                self.action_cache.put(
+                    self.golden_script_id, step_index=step.index, cache_key=cache_key,
+                    selector_candidates=[{"selector": result.resolved_selector, "rank": 0}], method=step.kind,
+                )
+            return result
         if repair.action == "force_click":
             return run_step(self.page, step, force=True, timeout_ms=None)
-        return outcome  # wait_longer / give_up: nothing more Task 9 attempts automatically
+        return outcome  # wait_longer / give_up: nothing more this loop attempts automatically
