@@ -12,6 +12,27 @@ _sessions: dict[uuid.UUID, "_LiveCaptureSession"] = {}
 _registry_lock = threading.Lock()
 
 
+def _wait_for_stop_or_disconnect(stop_event: threading.Event, page, *, poll_interval: float = 1.0) -> bool:
+    """Blocks until stop_event is set (an explicit /stop call) or the
+    browser stops responding to a cheap health check (it died on its own —
+    most often a human closing the window before clicking Stop) —
+    whichever happens first. Returns True if it was the browser that died.
+
+    Playwright's own "disconnected" event does NOT fire for this case —
+    verified empirically: it fires promptly for a self-initiated
+    browser.close(), but not within 15 seconds of the process being
+    killed externally. browser.is_connected() is equally useless, since
+    it just reflects a stale client-side flag rather than probing the
+    live connection. Only an actual operation against the page reliably
+    detects a truly dead browser, so that's what this polls with."""
+    while not stop_event.wait(timeout=poll_interval):
+        try:
+            page.title()
+        except Exception:
+            return True
+    return False
+
+
 class _LiveCaptureSession:
     """Owns the Playwright sync-API objects for the lifetime of one live
     recording. Everything outside this class communicates with it only
@@ -38,8 +59,8 @@ class _LiveCaptureSession:
                 page.goto(self.start_url)
 
                 with CaptureSession(page) as capture:
-                    browser.on("disconnected", lambda _browser: self._handle_disconnect(capture))
-                    self.stop_event.wait()
+                    if _wait_for_stop_or_disconnect(self.stop_event, page):
+                        capture.mark_browser_disconnected()
 
                 actions = capture.actions
                 video_path, video_ended_at_ms = finalize_video(context, page)
@@ -61,16 +82,6 @@ class _LiveCaptureSession:
             if video_dir is not None:
                 shutil.rmtree(video_dir, ignore_errors=True)
             self.done_event.set()
-
-    def _handle_disconnect(self, capture: "CaptureSession") -> None:
-        """The browser vanished out from under a live capture — most often
-        a human closing the window before clicking Stop. Treat it exactly
-        like an explicit stop: mark the capture so its exit path won't try
-        to query a dead page, then release stop_event so _run proceeds to
-        finalize and persist whatever was captured instead of hanging
-        forever waiting for a signal that will never come now."""
-        capture.mark_browser_disconnected()
-        self.stop_event.set()
 
     def start(self) -> None:
         self.thread.start()

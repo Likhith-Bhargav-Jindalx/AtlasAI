@@ -1,11 +1,13 @@
+import threading
 import uuid
+from unittest.mock import Mock
 
 import pytest
 
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import Organization, Recording, VideoAsset
-from atlas_engine.live_capture import _LiveCaptureSession, start_live_capture, stop_live_capture
+from atlas_engine.live_capture import start_live_capture, stop_live_capture
 
 
 def test_start_and_stop_live_capture_persists_a_recording(fixture_portal_url):
@@ -35,15 +37,26 @@ def test_stop_live_capture_raises_for_an_unknown_session():
         stop_live_capture(uuid.uuid4())
 
 
-def test_handle_disconnect_marks_capture_and_sets_stop_event():
-    from atlas_engine.capture.recorder import CaptureSession
+def test_wait_for_stop_or_disconnect_detects_a_dead_page():
+    from atlas_engine.live_capture import _wait_for_stop_or_disconnect
 
-    session = _LiveCaptureSession("org-id", "https://example.com", None, "demo")
-    capture = CaptureSession.__new__(CaptureSession)  # no real page needed for this check
-    capture.browser_disconnected = False
+    stop_event = threading.Event()  # never set
+    page = Mock()
+    page.title.side_effect = Exception("Target page, context or browser has been closed")
 
-    assert not session.stop_event.is_set()
-    session._handle_disconnect(capture)
+    disconnected = _wait_for_stop_or_disconnect(stop_event, page, poll_interval=0.01)
 
-    assert capture.browser_disconnected is True
-    assert session.stop_event.is_set()
+    assert disconnected is True
+
+
+def test_wait_for_stop_or_disconnect_returns_false_on_explicit_stop():
+    from atlas_engine.live_capture import _wait_for_stop_or_disconnect
+
+    stop_event = threading.Event()
+    stop_event.set()  # already stopped, as if /stop had just been called
+    page = Mock()
+
+    disconnected = _wait_for_stop_or_disconnect(stop_event, page, poll_interval=0.01)
+
+    assert disconnected is False
+    page.title.assert_not_called()

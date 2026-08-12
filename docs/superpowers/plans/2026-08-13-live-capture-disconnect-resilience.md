@@ -4,15 +4,15 @@
 
 **Goal:** A recording survives the browser disconnecting unexpectedly — most commonly a human closing the window before clicking "Stop and review," but equally a crash — instead of the background capture thread hanging forever waiting for a snapshot from a page that no longer exists, silently losing everything captured so far.
 
-**Architecture:** Playwright's `browser.on("disconnected", ...)` fires the moment the browser process goes away, from Playwright's own internal dispatcher thread. The fix wires that event to the *same* `threading.Event` a normal "Stop and review" click already sets, so a disconnect is treated as an implicit stop rather than a hang. `CaptureSession` gains a `mark_browser_disconnected()` flag so its exit path skips the live-page queries (`wait_for_load_state`, `content()`) that would otherwise block forever on a dead connection, finalizing the last pending action against its own before-state instead. Both call sites that own a browser (`live_capture.py`'s background thread and `cli.py`'s `record` command) get the identical wiring, and video/browser cleanup calls become best-effort (wrapped, not required to succeed) since there's nothing left to close if the disconnect already did it.
+**Architecture:** The obvious-looking approach — wiring Playwright's `browser.on("disconnected", ...)` event to the same `threading.Event` a normal "Stop and review" click sets — was tried first and empirically disproven (three standalone probe scripts against this project's real Playwright install): that event fires promptly for a *self-initiated* `browser.close()`, but never fires at all, even after 15 seconds, when the browser process is killed externally — which is exactly the human-closes-the-window scenario this plan exists to fix. `browser.is_connected()` was checked too and found to be a stale client-side flag, not a live probe. The only reliable, fast (~1s) signal is *attempting* a real operation against the page (`page.title()`) and catching the `TargetClosedError` it raises once the browser is truly gone. The fix polls with exactly that call instead of waiting on an event. `CaptureSession` gains a `mark_browser_disconnected()` flag so its exit path skips the live-page queries (`wait_for_load_state`, `content()`) that would otherwise block forever on a dead connection, finalizing the last pending action against its own before-state instead. `live_capture.py`'s background thread polls continuously (it runs unattended for the life of the recording); `cli.py`'s `record` command — which blocks synchronously on `input()` with no room to poll — does a single health check the moment `input()` returns, using the same call. Video/browser cleanup calls become best-effort (wrapped, not required to succeed) since there's nothing left to close if the disconnect already did it.
 
-**Tech Stack:** Playwright sync API event listeners (`browser.on("disconnected", ...)`) — no new dependencies, no schema changes.
+**Tech Stack:** Playwright sync API (`page.title()` as a liveness probe) — no new dependencies, no schema changes.
 
 ## Global Constraints
 
-- Setting a plain `threading.Event` or a plain Python boolean attribute from Playwright's internal dispatcher thread is safe (these are ordinary Python objects, not Playwright objects) — this does **not** violate the established "only one thread touches Playwright sync objects" rule, which is specifically about calling Playwright *methods* cross-thread, not setting plain flags.
+- Don't trust a Playwright API's apparent purpose without checking it against this project's actual installed version first — `browser.on("disconnected", ...)` reads as exactly the right tool for this job and isn't; `is_connected()` reads as a liveness check and isn't one. Both were verified with small throwaway scripts before being ruled out, not from documentation or memory alone.
 - Cleanup calls (`context.close()`, `browser.close()`) become best-effort (wrapped, exceptions swallowed) — by the time they run, whatever mattered (actions, video file) has already been captured or is already unobtainable; a cleanup call failing must never mask or discard already-captured data.
-- No test in this plan kills or force-closes any real OS-level browser process — that class of action is exactly what caused today's data-loss incident when done to the *wrong* process, and Playwright test browsers can't be safely targeted by name/pattern when other Playwright-driven processes (including this project's own other tests, or unrelated browser automation) may be running concurrently on the same machine. The new behavior is tested by driving `CaptureSession`'s disconnect flag directly and by unit-testing the callback wiring in isolation — both exercise the real code path without needing an actual process kill.
+- Automated tests in this plan never kill or force-close a real OS-level browser process — that class of action is exactly what caused today's data-loss incident when done to the *wrong* process, and Playwright test browsers can't be safely targeted by name/pattern when other Playwright-driven processes (this project's own other tests, or unrelated browser automation) may be running concurrently on the same machine. The polling logic is tested by driving `_wait_for_stop_or_disconnect` directly with a mocked page (Task 3) and `CaptureSession`'s exit behavior directly (Task 1) — both exercise the real code path without needing an actual process kill. (Manual verification in Task 6 does kill a real, precisely-identified process, deliberately and with the operator watching — that's a one-time human-supervised check, not something committed as an automated test.)
 
 ---
 
@@ -191,40 +191,78 @@ git commit -m "feat: finalize_video tolerates an already-closed context"
 - Modify: `engine/src/atlas_engine/live_capture.py`
 - Test: `engine/tests/test_live_capture.py`
 
+**Design correction from the original draft of this plan:** `browser.on("disconnected", ...)` was verified empirically (three standalone probe scripts, run against this project's actual Playwright install) to fire promptly for a *self-initiated* `browser.close()` but **never fires** — not even after 15 seconds — when the browser process is killed externally (`kill` or `kill -9`), which is exactly the human-closes-the-window scenario this plan exists to fix. `browser.is_connected()` was also checked and found to just return a stale client-side flag (`True` for the full 15-second probe window after the process was already dead) — useless as a detection signal. The only mechanism that reliably and quickly (~1s in testing) detects a truly dead browser is *attempting* a real operation against it (e.g. `page.title()`) and catching the resulting `TargetClosedError`. The fix below polls with exactly that call instead of relying on an event that doesn't fire for this case.
+
 **Interfaces:**
-- Produces: `_LiveCaptureSession._handle_disconnect(capture: CaptureSession) -> None` — marks the capture session disconnected and sets `stop_event`, exactly as if `/stop` had been called. Registered via `browser.on("disconnected", ...)` right after the `CaptureSession` is created.
+- Produces: `_wait_for_stop_or_disconnect(stop_event: threading.Event, page, *, poll_interval: float = 1.0) -> bool` — blocks until either `stop_event` is set (returns `False`, a normal stop) or a `page.title()` health check raises (returns `True`, the browser died). `poll_interval` is a parameter specifically so tests can drive this in milliseconds instead of real seconds.
 
 - [ ] **Step 1: Write the failing test**
 
-This tests the wiring in isolation — no real disconnect or browser needed, since Task 1 already proved `CaptureSession`'s own behavior:
-
 ```python
 # add to engine/tests/test_live_capture.py
-def test_handle_disconnect_marks_capture_and_sets_stop_event():
-    from atlas_engine.capture.recorder import CaptureSession
-    from atlas_engine.live_capture import _LiveCaptureSession
+from unittest.mock import Mock
 
-    session = _LiveCaptureSession("org-id", "https://example.com", None, "demo")
-    capture = CaptureSession.__new__(CaptureSession)  # no real page needed for this check
-    capture.browser_disconnected = False
+def test_wait_for_stop_or_disconnect_detects_a_dead_page():
+    from atlas_engine.live_capture import _wait_for_stop_or_disconnect
 
-    assert not session.stop_event.is_set()
-    session._handle_disconnect(capture)
+    stop_event = threading.Event()  # never set
+    page = Mock()
+    page.title.side_effect = Exception("Target page, context or browser has been closed")
 
-    assert capture.browser_disconnected is True
-    assert session.stop_event.is_set()
+    disconnected = _wait_for_stop_or_disconnect(stop_event, page, poll_interval=0.01)
+
+    assert disconnected is True
+
+
+def test_wait_for_stop_or_disconnect_returns_false_on_explicit_stop():
+    from atlas_engine.live_capture import _wait_for_stop_or_disconnect
+
+    stop_event = threading.Event()
+    stop_event.set()  # already stopped, as if /stop had just been called
+    page = Mock()
+
+    disconnected = _wait_for_stop_or_disconnect(stop_event, page, poll_interval=0.01)
+
+    assert disconnected is False
+    page.title.assert_not_called()
 ```
+
+Add `import threading` at the top of `test_live_capture.py` if it isn't already imported there (check first — `live_capture.py` itself already imports it, but the test file may not).
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `.venv/bin/pytest tests/test_live_capture.py::test_handle_disconnect_marks_capture_and_sets_stop_event -v`
-Expected: FAIL — `AttributeError: '_LiveCaptureSession' object has no attribute '_handle_disconnect'`
+Run: `.venv/bin/pytest tests/test_live_capture.py -v -k wait_for_stop_or_disconnect`
+Expected: FAIL — `ImportError: cannot import name '_wait_for_stop_or_disconnect'`
 
 - [ ] **Step 3: Implement**
 
-In `engine/src/atlas_engine/live_capture.py`, replace the body of `_run` and add the new method:
+In `engine/src/atlas_engine/live_capture.py`, add a module-level function and replace the body of `_run`:
 
 ```python
+def _wait_for_stop_or_disconnect(stop_event: threading.Event, page, *, poll_interval: float = 1.0) -> bool:
+    """Blocks until stop_event is set (an explicit /stop call) or the
+    browser stops responding to a cheap health check (it died on its own —
+    most often a human closing the window before clicking Stop) —
+    whichever happens first. Returns True if it was the browser that died.
+
+    Playwright's own "disconnected" event does NOT fire for this case —
+    verified empirically: it fires promptly for a self-initiated
+    browser.close(), but not within 15 seconds of the process being
+    killed externally. browser.is_connected() is equally useless, since
+    it just reflects a stale client-side flag rather than probing the
+    live connection. Only an actual operation against the page reliably
+    detects a truly dead browser, so that's what this polls with."""
+    while not stop_event.wait(timeout=poll_interval):
+        try:
+            page.title()
+        except Exception:
+            return True
+    return False
+
+
+class _LiveCaptureSession:
+    ...  # __init__ unchanged
+
     def _run(self) -> None:
         video_dir = None
         try:
@@ -234,8 +272,8 @@ In `engine/src/atlas_engine/live_capture.py`, replace the body of `_run` and add
                 page.goto(self.start_url)
 
                 with CaptureSession(page) as capture:
-                    browser.on("disconnected", lambda _browser: self._handle_disconnect(capture))
-                    self.stop_event.wait()
+                    if _wait_for_stop_or_disconnect(self.stop_event, page):
+                        capture.mark_browser_disconnected()
 
                 actions = capture.actions
                 video_path, video_ended_at_ms = finalize_video(context, page)
@@ -257,24 +295,14 @@ In `engine/src/atlas_engine/live_capture.py`, replace the body of `_run` and add
             if video_dir is not None:
                 shutil.rmtree(video_dir, ignore_errors=True)
             self.done_event.set()
-
-    def _handle_disconnect(self, capture: "CaptureSession") -> None:
-        """The browser vanished out from under a live capture — most often
-        a human closing the window before clicking Stop. Treat it exactly
-        like an explicit stop: mark the capture so its exit path won't try
-        to query a dead page, then release stop_event so _run proceeds to
-        finalize and persist whatever was captured instead of hanging
-        forever waiting for a signal that will never come now."""
-        capture.mark_browser_disconnected()
-        self.stop_event.set()
 ```
 
-(`CaptureSession` needs to be imported for the type hint — it already is, per the existing `from atlas_engine.capture.recorder import CaptureSession` import line.)
+(Only `_run`'s body changes — `__init__`, `start`, `stop` are unchanged. Show the plan reader the full class only to make clear nothing else moves; the diff is just the one method.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `.venv/bin/pytest tests/test_live_capture.py -v`
-Expected: PASS (all tests in the file — the new wiring test, plus the two pre-existing tests confirming normal start/stop still works with real browsers unaffected by this change)
+Expected: PASS (the two new polling-logic tests, plus the two pre-existing tests confirming normal start/stop still works end-to-end with a real browser)
 
 - [ ] **Step 5: Run the full suite**
 
@@ -296,7 +324,7 @@ git commit -m "feat: recover a recording when the browser disconnects during liv
 - Modify: `engine/src/atlas_engine/cli.py`
 
 **Interfaces:**
-- Consumes: `CaptureSession.mark_browser_disconnected` (Task 1). No new test: as established in the `recording-video-capture` plan, `atlas record` blocks on `input()` in a real terminal and has never had direct test coverage for that reason — the logic being touched here (`browser.on("disconnected", ...)` calling straight into `capture.mark_browser_disconnected`, no intermediate method needed since the CLI has no `stop_event` to also set) is a strict subset of what Task 1 and Task 3 already cover.
+- Consumes: `CaptureSession.mark_browser_disconnected` (Task 1). No new test: as established in the `recording-video-capture` plan, `atlas record` blocks on `input()` in a real terminal and has never had direct test coverage for that reason. Unlike Task 3, the CLI has no background polling loop to fix, since `input()` blocks the one and only thread synchronously — there's nothing else running that could poll while it waits. The fix here is a single health check performed once `input()` returns, using the exact mechanism (`page.title()`, catching the exception) that Task 3's `_wait_for_stop_or_disconnect` proved actually works.
 
 - [ ] **Step 1: Implement**
 
@@ -312,9 +340,12 @@ def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
         page.goto(url)
 
         with CaptureSession(page) as capture:
-            browser.on("disconnected", lambda _browser: capture.mark_browser_disconnected())
             click.echo("Recording... perform your steps in the opened browser, then press Enter here to finish.")
             input()
+            try:
+                page.title()
+            except Exception:
+                capture.mark_browser_disconnected()
 
         video_path, video_ended_at_ms = finalize_video(context, page)
         try:
@@ -336,7 +367,7 @@ def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
     click.echo(f"Recording saved: {recording_id}")
 ```
 
-The only changes from the current version: a `browser.on("disconnected", ...)` registration added right after entering the `with CaptureSession(page)` block, and `browser.close()` wrapped in `try/except` to match Task 3's live-capture handling. Playwright calls a `"disconnected"` handler with the browser instance as its one argument — the lambda accepts and discards it (`mark_browser_disconnected` itself takes none). If the operator closes the browser before pressing Enter, they still need to press Enter for `input()` to return (this command's blocking design is unchanged) — but once they do, exit and cleanup won't hang or crash trying to reach a page that's gone.
+The only changes from the current version: a `page.title()` health check (swallowing any exception into `capture.mark_browser_disconnected()`) right after `input()` returns, and `browser.close()` wrapped in `try/except` to match Task 3's live-capture handling. If the operator closes the browser before pressing Enter, they still need to press Enter for `input()` to return (this command's blocking design is unchanged) — but once they do, the health check catches the dead browser before exit tries (and fails) to query it.
 
 - [ ] **Step 2: Run the full suite to confirm nothing else broke**
 
