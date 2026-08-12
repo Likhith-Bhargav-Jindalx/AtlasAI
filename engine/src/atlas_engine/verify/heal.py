@@ -195,3 +195,21 @@ def reject_heal_event(heal_event_id: uuid.UUID, *, resolved_by: uuid.UUID | None
         heal_event.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         return {"heal_event_id": str(heal_event_id), "status": "rejected"}
+
+
+def list_heal_events(org_id: str, status: str | None = None) -> list[dict]:
+    with session_scope() as session:
+        query = session.query(HealEvent).filter_by(org_id=uuid.UUID(org_id))
+        if status is not None:
+            query = query.filter_by(status=status)
+        return [
+            {
+                "id": str(event.id),
+                "golden_script_id": str(event.golden_script_id),
+                "trigger": event.trigger,
+                "status": event.status,
+                "diff_summary": event.diff_summary,
+                "created_at": event.created_at.isoformat(),
+            }
+            for event in query.order_by(HealEvent.created_at.desc()).all()
+        ]

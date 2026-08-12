@@ -22,7 +22,7 @@ from atlas_engine.recording_service import (
     list_recording_requests,
     list_recordings,
 )
-from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
+from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, list_heal_events, reject_heal_event
 
 app = FastAPI(title="Atlas Engine Local API")
 
@@ -94,6 +94,11 @@ def approve_endpoint(heal_event_id: str) -> ApprovalResponse:
 def reject_endpoint(heal_event_id: str) -> ApprovalResponse:
     result = reject_heal_event(uuid.UUID(heal_event_id))
     return ApprovalResponse(**result)
+
+
+@app.get("/heal-events")
+def list_heal_events_endpoint(org_id: str, status: str | None = None) -> list[dict]:
+    return list_heal_events(org_id, status=status)
 
 
 class CreateRecordingRequestBody(BaseModel):
