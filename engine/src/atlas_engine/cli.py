@@ -12,6 +12,7 @@ from atlas_engine.codegen.emit import emit_golden_script
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, PortalProfile, Recording
+from atlas_engine.db.repo import get_or_create_portal_profile, next_golden_script_version
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.portal_profile.infer import infer_portal_profile
 from atlas_engine.storage import LocalRunStore
@@ -112,32 +113,12 @@ def author_from_recorded_actions(
 
     domain = start_url.split("/")[2]
     with session_scope() as session:
-        # Get-or-create: a portal profile is one row per (org, domain),
-        # created once and reused across every future recording/authoring
-        # of that domain — never duplicated (architecture spec §6.3).
-        profile = (
-            session.query(PortalProfile)
-            .filter_by(org_id=uuid.UUID(org_id), domain=domain)
-            .one_or_none()
-        )
-        if profile is None:
-            profile = PortalProfile(org_id=uuid.UUID(org_id), domain=domain)
-            session.add(profile)
-            session.flush()
-
-        latest_version = (
-            session.query(GoldenScript.version)
-            .filter_by(portal_profile_id=profile.id)
-            .order_by(GoldenScript.version.desc())
-            .limit(1)
-            .scalar()
-        )
-        next_version = (latest_version or 0) + 1
+        profile = get_or_create_portal_profile(session, org_id, domain)
 
         golden = GoldenScript(
             org_id=uuid.UUID(org_id),
             portal_profile_id=profile.id,
-            version=next_version,
+            version=next_golden_script_version(session, profile.id),
             script_blob_ref=str(script_path),
             status=status,
         )
