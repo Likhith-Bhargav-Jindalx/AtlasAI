@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router-dom'
 import { LoginPage } from './pages/LoginPage'
+import { InboxPage } from './pages/agent/InboxPage'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { AppLayout } from './layout/AppLayout'
 import { RoleProvider } from './layout/RoleContext'
@@ -17,7 +18,7 @@ export default function App() {
           }
         >
           <Route path="/" element={<div className="p-8">Pick a screen from the sidebar.</div>} />
-          <Route path="/agent" element={<div className="p-8">Inbox — Task 5</div>} />
+          <Route path="/agent" element={<InboxPage />} />
           <Route path="/dev" element={<div className="p-8">Library — Task 9</div>} />
           <Route path="/approvals" element={<div className="p-8">Approvals — Task 11</div>} />
         </Route>
