@@ -10,7 +10,12 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.llm.factory import create_llm_client
-from atlas_engine.recording_service import persist_recording
+from atlas_engine.recording_service import (
+    claim_recording_request,
+    create_recording_request,
+    list_recording_requests,
+    persist_recording,
+)
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
 
@@ -106,6 +111,57 @@ def reject_heal(heal_event_id: str) -> None:
     the currently active version is left untouched."""
     reject_heal_event(uuid.UUID(heal_event_id))
     click.echo("Rejected — proposed version deprecated, active version unchanged")
+
+
+@main.command("request-recording")
+@click.option("--org-id", required=True)
+@click.option("--requested-by", required=True)
+@click.option("--target-url", required=True)
+@click.option("--title", required=True)
+@click.option("--description", default=None)
+def request_recording(org_id: str, requested_by: str, target_url: str, title: str, description: str | None) -> None:
+    """Operations agent: submit a request describing what needs
+    automating. Follow up with `atlas record` against the same
+    --request-id to attach the demo recording."""
+    request_id = create_recording_request(org_id, requested_by, target_url, title, description)
+    click.echo(f"Recording request created: {request_id}")
+
+
+@main.command("list-requests")
+@click.option("--org-id", required=True)
+@click.option("--status", default=None, type=click.Choice(["open", "submitted", "fulfilled", "cancelled"]))
+def list_requests(org_id: str, status: str | None) -> None:
+    """Developer: list recording requests, optionally filtered by status."""
+    requests = list_recording_requests(org_id, status=status)
+    if not requests:
+        click.echo("No recording requests found.")
+        return
+    for request in requests:
+        claimed = f" (claimed by {request['claimed_by']})" if request["claimed_by"] else ""
+        click.echo(f"{request['id']}  [{request['status']}]  {request['title']} — {request['target_url']}{claimed}")
+
+
+@main.command("claim-request")
+@click.argument("request_id")
+@click.option("--developer-id", required=True)
+def claim_request(request_id: str, developer_id: str) -> None:
+    """Developer: mark a request as being worked on (advisory only)."""
+    claim_recording_request(uuid.UUID(request_id), uuid.UUID(developer_id))
+    click.echo(f"Claimed request {request_id}")
+
+
+@main.command("author")
+@click.argument("recording_id")
+def author(recording_id: str) -> None:
+    """Author a golden script from an already-persisted recording —
+    the decoupled counterpart to author-from-actions, for recordings that
+    already exist as Recording rows (via `atlas record`, by anyone)."""
+    llm = create_llm_client()
+    result = author_from_recording(uuid.UUID(recording_id), llm=llm)
+    if result["status"] == "certified":
+        click.echo(f"CERTIFIED golden script: {result['script_path']}")
+    else:
+        click.echo(f"NOT certified: {result['script_path']}")
 
 
 if __name__ == "__main__":
