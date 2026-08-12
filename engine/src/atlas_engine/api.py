@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -23,6 +24,14 @@ from atlas_engine.recording_service import (
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
 app = FastAPI(title="Atlas Engine Local API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 SESSION_COOKIE_NAME = "atlas_session"
 
