@@ -79,3 +79,16 @@ class ReferenceTrajectory(Base):
     trajectory_blob_ref: Mapped[str]
     step_count: Mapped[int | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class PageExtraction(Base):
+    __tablename__ = "page_extractions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    recording_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recordings.id", ondelete="CASCADE"))
+    page_index: Mapped[int] = mapped_column(default=0)
+    url: Mapped[str]
+    data: Mapped[dict] = mapped_column(PortableJSON)
+    extracted_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    recording: Mapped["Recording"] = relationship()

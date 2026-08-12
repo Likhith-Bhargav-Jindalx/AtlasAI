@@ -142,3 +142,31 @@ def test_golden_script_accepts_partially_certified_status():
         session.commit()
 
         assert script.status == "partially_certified"
+
+
+def test_page_extraction_belongs_to_recording():
+    from atlas_engine.db.models import PageExtraction
+
+    engine = _sqlite_engine()
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        org = Organization(name="Anka Health", slug="anka-health-extraction")
+        profile = PortalProfile(org=org, domain="portal-extraction.example.com")
+        recording = Recording(
+            org=org, portal_profile=profile, status="captured", capture_blob_prefix="orgs/x/recordings/4/",
+        )
+        session.add_all([org, profile, recording])
+        session.flush()
+
+        extraction = PageExtraction(
+            recording=recording, page_index=0, url="https://portal-extraction.example.com/report",
+            data={"headings": ["Patient Report"], "fields": {"Patient ID": "12345"}},
+        )
+        session.add(extraction)
+        session.commit()
+
+        assert extraction.id is not None
+        assert extraction.recording.id == recording.id
+        assert extraction.data["fields"]["Patient ID"] == "12345"
+        assert extraction.extracted_at is not None

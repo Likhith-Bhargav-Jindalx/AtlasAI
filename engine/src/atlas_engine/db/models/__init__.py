@@ -3,6 +3,7 @@ from atlas_engine.db.models.authoring import AuthoringRun, AuthoringRunEvent, Ce
 from atlas_engine.db.models.execution import Run, UsageLedgerEntry
 from atlas_engine.db.models.identity import Organization, User
 from atlas_engine.db.models.portal import (
+    PageExtraction,
     PortalProfile,
     Recording,
     ReferenceTrajectory,
@@ -21,6 +22,7 @@ __all__ = [
     "GoldenScript",
     "HealEvent",
     "Organization",
+    "PageExtraction",
     "PortalProfile",
     "Recording",
     "RecordingRequest",
