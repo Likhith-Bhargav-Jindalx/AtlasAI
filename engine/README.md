@@ -109,17 +109,53 @@ A healed version is never active until you explicitly approve it — this
 holds whether the fix came from the LLM or from a cached selector found
 during an earlier heal of the same script.
 
+## Recording requests: two roles, one pipeline
+
+Recording and authoring are separate services (`recording_service.py` /
+`authoring_service.py`) so an operations agent can demonstrate a flow
+without triggering codegen, and a developer can author a golden script
+from *any* persisted recording — including, when you're ready to skip the
+manual re-record step, the operations agent's own.
+
+Operations agent:
+```bash
+atlas request-recording --org-id <id> --requested-by <agent-id> \
+  --target-url "https://example.com" --title "Check eligibility"
+atlas record "https://example.com" --org-id <id> --request-id <request-id> --role demo
+```
+
+Developer:
+```bash
+atlas list-requests --org-id <id> --status submitted
+atlas claim-request <request-id> --developer-id <dev-id>
+atlas record "https://example.com" --org-id <id> --request-id <request-id> --role authoring
+atlas author <your-recording-id>
+```
+
+A request only becomes `fulfilled` once a `certified` script references a
+recording made under it — a `draft` result leaves it `submitted` so
+someone tries again. `atlas author` (and `POST /recordings/{id}/author`)
+work on *any* recording regardless of who made it or what `--role` it was
+tagged with, so authoring directly from the operations agent's own `demo`
+recording — skipping the developer's re-record step — already works today
+without any code change; see `tests/test_authoring_service.py`'s
+`test_author_from_recording_works_directly_on_a_demo_role_recording`.
+
 ## What's next
 
-Phase 0 and Phase 1 together cover: record -> certified golden script ->
-detect drift -> repair -> approve -> new version live, all provable
-without real credentials or a real portal (see
-`tests/test_end_to_end_heal.py` for the full loop, including simulated
-portal drift). Not built yet, each its own plan:
+Phase 0, Phase 1, and the recording-requests workflow together cover:
+an operations agent submits a request and records a demo -> a developer
+claims it and authors a certified golden script -> the request is marked
+fulfilled -> drift gets detected, repaired, and approved as a new version.
+All of this is provable without real credentials or a real portal — see
+`tests/test_end_to_end_requests.py` and `tests/test_end_to_end_heal.py`.
+Not built yet, each its own plan:
 
 - The desktop EXE shell (PyInstaller + pywebview) and packaging.
 - The cloud multi-tenant backend and the enterprise dashboard — including
-  a UI for the approval queue this plan's CLI/API already support.
-- The video/voice knowledge base.
+  a UI for the recording-request queue and the heal-approval queue this
+  plan's CLI/API already support.
+- Voice narration capture and video/screen recording (the `video_assets`/
+  `video_steps` schema exists; nothing writes to it yet).
 
 See the architecture spec's roadmap (§18) for the full phase breakdown.
