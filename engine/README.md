@@ -172,6 +172,26 @@ POST /recordings/{capture_session_id}/stop
 Set `ATLAS_SESSION_SECRET` to something real outside local dev — it
 defaults to an intentionally obvious placeholder.
 
+## Video
+
+Every recording made through `atlas record` or the live-recording API now
+captures a real screen video (Playwright's native `record_video_dir`) in
+addition to the DOM-action trajectory. It's stored next to the recording's
+other artifacts and exposed over HTTP:
+
+```
+GET /recordings/{recording_id}          -> status, duration, and a per-step
+                                            list with a caption and an
+                                            offset_ms into the video, for
+                                            building a chaptered player
+GET /recordings/{recording_id}/video    -> the raw .webm file
+```
+
+`video_assets`/`video_steps` existed in the schema since Phase 0 but were
+never written to until now — `kind="raw"` is the only kind produced today;
+`kind="narrated_edit"` (an edited, voice-narrated cut) stays a future hook,
+per the original architecture spec.
+
 ## What's next
 
 Phase 0, Phase 1, and the recording-requests workflow together cover:
