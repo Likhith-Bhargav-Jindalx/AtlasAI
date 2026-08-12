@@ -3,9 +3,11 @@ import uuid
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from atlas_engine.authoring_service import author_from_recording
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.llm.factory import create_llm_client
+from atlas_engine.recording_service import claim_recording_request, create_recording_request, list_recording_requests
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
 app = FastAPI(title="Atlas Engine Local API")
@@ -68,3 +70,45 @@ def approve_endpoint(heal_event_id: str) -> ApprovalResponse:
 def reject_endpoint(heal_event_id: str) -> ApprovalResponse:
     result = reject_heal_event(uuid.UUID(heal_event_id))
     return ApprovalResponse(**result)
+
+
+class CreateRecordingRequestBody(BaseModel):
+    org_id: str
+    requested_by: str
+    target_url: str
+    title: str
+    description: str | None = None
+
+
+class RecordingRequestCreatedResponse(BaseModel):
+    request_id: str
+
+
+class ClaimRequestBody(BaseModel):
+    developer_id: str
+
+
+@app.post("/recording-requests", response_model=RecordingRequestCreatedResponse)
+def create_recording_request_endpoint(body: CreateRecordingRequestBody) -> RecordingRequestCreatedResponse:
+    request_id = create_recording_request(
+        body.org_id, body.requested_by, body.target_url, body.title, body.description
+    )
+    return RecordingRequestCreatedResponse(request_id=str(request_id))
+
+
+@app.get("/recording-requests")
+def list_recording_requests_endpoint(org_id: str, status: str | None = None) -> list[dict]:
+    return list_recording_requests(org_id, status=status)
+
+
+@app.post("/recording-requests/{request_id}/claim")
+def claim_recording_request_endpoint(request_id: str, body: ClaimRequestBody) -> dict:
+    claim_recording_request(uuid.UUID(request_id), uuid.UUID(body.developer_id))
+    return {"ok": True}
+
+
+@app.post("/recordings/{recording_id}/author", response_model=AuthorResponse)
+def author_from_recording_endpoint(recording_id: str) -> AuthorResponse:
+    llm = create_llm_client()
+    result = author_from_recording(uuid.UUID(recording_id), llm=llm)
+    return AuthorResponse(**result)
