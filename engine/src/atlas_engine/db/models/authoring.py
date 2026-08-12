@@ -28,3 +28,20 @@ class AuthoringRun(Base):
     org: Mapped["Organization"] = relationship()
     recording: Mapped["Recording"] = relationship()
     golden_script: Mapped["GoldenScript | None"] = relationship()
+
+
+AUTHORING_RUN_EVENT_LEVELS = ("info", "warning", "error")
+
+
+class AuthoringRunEvent(Base):
+    __tablename__ = "authoring_run_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    authoring_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("authoring_runs.id", ondelete="CASCADE"))
+    timestamp: Mapped[datetime] = mapped_column(server_default=func.now())
+    phase: Mapped[str] = mapped_column(Enum(*AUTHORING_RUN_PHASES, name="authoring_run_event_phase"))
+    step_index: Mapped[int | None] = mapped_column(default=None)
+    level: Mapped[str] = mapped_column(Enum(*AUTHORING_RUN_EVENT_LEVELS, name="authoring_run_event_level"), default="info")
+    message: Mapped[str]
+
+    authoring_run: Mapped["AuthoringRun"] = relationship()
