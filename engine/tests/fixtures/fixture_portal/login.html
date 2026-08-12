@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head><title>Fixture Portal — Login</title></head>
+<body>
+  <form id="login-form">
+    <input id="username" name="username" type="text" placeholder="Username">
+    <input id="password" name="password" type="password" placeholder="Password">
+    <button id="login-btn" type="submit">Log in</button>
+  </form>
+  <script>
+    document.getElementById("login-form").addEventListener("submit", function (event) {
+      event.preventDefault();
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+      if (username === "demo" && password === "demo-pass") {
+        window.location.href = "/dashboard.html";
+      } else {
+        alert("Invalid credentials");
+      }
+    });
+  </script>
+</body>
+</html>

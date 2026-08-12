@@ -16,3 +16,13 @@ os.environ.setdefault(
 os.environ.setdefault("ATLAS_RUN_ROOT", "/tmp/atlas-engine-test-runs")
 
 import pytest  # noqa: E402
+
+from tests.fixtures.fixture_portal.server import FixturePortalServer  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def fixture_portal_url():
+    server = FixturePortalServer(port=8731)
+    server.start()
+    yield server.base_url
+    server.stop()

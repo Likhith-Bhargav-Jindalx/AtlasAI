@@ -1,0 +1,16 @@
+<!doctype html>
+<html>
+<head><title>Fixture Portal — Dashboard</title></head>
+<body>
+  <h1 id="welcome">Welcome, demo</h1>
+  <button id="generate-report-btn">Generate report</button>
+  <p id="report-status"></p>
+  <a id="download-link" href="/report.csv" style="display:none">Download report.csv</a>
+  <script>
+    document.getElementById("generate-report-btn").addEventListener("click", function () {
+      document.getElementById("report-status").textContent = "Report ready";
+      document.getElementById("download-link").style.display = "inline";
+    });
+  </script>
+</body>
+</html>
