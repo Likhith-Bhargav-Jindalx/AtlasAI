@@ -2,8 +2,9 @@ import uuid
 
 import pytest
 
+from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import Organization, Recording
+from atlas_engine.db.models import Organization, Recording, VideoAsset
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 
 
@@ -23,6 +24,10 @@ def test_start_and_stop_live_capture_persists_a_recording(fixture_portal_url):
         recording = session.get(Recording, recording_id)
         assert recording.status == "captured"
         assert recording.role == "demo"
+
+        video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one()
+        assert video_asset.status == "ready"
+        assert (settings.run_root / video_asset.storage_ref).stat().st_size > 0
 
 
 def test_stop_live_capture_raises_for_an_unknown_session():
