@@ -1,5 +1,6 @@
 import json
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -144,3 +145,47 @@ def heal_golden_script(
         "new_status": new_status,
         "diff": diff,
     }
+
+
+def approve_heal_event(heal_event_id: uuid.UUID, *, approved_by: uuid.UUID | None = None) -> dict:
+    with session_scope() as session:
+        heal_event = session.get(HealEvent, heal_event_id)
+        if heal_event is None:
+            raise ValueError(f"No such heal event: {heal_event_id}")
+        if heal_event.status != "pending_approval":
+            raise ValueError(f"Heal event {heal_event_id} is not pending approval (status={heal_event.status})")
+
+        old_golden = session.get(GoldenScript, heal_event.golden_script_id)
+        new_golden = session.get(GoldenScript, heal_event.proposed_version_id)
+
+        if new_golden.status != "certified":
+            raise ValueError(f"Cannot approve a version that is not certified (status={new_golden.status})")
+
+        old_golden.status = "deprecated"
+        new_golden.status = "active"
+        heal_event.status = "approved"
+        heal_event.resolved_by = approved_by
+        heal_event.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        return {
+            "heal_event_id": str(heal_event_id),
+            "deprecated_version": old_golden.version,
+            "active_version": new_golden.version,
+        }
+
+
+def reject_heal_event(heal_event_id: uuid.UUID, *, resolved_by: uuid.UUID | None = None) -> dict:
+    with session_scope() as session:
+        heal_event = session.get(HealEvent, heal_event_id)
+        if heal_event is None:
+            raise ValueError(f"No such heal event: {heal_event_id}")
+        if heal_event.status != "pending_approval":
+            raise ValueError(f"Heal event {heal_event_id} is not pending approval (status={heal_event.status})")
+
+        new_golden = session.get(GoldenScript, heal_event.proposed_version_id)
+        new_golden.status = "deprecated"
+        heal_event.status = "rejected"
+        heal_event.resolved_by = resolved_by
+        heal_event.resolved_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        return {"heal_event_id": str(heal_event_id), "status": "rejected"}
