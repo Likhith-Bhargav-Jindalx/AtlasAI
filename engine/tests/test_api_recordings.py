@@ -34,11 +34,11 @@ def test_get_recording_detail_includes_video_steps(tmp_path, fixture_portal_url)
 
     assert response.status_code == 200
     body = response.json()
-    assert body["has_video"] is True
-    assert body["duration_seconds"] == 2
-    assert len(body["steps"]) == 1
-    assert body["steps"][0]["caption"] == "Click #login-btn"
-    assert body["steps"][0]["offset_ms"] == 500
+    assert body["pages"][0]["has_video"] is True
+    assert body["pages"][0]["duration_seconds"] == 2
+    assert len(body["pages"][0]["steps"]) == 1
+    assert body["pages"][0]["steps"][0]["caption"] == "Click #login-btn"
+    assert body["pages"][0]["steps"][0]["offset_ms"] == 500
 
 
 def test_get_recording_detail_404_for_unknown_id():

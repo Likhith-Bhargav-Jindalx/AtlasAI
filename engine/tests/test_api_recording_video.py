@@ -24,7 +24,7 @@ def test_get_recording_video_returns_the_file(tmp_path, fixture_portal_url):
     )
 
     client = TestClient(app)
-    response = client.get(f"/recordings/{recording_id}/video")
+    response = client.get(f"/recordings/{recording_id}/video/0")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "video/webm"
@@ -41,6 +41,6 @@ def test_get_recording_video_404_when_no_video(fixture_portal_url):
     recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
 
     client = TestClient(app)
-    response = client.get(f"/recordings/{recording_id}/video")
+    response = client.get(f"/recordings/{recording_id}/video/0")
 
     assert response.status_code == 404

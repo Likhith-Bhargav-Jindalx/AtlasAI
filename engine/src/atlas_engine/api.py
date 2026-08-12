@@ -239,14 +239,19 @@ class RecordingStepResponse(BaseModel):
     offset_ms: int | None = None
 
 
+class RecordingPageResponse(BaseModel):
+    page_index: int
+    has_video: bool
+    video_asset_id: str | None = None
+    duration_seconds: int | None = None
+    steps: list[RecordingStepResponse]
+
+
 class RecordingDetailResponse(BaseModel):
     id: str
     status: str
     role: str
-    duration_seconds: int | None = None
-    has_video: bool
-    video_asset_id: str | None = None
-    steps: list[RecordingStepResponse]
+    pages: list[RecordingPageResponse]
 
 
 @app.get("/recordings/{recording_id}", response_model=RecordingDetailResponse)
@@ -258,12 +263,16 @@ def get_recording_endpoint(recording_id: str) -> RecordingDetailResponse:
     return RecordingDetailResponse(**detail)
 
 
-@app.get("/recordings/{recording_id}/video")
-def get_recording_video_endpoint(recording_id: str):
+@app.get("/recordings/{recording_id}/video/{page_index}")
+def get_recording_video_endpoint(recording_id: str, page_index: int):
     with session_scope() as session:
-        video_asset = session.query(VideoAsset).filter_by(recording_id=uuid.UUID(recording_id)).one_or_none()
+        video_asset = (
+            session.query(VideoAsset)
+            .filter_by(recording_id=uuid.UUID(recording_id), page_index=page_index)
+            .one_or_none()
+        )
         if video_asset is None:
-            raise HTTPException(status_code=404, detail="No video for this recording")
+            raise HTTPException(status_code=404, detail="No video for this recording page")
         storage_ref = video_asset.storage_ref
 
     video_path = settings.run_root / storage_ref
