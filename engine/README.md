@@ -185,12 +185,23 @@ GET /recordings/{recording_id}          -> status, duration, and a per-step
                                             offset_ms into the video, for
                                             building a chaptered player
 GET /recordings/{recording_id}/video    -> the raw .webm file
+GET /recordings?org_id=...&status=...   -> list recordings, newest first
 ```
 
 `video_assets`/`video_steps` existed in the schema since Phase 0 but were
 never written to until now — `kind="raw"` is the only kind produced today;
 `kind="narrated_edit"` (an edited, voice-narrated cut) stays a future hook,
 per the original architecture spec.
+
+Heal events have the same list/detail split:
+
+```
+GET /heal-events?org_id=...&status=...  -> list heal events, newest first
+```
+
+The API also allows credentialed cross-origin requests from
+`http://localhost:5173` (the Vite dev server default) so the frontend's
+cookie-based session works against this API in local dev.
 
 ## What's next
 
