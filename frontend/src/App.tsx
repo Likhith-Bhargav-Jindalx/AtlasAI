@@ -4,6 +4,7 @@ import { InboxPage } from './pages/agent/InboxPage'
 import { LiveRecordingPage } from './pages/agent/LiveRecordingPage'
 import { ReviewPage } from './pages/agent/ReviewPage'
 import { LibraryPage } from './pages/dev/LibraryPage'
+import { AuthoringPage } from './pages/dev/AuthoringPage'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { AppLayout } from './layout/AppLayout'
 import { RoleProvider } from './layout/RoleContext'
@@ -25,6 +26,7 @@ export default function App() {
           <Route path="/agent/record" element={<LiveRecordingPage />} />
           <Route path="/agent/recordings/:recordingId" element={<ReviewPage />} />
           <Route path="/dev" element={<LibraryPage />} />
+          <Route path="/dev/recordings/:recordingId" element={<AuthoringPage />} />
           <Route path="/approvals" element={<div className="p-8">Approvals — Task 11</div>} />
         </Route>
       </Route>
