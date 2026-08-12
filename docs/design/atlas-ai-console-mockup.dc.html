@@ -1,0 +1,467 @@
+<!--
+Reference-only design mockup, imported from the user's Claude Design
+project ("Atlas AI workflow redesign", file "Atlas AI Console.dc.html").
+This file is NOT part of the build — it's the pixel-accurate visual spec
+the frontend implementation plan (docs/superpowers/plans/2026-08-12-
+atlas-ai-console-frontend.md) is translated from. It uses a "design
+canvas" preview runtime (x-dc/sc-for/sc-if custom elements, a DCLogic
+component class) that has no equivalent in the real app — only the
+visual structure, copy, colors, and layout values are meant to be reused.
+-->
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="app">
+<link rel="stylesheet" href="_ds/anka-design-system-019ddfbb-4a2e-7228-b8bf-bedec619e0fe/colors_and_type.css">
+<script src="_ds/anka-design-system-019ddfbb-4a2e-7228-b8bf-bedec619e0fe/_ds_bundle.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<style>
+body { margin:0; font-family:'HalenoirCompactText','Halenoir',system-ui,sans-serif; -webkit-font-smoothing:antialiased; background:#f4f5f4; }
+a { color:#144e48; text-decoration:none; }
+a:hover { color:#0e3a35; text-decoration:underline; }
+@keyframes recpulse { 0%,100% { opacity:1 } 50% { opacity:.25 } }
+</style>
+</helmet>
+
+<div style="display:flex; min-height:960px; background:#f4f5f4; color:#0d0d0c; font-family:'HalenoirCompactText','Halenoir',system-ui,sans-serif;">
+
+  <div style="width:252px; flex:none; background:#ffffff; border-right:1px solid #ebebea; display:flex; flex-direction:column; padding:20px 14px; gap:24px; position:sticky; top:0; height:100vh; box-sizing:border-box;">
+    <div style="display:flex; align-items:center; gap:10px; padding:0 8px;">
+      <div style="width:28px; height:28px; border-radius:9px; background:#144e48; display:flex; align-items:center; justify-content:center; color:#ffffff; font-size:14px; font-weight:700; letter-spacing:-.02em;">A</div>
+      <div style="display:flex; flex-direction:column;">
+        <div style="font-size:14px; font-weight:600; letter-spacing:-.01em;">Atlas AI</div>
+        <div style="font-size:11px; color:#78786f;">{{ orgName }}</div>
+      </div>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:4px;">
+      <div style="font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:#a3a39b; padding:0 8px 6px;">{{ roleLabel }}</div>
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="4">
+        <div onClick="{{ item.go }}" style="display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:10px; cursor:pointer; font-size:13.5px; transition:background 200ms cubic-bezier(.4,0,.2,1);" style-hover="background:#edf5f3">
+          <div style="width:6px; height:6px; border-radius:99px; flex:none; background:{{ item.dot }};"></div>
+          <div style="flex:1; color:{{ item.color }}; font-weight:{{ item.weight }};">{{ item.label }}</div>
+          <sc-if value="{{ item.count }}" hint-placeholder-val="{{ true }}">
+            <div style="font-size:11px; color:#78786f; background:#f4f5f4; border-radius:99px; padding:2px 7px;">{{ item.count }}</div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="margin-top:auto; display:flex; flex-direction:column; gap:8px;">
+      <div style="font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:#a3a39b; padding:0 8px;">Viewing as</div>
+      <div style="display:flex; flex-direction:column; gap:2px; background:#f7f8f7; border:1px solid #ebebea; border-radius:12px; padding:4px;">
+        <sc-for list="{{ roles }}" as="r" hint-placeholder-count="3">
+          <div onClick="{{ r.go }}" style="padding:7px 10px; border-radius:9px; font-size:12.5px; cursor:pointer; background:{{ r.bg }}; color:{{ r.color }}; font-weight:{{ r.weight }};">{{ r.label }}</div>
+        </sc-for>
+      </div>
+      <div style="display:flex; align-items:center; gap:9px; padding:10px 8px 2px;">
+        <div style="width:26px; height:26px; border-radius:99px; background:#b1d1c8; color:#144e48; font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center;">{{ userInitials }}</div>
+        <div style="font-size:12.5px; color:#0d0d0c;">{{ userName }}</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="flex:1; min-width:1180px; display:flex; flex-direction:column;">
+
+    <sc-if value="{{ isInbox }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:36px 44px 64px; display:flex; flex-direction:column; gap:28px; max-width:1180px;">
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:24px;">
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <h1 style="margin:0; font-family:'Halenoir',system-ui,sans-serif; font-size:30px; font-weight:600; letter-spacing:-.025em;">Request inbox</h1>
+            <div style="font-size:14px; color:#78786f;">Open recording requests assigned to you. Record the flow once — we handle the rest.</div>
+          </div>
+          <div onClick="{{ goRecord }}" style="display:flex; align-items:center; gap:9px; background:#144e48; color:#ffffff; padding:11px 18px; border-radius:99px; font-size:13.5px; font-weight:500; cursor:pointer; white-space:nowrap; flex:none;" style-hover="background:#0e3a35">
+            <div style="width:9px; height:9px; border-radius:99px; background:#ff5b5b;"></div>
+            Start new recording
+          </div>
+        </div>
+
+        <sc-if value="{{ hasRequests }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; overflow:hidden;">
+            <div style="display:grid; grid-template-columns:1.7fr 1.2fr .8fr .7fr auto; gap:20px; padding:13px 22px; border-bottom:1px solid #ebebea; background:#fafbfa; font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:#a3a39b;">
+              <div>Task</div><div>Target portal</div><div>Requested by</div><div>Status</div><div style="width:104px;"></div>
+            </div>
+            <sc-for list="{{ requests }}" as="r" hint-placeholder-count="5">
+              <div style="display:grid; grid-template-columns:1.7fr 1.2fr .8fr .7fr auto; gap:20px; padding:18px 22px; border-bottom:1px solid #f1f2f1; align-items:center;" style-hover="background:#fbfcfb">
+                <div style="display:flex; flex-direction:column; gap:3px; min-width:0;">
+                  <div style="font-size:14px; font-weight:500; letter-spacing:-.01em;">{{ r.title }}</div>
+                  <div style="font-size:12px; color:#a3a39b;">Requested {{ r.age }}</div>
+                </div>
+                <div style="font-size:12.5px; color:#78786f; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ r.url }}</div>
+                <div style="font-size:12.5px; color:#78786f;">{{ r.by }}</div>
+                <div><span style="display:inline-flex; align-items:center; gap:6px; font-size:11.5px; padding:4px 11px; border-radius:99px; background:{{ r.pillBg }}; color:{{ r.pillFg }};">{{ r.status }}</span></div>
+                <div onClick="{{ r.go }}" style="width:104px; text-align:center; font-size:12.5px; padding:8px 0; border-radius:99px; border:1px solid #d8dad8; cursor:pointer; color:#144e48; font-weight:500;" style-hover="background:#edf5f3; border-color:#b1d1c8">{{ r.action }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ noRequests }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; padding:80px 40px; display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center;">
+            <div style="width:54px; height:54px; border-radius:18px; background:#edf5f3; display:flex; align-items:center; justify-content:center;">
+              <i data-lucide="inbox" style="width:24px; height:24px; color:#144e48;"></i>
+            </div>
+            <div style="font-family:'Halenoir',system-ui,sans-serif; font-size:19px; font-weight:600; letter-spacing:-.02em;">No open requests</div>
+            <div style="font-size:13.5px; color:#78786f; max-width:380px;">When a developer asks for a workflow recording, it lands here. You can also record a flow on your own initiative.</div>
+            <div onClick="{{ goRecord }}" style="margin-top:8px; background:#144e48; color:#ffffff; padding:10px 18px; border-radius:99px; font-size:13px; cursor:pointer;" style-hover="background:#0e3a35">Start new recording</div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isLive }}" hint-placeholder-val="{{ true }}">
+      <div style="min-height:100vh; background:#0d0d0c; display:flex; flex-direction:column; align-items:center; padding:32px 40px 40px; gap:24px; box-sizing:border-box;">
+        <div style="width:100%; max-width:1080px; display:flex; align-items:center; justify-content:space-between;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div style="width:10px; height:10px; border-radius:99px; background:#ff5b5b; animation:recpulse 1.6s ease-in-out infinite;"></div>
+            <div style="color:#ffffff; font-size:14px; font-weight:500; letter-spacing:-.01em;">Recording — check eligibility</div>
+            <div style="color:#78786f; font-size:13px;">{{ liveUrl }}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:16px;">
+            <div style="font-family:'HalenoirCompact','Halenoir',monospace; color:#ffffff; font-size:22px; letter-spacing:.02em; font-variant-numeric:tabular-nums;">{{ elapsed }}</div>
+            <div style="color:#78786f; font-size:12.5px;">{{ actionCount }} actions captured</div>
+          </div>
+        </div>
+
+        <div style="width:100%; max-width:1080px; aspect-ratio:16/10; border-radius:18px; overflow:hidden; border:1px solid #2a2a28; background:#141413; display:flex; flex-direction:column;">
+          <div style="height:38px; flex:none; background:#1c1c1a; border-bottom:1px solid #2a2a28; display:flex; align-items:center; gap:8px; padding:0 14px;">
+            <div style="display:flex; gap:6px;">
+              <div style="width:9px; height:9px; border-radius:99px; background:#3a3a37;"></div>
+              <div style="width:9px; height:9px; border-radius:99px; background:#3a3a37;"></div>
+              <div style="width:9px; height:9px; border-radius:99px; background:#3a3a37;"></div>
+            </div>
+            <div style="flex:1; margin-left:8px; height:22px; border-radius:99px; background:#252523; color:#78786f; font-size:11.5px; display:flex; align-items:center; padding:0 12px;">{{ liveUrl }}</div>
+          </div>
+          <div style="flex:1; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; color:#5c5c56;">
+            <i data-lucide="monitor-play" style="width:34px; height:34px;"></i>
+            <div style="font-size:13px;">Live capture in progress in a separate browser window</div>
+            <div style="font-size:12px; color:#3f3f3b;">Last frame updated {{ lastFrame }}</div>
+          </div>
+        </div>
+
+        <div style="width:100%; max-width:1080px; display:flex; align-items:center; gap:18px;">
+          <div style="flex:1; display:flex; align-items:center; gap:12px; background:#141413; border:1px solid #2a2a28; border-radius:99px; padding:12px 18px;">
+            <i data-lucide="mic" style="width:16px; height:16px; color:#b1d1c8;"></i>
+            <div style="display:flex; align-items:flex-end; gap:3px; height:18px;">
+              <sc-for list="{{ mic }}" as="m" hint-placeholder-count="18">
+                <div style="width:3px; border-radius:2px; background:#b1d1c8; height:{{ m.h }};"></div>
+              </sc-for>
+            </div>
+            <div style="color:#78786f; font-size:12.5px; margin-left:4px;">Narration recording</div>
+          </div>
+          <div onClick="{{ goSubmitted }}" style="display:flex; align-items:center; gap:10px; background:#ff5b5b; color:#ffffff; padding:14px 26px; border-radius:99px; font-size:14px; font-weight:600; cursor:pointer;" style-hover="background:#e64d4d">
+            <div style="width:11px; height:11px; border-radius:2px; background:#ffffff;"></div>
+            Stop and review
+          </div>
+        </div>
+
+        <div style="width:100%; max-width:1080px; display:flex; gap:10px; flex-wrap:wrap;">
+          <sc-for list="{{ liveSteps }}" as="s" hint-placeholder-count="5">
+            <div style="display:flex; align-items:center; gap:8px; background:#141413; border:1px solid #2a2a28; border-radius:99px; padding:7px 14px; color:#a3a39b; font-size:12px;">
+              <div style="color:#5c5c56; font-variant-numeric:tabular-nums;">{{ s.n }}</div>
+              {{ s.label }}
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isReview }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:36px 44px 64px; display:flex; flex-direction:column; gap:24px; max-width:1280px;">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:24px;">
+          <div style="display:flex; flex-direction:column; gap:8px; flex:1;">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="font-size:11.5px; padding:4px 11px; border-radius:99px; background:#f4f5f4; color:#78786f;">Draft</span>
+              <div style="font-size:12.5px; color:#a3a39b;">Captured {{ capturedAt }} · {{ duration }} · {{ actionCount }} actions</div>
+            </div>
+            <input value="{{ recordingTitle }}" onChange="{{ setTitle }}" style="font-family:'Halenoir',system-ui,sans-serif; font-size:28px; font-weight:600; letter-spacing:-.025em; border:none; border-bottom:1px solid transparent; outline:none; background:transparent; padding:2px 0; color:#0d0d0c; width:100%;" style-focus="border-bottom-color:#b1d1c8">
+            <textarea onChange="{{ setDesc }}" rows="2" style="font-family:'HalenoirCompactText',system-ui,sans-serif; font-size:13.5px; color:#78786f; border:1px solid #ebebea; border-radius:12px; padding:10px 12px; outline:none; resize:none; background:#ffffff; max-width:640px;" style-focus="border-color:#b1d1c8">{{ recordingDesc }}</textarea>
+          </div>
+          <div style="display:flex; gap:10px; padding-top:34px;">
+            <div style="padding:11px 18px; border-radius:99px; border:1px solid #d8dad8; font-size:13.5px; cursor:pointer; color:#0d0d0c;" style-hover="background:#f4f5f4">Re-record</div>
+            <div onClick="{{ goLibrary }}" style="padding:11px 20px; border-radius:99px; background:#144e48; color:#ffffff; font-size:13.5px; font-weight:500; cursor:pointer;" style-hover="background:#0e3a35">Submit to developer</div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1.65fr 1fr; gap:24px; align-items:start;">
+          <div style="display:flex; flex-direction:column; gap:14px;">
+            <div style="border-radius:18px; overflow:hidden; border:1px solid #ebebea; background:#0d0d0c; aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; position:relative;">
+              <div style="width:64px; height:64px; border-radius:99px; background:rgba(255,255,255,.14); display:flex; align-items:center; justify-content:center; backdrop-filter:blur(6px);">
+                <i data-lucide="play" style="width:26px; height:26px; color:#ffffff;"></i>
+              </div>
+              <div style="position:absolute; left:16px; bottom:14px; color:#ffffff; font-size:12px; font-variant-numeric:tabular-nums; background:rgba(0,0,0,.45); border-radius:99px; padding:4px 10px; white-space:nowrap;">0:00 / {{ duration }}</div>
+            </div>
+            <div style="background:#ffffff; border:1px solid #ebebea; border-radius:14px; padding:14px 16px; display:flex; flex-direction:column; gap:10px;">
+              <div style="position:relative; height:6px; border-radius:99px; background:#ebebea;">
+                <div style="position:absolute; left:0; top:0; bottom:0; width:0%; border-radius:99px; background:#144e48;"></div>
+                <sc-for list="{{ chapters }}" as="c" hint-placeholder-count="6">
+                  <div style="position:absolute; top:-3px; width:2px; height:12px; border-radius:2px; background:#b1d1c8; left:{{ c.left }};"></div>
+                </sc-for>
+              </div>
+              <div style="display:flex; justify-content:space-between; font-size:11.5px; color:#a3a39b; font-variant-numeric:tabular-nums;">
+                <div>0:00</div><div>{{ duration }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; overflow:hidden;">
+            <div style="padding:14px 18px; border-bottom:1px solid #ebebea; display:flex; align-items:center; justify-content:space-between;">
+              <div style="font-size:13.5px; font-weight:600;">Steps</div>
+              <div style="font-size:12px; color:#a3a39b;">Auto-generated</div>
+            </div>
+            <div style="max-height:520px; overflow:auto;">
+              <sc-for list="{{ steps }}" as="s" hint-placeholder-count="6">
+                <div style="display:flex; gap:12px; padding:14px 18px; border-bottom:1px solid #f1f2f1;" style-hover="background:#fbfcfb">
+                  <div style="width:22px; height:22px; flex:none; border-radius:99px; background:#edf5f3; color:#144e48; font-size:11px; display:flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums;">{{ s.n }}</div>
+                  <div style="display:flex; flex-direction:column; gap:3px; min-width:0;">
+                    <div style="font-size:13px; letter-spacing:-.005em;">{{ s.label }}</div>
+                    <div style="font-size:11.5px; color:#a3a39b; font-variant-numeric:tabular-nums;">{{ s.time }}</div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isLibrary }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:36px 44px 64px; display:flex; flex-direction:column; gap:26px; max-width:1280px;">
+        <div style="display:flex; align-items:flex-end; justify-content:space-between; gap:24px;">
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <h1 style="margin:0; font-family:'Halenoir',system-ui,sans-serif; font-size:30px; font-weight:600; letter-spacing:-.025em;">Recording library</h1>
+            <div style="font-size:14px; color:#78786f;">Submitted recordings waiting to become golden scripts.</div>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <sc-for list="{{ filters }}" as="f" hint-placeholder-count="4">
+              <div style="padding:8px 14px; border-radius:99px; font-size:12.5px; cursor:pointer; border:1px solid {{ f.border }}; background:{{ f.bg }}; color:{{ f.color }};">{{ f.label }}</div>
+            </sc-for>
+          </div>
+        </div>
+
+        <sc-if value="{{ hasRecordings }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:20px;">
+            <sc-for list="{{ recordings }}" as="r" hint-placeholder-count="6">
+              <div onClick="{{ r.go }}" style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; overflow:hidden; cursor:pointer; transition:all 200ms cubic-bezier(.4,0,.2,1);" style-hover="box-shadow:0 8px 24px rgba(20,78,72,.10); transform:translateY(-2px); border-color:#ffffff">
+                <div style="aspect-ratio:16/9; background:#e8eae8; position:relative; display:flex; align-items:center; justify-content:center;">
+                  <div style="width:42px; height:42px; border-radius:99px; background:rgba(13,13,12,.55); display:flex; align-items:center; justify-content:center;">
+                    <i data-lucide="play" style="width:18px; height:18px; color:#ffffff;"></i>
+                  </div>
+                  <div style="position:absolute; right:10px; bottom:10px; font-size:11px; color:#ffffff; background:rgba(0,0,0,.55); padding:3px 8px; border-radius:99px; font-variant-numeric:tabular-nums;">{{ r.duration }}</div>
+                </div>
+                <div style="padding:16px 16px 18px; display:flex; flex-direction:column; gap:10px;">
+                  <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:10px;">
+                    <div style="font-size:14.5px; font-weight:500; letter-spacing:-.01em;">{{ r.title }}</div>
+                    <span style="flex:none; font-size:11px; padding:4px 10px; border-radius:99px; background:{{ r.pillBg }}; color:{{ r.pillFg }};">{{ r.status }}</span>
+                  </div>
+                  <div style="font-size:12.5px; color:#78786f;">{{ r.portal }}</div>
+                  <div style="display:flex; align-items:center; justify-content:space-between; padding-top:6px; border-top:1px solid #f1f2f1;">
+                    <div style="display:flex; align-items:center; gap:8px;">
+                      <div style="width:22px; height:22px; border-radius:99px; background:#edf5f3; color:#144e48; font-size:10px; display:flex; align-items:center; justify-content:center;">{{ r.initials }}</div>
+                      <div style="font-size:12px; color:#78786f;">{{ r.agent }}</div>
+                    </div>
+                    <div style="font-size:12.5px; color:#144e48; font-weight:500;">{{ r.action }}</div>
+                  </div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ noRecordings }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; padding:80px 40px; display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center;">
+            <div style="width:54px; height:54px; border-radius:18px; background:#edf5f3; display:flex; align-items:center; justify-content:center;">
+              <i data-lucide="video-off" style="width:24px; height:24px; color:#144e48;"></i>
+            </div>
+            <div style="font-family:'Halenoir',system-ui,sans-serif; font-size:19px; font-weight:600; letter-spacing:-.02em;">No recordings yet</div>
+            <div style="font-size:13.5px; color:#78786f; max-width:400px;">Ask an operations agent to record a workflow, or record it yourself to get started.</div>
+            <div style="margin-top:8px; padding:10px 18px; border-radius:99px; border:1px solid #d8dad8; font-size:13px; cursor:pointer;" style-hover="background:#f4f5f4">Request a recording</div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isAuthor }}" hint-placeholder-val="{{ true }}">
+      <div style="display:flex; flex-direction:column; height:100vh; box-sizing:border-box;">
+        <div style="flex:none; padding:18px 28px; border-bottom:1px solid #ebebea; background:#ffffff; display:flex; align-items:center; justify-content:space-between; gap:20px;">
+          <div style="display:flex; align-items:center; gap:14px; min-width:0;">
+            <div onClick="{{ goLibrary }}" style="width:30px; height:30px; border-radius:99px; border:1px solid #ebebea; display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none;" style-hover="background:#f4f5f4">
+              <i data-lucide="arrow-left" style="width:15px; height:15px; color:#78786f;"></i>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:2px; min-width:0;">
+              <div style="font-size:15px; font-weight:600; letter-spacing:-.015em;">Check eligibility — Cignal provider portal</div>
+              <div style="font-size:12px; color:#a3a39b;">Recorded by Dana Whitfield · {{ duration }} · 12 actions</div>
+            </div>
+            <span style="flex:none; display:inline-flex; align-items:center; gap:6px; font-size:11.5px; padding:5px 12px; border-radius:99px; background:{{ certBg }}; color:{{ certFg }};">
+              <div style="width:6px; height:6px; border-radius:99px; background:{{ certFg }};"></div>{{ certLabel }}
+            </span>
+          </div>
+          <div style="display:flex; gap:10px; flex:none;">
+            <div style="padding:10px 16px; border-radius:99px; border:1px solid #d8dad8; font-size:13px; cursor:pointer;" style-hover="background:#f4f5f4">Re-record step</div>
+            <div onClick="{{ generate }}" style="padding:10px 18px; border-radius:99px; background:#144e48; color:#ffffff; font-size:13px; font-weight:500; cursor:pointer;" style-hover="background:#0e3a35">{{ generateLabel }}</div>
+          </div>
+        </div>
+
+        <div style="flex:1; display:grid; grid-template-columns:minmax(560px,1fr) 460px; min-height:0;">
+          <div style="padding:24px 28px; display:flex; flex-direction:column; gap:16px; min-width:0; min-height:0; overflow:auto;">
+            <div style="border-radius:16px; overflow:hidden; background:#0d0d0c; aspect-ratio:16/9; display:flex; align-items:center; justify-content:center; position:relative; flex:none;">
+              <div style="width:64px; height:64px; border-radius:99px; background:rgba(255,255,255,.14); display:flex; align-items:center; justify-content:center;">
+                <i data-lucide="play" style="width:26px; height:26px; color:#ffffff;"></i>
+              </div>
+              <div style="position:absolute; left:16px; top:14px; display:flex; gap:8px; align-items:center;">
+                <div style="font-size:11.5px; color:#ffffff; background:rgba(0,0,0,.5); padding:4px 10px; border-radius:99px; white-space:nowrap;">Step {{ activeStepNo }} · {{ activeStepLabel }}</div>
+              </div>
+              <div style="position:absolute; right:16px; bottom:14px; font-size:12px; color:#ffffff; background:rgba(0,0,0,.5); padding:4px 10px; border-radius:99px; font-variant-numeric:tabular-nums; white-space:nowrap;">{{ playhead }} / {{ duration }}</div>
+            </div>
+
+            <div style="background:#ffffff; border:1px solid #ebebea; border-radius:14px; padding:16px 18px 14px; display:flex; flex-direction:column; gap:12px; flex:none;">
+              <div style="display:flex; align-items:center; gap:14px;">
+                <div style="width:34px; height:34px; border-radius:99px; background:#144e48; display:flex; align-items:center; justify-content:center; cursor:pointer; flex:none;">
+                  <i data-lucide="play" style="width:14px; height:14px; color:#ffffff;"></i>
+                </div>
+                <div style="flex:1; position:relative; height:34px; display:flex; align-items:center;">
+                  <div style="position:absolute; left:0; right:0; height:8px; border-radius:99px; background:#f1f2f1;"></div>
+                  <div style="position:absolute; left:0; height:8px; border-radius:99px; background:#b1d1c8; width:{{ playPct }};"></div>
+                  <sc-for list="{{ chapters }}" as="c" hint-placeholder-count="6">
+                    <div onClick="{{ c.go }}" style="position:absolute; top:6px; cursor:pointer; left:{{ c.left }};">
+                      <div style="width:3px; height:22px; border-radius:2px; background:{{ c.color }};"></div>
+                    </div>
+                  </sc-for>
+                  <div style="position:absolute; top:2px; width:4px; height:30px; border-radius:3px; background:#144e48; left:{{ playPct }};"></div>
+                </div>
+                <div style="font-size:12.5px; color:#78786f; font-variant-numeric:tabular-nums; flex:none;">{{ playhead }}</div>
+              </div>
+              <div style="display:flex; gap:6px; overflow:auto; padding-bottom:2px;">
+                <sc-for list="{{ chapters }}" as="c" hint-placeholder-count="6">
+                  <div onClick="{{ c.go }}" style="flex:none; padding:6px 12px; border-radius:99px; font-size:11.5px; cursor:pointer; background:{{ c.chipBg }}; color:{{ c.chipFg }}; border:1px solid {{ c.chipBorder }};">{{ c.n }} · {{ c.label }}</div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <div style="border-left:1px solid #ebebea; background:#ffffff; display:flex; flex-direction:column; min-height:0;">
+            <div style="flex:none; padding:16px 20px; border-bottom:1px solid #ebebea; display:flex; align-items:center; justify-content:space-between;">
+              <div style="font-size:13.5px; font-weight:600;">Step breakdown</div>
+              <div style="font-size:12px; color:#a3a39b;">Synced to playhead</div>
+            </div>
+            <div style="flex:1; overflow:auto;">
+              <sc-for list="{{ authorSteps }}" as="s" hint-placeholder-count="6">
+                <div onClick="{{ s.go }}" style="padding:16px 20px; border-bottom:1px solid #f1f2f1; display:flex; flex-direction:column; gap:10px; cursor:pointer; background:{{ s.bg }}; border-left:3px solid {{ s.rail }};">
+                  <div style="display:flex; align-items:flex-start; gap:11px;">
+                    <div style="width:22px; height:22px; flex:none; border-radius:99px; background:{{ s.numBg }}; color:{{ s.numFg }}; font-size:11px; display:flex; align-items:center; justify-content:center; font-variant-numeric:tabular-nums;">{{ s.n }}</div>
+                    <div style="display:flex; flex-direction:column; gap:4px; min-width:0; flex:1;">
+                      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                        <div style="font-size:13px; font-weight:500; letter-spacing:-.005em;">{{ s.label }}</div>
+                        <div style="font-size:11.5px; color:#a3a39b; font-variant-numeric:tabular-nums; flex:none;">{{ s.time }}</div>
+                      </div>
+                      <div style="font-size:11.5px; color:#78786f; font-family:'HalenoirCompact',monospace; word-break:break-all;">{{ s.selector }}</div>
+                    </div>
+                  </div>
+                  <sc-if value="{{ s.showCode }}" hint-placeholder-val="{{ true }}">
+                    <div style="background:#0d0d0c; border-radius:10px; padding:11px 13px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.6; color:#b1d1c8; overflow:auto;">{{ s.code }}</div>
+                  </sc-if>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isHeals }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:36px 44px 64px; display:flex; flex-direction:column; gap:26px; max-width:1280px;">
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          <h1 style="margin:0; font-family:'Halenoir',system-ui,sans-serif; font-size:30px; font-weight:600; letter-spacing:-.025em;">Heal approvals</h1>
+          <div style="font-size:14px; color:#78786f;">A healed version stays inactive until you approve it.</div>
+        </div>
+
+        <sc-if value="{{ hasHeals }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid; grid-template-columns:340px 1fr; gap:24px; align-items:start;">
+            <div style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; overflow:hidden;">
+              <div style="padding:13px 18px; border-bottom:1px solid #ebebea; font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:#a3a39b;">Pending · {{ healCount }}</div>
+              <sc-for list="{{ heals }}" as="h" hint-placeholder-count="4">
+                <div onClick="{{ h.go }}" style="padding:15px 18px; border-bottom:1px solid #f1f2f1; cursor:pointer; display:flex; flex-direction:column; gap:6px; background:{{ h.bg }}; border-left:3px solid {{ h.rail }};">
+                  <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                    <div style="font-size:13.5px; font-weight:500; letter-spacing:-.01em;">{{ h.title }}</div>
+                    <span style="flex:none; font-size:10.5px; padding:3px 9px; border-radius:99px; background:{{ h.pillBg }}; color:{{ h.pillFg }};">{{ h.status }}</span>
+                  </div>
+                  <div style="font-size:12px; color:#78786f;">Step {{ h.step }} drifted · {{ h.age }}</div>
+                </div>
+              </sc-for>
+            </div>
+
+            <div style="display:flex; flex-direction:column; gap:20px;">
+              <div style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; padding:22px 24px; display:flex; flex-direction:column; gap:18px;">
+                <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:20px;">
+                  <div style="display:flex; flex-direction:column; gap:6px;">
+                    <div style="font-family:'Halenoir',system-ui,sans-serif; font-size:20px; font-weight:600; letter-spacing:-.02em;">{{ healTitle }}</div>
+                    <div style="font-size:13px; color:#78786f;">Version {{ healVersion }} proposed {{ healAge }} · triggered by a failed nightly validation</div>
+                  </div>
+                  <div style="display:flex; gap:10px; flex:none;">
+                    <div onClick="{{ reject }}" style="padding:10px 18px; border-radius:99px; border:1px solid #d8dad8; font-size:13px; cursor:pointer; color:#0d0d0c;" style-hover="background:#f4f5f4">Reject</div>
+                    <div onClick="{{ approve }}" style="padding:10px 20px; border-radius:99px; background:#144e48; color:#ffffff; font-size:13px; font-weight:500; cursor:pointer; white-space:nowrap;" style-hover="background:#0e3a35">Approve and activate</div>
+                  </div>
+                </div>
+
+                <div style="background:#fdf6e7; border:1px solid #f0e2c0; border-radius:12px; padding:14px 16px; display:flex; gap:11px; align-items:flex-start;">
+                  <i data-lucide="alert-triangle" style="width:16px; height:16px; color:#8a6a1f; flex:none; margin-top:1px;"></i>
+                  <div style="display:flex; flex-direction:column; gap:3px;">
+                    <div style="font-size:13px; font-weight:500; color:#5c4712;">Why step {{ healStep }} drifted</div>
+                    <div style="font-size:12.5px; color:#7a6528; line-height:1.55;">{{ healReason }}</div>
+                  </div>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:18px;">
+                  <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div style="font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:#a3a39b;">Current — certified</div>
+                    <div style="border:1px solid #ebebea; border-radius:12px; overflow:hidden;">
+                      <div style="aspect-ratio:16/10; background:#e8eae8; display:flex; align-items:center; justify-content:center; color:#a3a39b; font-size:12px;">Frame at step {{ healStep }}</div>
+                      <div style="padding:12px 14px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; line-height:1.6; color:#8a3a3a; background:#fdf0f0; word-break:break-all;">{{ oldSelector }}</div>
+                    </div>
+                  </div>
+                  <div style="display:flex; flex-direction:column; gap:10px;">
+                    <div style="font-size:11px; letter-spacing:.07em; text-transform:uppercase; color:#144e48;">Proposed — healed</div>
+                    <div style="border:1px solid #b1d1c8; border-radius:12px; overflow:hidden;">
+                      <div style="aspect-ratio:16/10; background:#e4ede9; display:flex; align-items:center; justify-content:center; color:#78786f; font-size:12px;">Frame after re-resolve</div>
+                      <div style="padding:12px 14px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; line-height:1.6; color:#144e48; background:#edf5f3; word-break:break-all;">{{ newSelector }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div style="display:flex; gap:26px; padding-top:4px; border-top:1px solid #f1f2f1;">
+                  <sc-for list="{{ healFacts }}" as="f" hint-placeholder-count="3">
+                    <div style="display:flex; flex-direction:column; gap:3px; padding-top:14px;">
+                      <div style="font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:#a3a39b;">{{ f.label }}</div>
+                      <div style="font-size:13.5px;">{{ f.value }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ noHeals }}" hint-placeholder-val="{{ true }}">
+          <div style="background:#ffffff; border:1px solid #ebebea; border-radius:16px; padding:80px 40px; display:flex; flex-direction:column; align-items:center; gap:14px; text-align:center;">
+            <div style="width:54px; height:54px; border-radius:18px; background:#edf5f3; display:flex; align-items:center; justify-content:center;">
+              <i data-lucide="shield-check" style="width:24px; height:24px; color:#144e48;"></i>
+            </div>
+            <div style="font-family:'Halenoir',system-ui,sans-serif; font-size:19px; font-weight:600; letter-spacing:-.02em;">Nothing to approve</div>
+            <div style="font-size:13.5px; color:#78786f; max-width:400px;">All 24 certified scripts validated cleanly in the last nightly run. We'll surface a diff here the moment a step drifts.</div>
+          </div>
+        </sc-if>
+      </div>
+    </sc-if>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,120 @@
+/* =========================================
+   ANKA DESIGN SYSTEM — Colors & Typography
+   Reference only, imported from the user's Claude Design project.
+   Font files (Halenoir/HalenoirCompact/HalenoirCompactText/CalSans) are
+   commercial and are NOT vendored into this repo or the frontend build —
+   per the licensing decision in this project's history, the frontend
+   substitutes an open-license pairing (General Sans for display,
+   Inter for body/UI) at the same weights and spacing. The color tokens
+   below ARE used as-is; keep this file in sync with
+   frontend/tailwind.config.ts if either changes.
+   ========================================= */
+
+:root {
+
+  /* --- Green Scale (Primary Brand) --- */
+  --green-950: #071c1a;
+  --green-900: #0b2e2a;
+  --green-800: #0f3d38;
+  --green-700: #144e48;   /* Primary — dark forest green */
+  --green-600: #1a6158;
+  --green-500: #237268;
+  --green-400: #4d9990;
+  --green-300: #7bbfb8;
+  --green-200: #b1d1c8;   /* Sage — accent */
+  --green-100: #d6e8e4;
+  --green-50:  #edf5f3;
+
+  /* --- Neutral Scale --- */
+  --neutral-950: #0d0d0c;
+  --neutral-900: #1a1a18;
+  --neutral-800: #2e2e2b;
+  --neutral-700: #444440;
+  --neutral-600: #5c5c57;
+  --neutral-500: #78786f;
+  --neutral-400: #9e9e94;
+  --neutral-300: #bdbdb5;
+  --neutral-200: #d8d8d2;
+  --neutral-100: #ebebea;
+  --neutral-50:  #f5f5f4;
+  --neutral-0:   #ffffff;
+
+  /* --- Semantic / Functional Colors --- */
+  --color-primary:           var(--green-700);
+  --color-primary-hover:     var(--green-800);
+  --color-primary-active:    var(--green-900);
+  --color-primary-subtle:    var(--green-50);
+  --color-accent:            var(--green-200);
+
+  --color-bg:                var(--neutral-0);
+  --color-bg-subtle:         var(--neutral-50);
+  --color-bg-muted:          var(--neutral-100);
+
+  --color-border:            var(--neutral-200);
+  --color-border-strong:     var(--neutral-300);
+
+  --color-fg-primary:        var(--neutral-950);
+  --color-fg-secondary:      var(--neutral-700);
+  --color-fg-muted:          var(--neutral-500);
+  --color-fg-disabled:       var(--neutral-400);
+
+  /* Status */
+  --color-success:           #1e7a5a;
+  --color-success-subtle:    #e6f4ef;
+  --color-warning:           #b07b1a;
+  --color-warning-subtle:    #fdf3dc;
+  --color-error:             #c0392b;
+  --color-error-subtle:      #fdecea;
+
+  /* Literal values used directly in the mockup markup — not all of these
+     round-trip cleanly through the semantic tokens above, so the frontend
+     plan uses these exact hexes for pixel fidelity. */
+  --mockup-page-bg:          #f4f5f4;
+  --mockup-danger:           #ff5b5b;
+  --mockup-danger-hover:     #e64d4d;
+  --mockup-warn-bg:          #fdf6e7;
+  --mockup-warn-border:      #f0e2c0;
+  --mockup-warn-text-strong: #5c4712;
+  --mockup-warn-text:        #7a6528;
+  --mockup-warn-icon:        #8a6a1f;
+  --mockup-diff-old-bg:      #fdf0f0;
+  --mockup-diff-old-text:    #8a3a3a;
+  --mockup-diff-new-bg:      var(--green-50);
+  --mockup-diff-new-text:    var(--green-700);
+  --mockup-border-hover:     #d8dad8;
+
+  /* Type Scale */
+  --text-xs:    0.75rem;
+  --text-sm:    0.875rem;
+  --text-base:  1rem;
+  --text-md:    1.125rem;
+  --text-lg:    1.25rem;
+  --text-xl:    1.5rem;
+  --text-2xl:   2rem;
+  --text-3xl:   2.5rem;
+
+  /* Letter Spacing */
+  --tracking-tight:   -0.03em;
+  --tracking-snug:    -0.02em;
+  --tracking-normal:   0;
+  --tracking-wide:     0.04em;
+  --tracking-wider:    0.08em;
+
+  /* Border Radius */
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+  --radius-2xl:  24px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm:  0 2px 6px rgba(20, 78, 72, 0.08);
+  --shadow-md:  0 4px 16px rgba(20, 78, 72, 0.10);
+  --shadow-lg:  0 8px 32px rgba(20, 78, 72, 0.12);
+
+  /* Transitions */
+  --ease-default:  cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+}
