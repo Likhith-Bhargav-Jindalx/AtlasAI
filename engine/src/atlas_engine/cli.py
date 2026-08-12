@@ -15,10 +15,12 @@ from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, PortalProfile, Recording, ReferenceTrajectory
 from atlas_engine.db.repo import get_or_create_portal_profile, next_golden_script_version
 from atlas_engine.llm.client import LlmClient
+from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.portal_profile.infer import infer_portal_profile
 from atlas_engine.storage import LocalRunStore
 from atlas_engine.trajectory.extract import extract_trajectory
 from atlas_engine.verify.certify import certify_golden_script
+from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
 
 @click.group()
@@ -181,6 +183,38 @@ def author_from_actions(org_id: str, start_url: str, actions_file: str) -> None:
         click.echo(f"CERTIFIED golden script: {result['script_path']}")
     else:
         click.echo(f"NOT certified: {result['script_path']}")
+
+
+@main.command("heal")
+@click.argument("golden_script_id")
+def heal(golden_script_id: str) -> None:
+    """Re-validate a golden script against its live portal and, if a step
+    has drifted, propose a repaired version pending approval."""
+    llm = create_llm_client()
+    result = heal_golden_script(uuid.UUID(golden_script_id), llm=llm)
+    if result["status"] == "already_certified":
+        click.echo("Already on-track — nothing to heal.")
+    else:
+        click.echo(f"Heal event {result['heal_event_id']} created — new version status: {result['new_status']}")
+        click.echo(f"Diff: {json.dumps(result['diff'], indent=2)}")
+
+
+@main.command("approve-heal")
+@click.argument("heal_event_id")
+def approve_heal(heal_event_id: str) -> None:
+    """Approve a pending heal event: activate its proposed version and
+    deprecate the one it replaces."""
+    result = approve_heal_event(uuid.UUID(heal_event_id))
+    click.echo(f"Approved: v{result['deprecated_version']} -> v{result['active_version']} is now active")
+
+
+@main.command("reject-heal")
+@click.argument("heal_event_id")
+def reject_heal(heal_event_id: str) -> None:
+    """Reject a pending heal event: the proposed version is deprecated,
+    the currently active version is left untouched."""
+    reject_heal_event(uuid.UUID(heal_event_id))
+    click.echo("Rejected — proposed version deprecated, active version unchanged")
 
 
 if __name__ == "__main__":
