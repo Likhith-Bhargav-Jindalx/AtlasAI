@@ -54,7 +54,7 @@ def test_authoring_run_event_belongs_to_run():
         session.flush()
 
         event = AuthoringRunEvent(
-            authoring_run=run, phase="replay", step_index=2, level="error", message="Step 2 failed: selector not found",
+            authoring_run=run, seq=1, phase="replay", step_index=2, level="error", message="Step 2 failed: selector not found",
         )
         session.add(event)
         session.commit()
