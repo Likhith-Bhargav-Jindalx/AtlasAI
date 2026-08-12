@@ -43,3 +43,28 @@ def test_capture_session_records_password_value_for_later_scrubbing(fixture_port
     password_fill = capture.actions[0]
     assert password_fill.value == "demo-pass"
     assert any(c["selector"] == "#password" for c in password_fill.selector_candidates)
+
+
+def test_exit_after_browser_disconnected_finalizes_without_querying_the_page(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        capture = CaptureSession(page)
+        capture.__enter__()
+        page.fill("#username", "demo")  # leaves one action pending
+
+        capture.mark_browser_disconnected()
+        assert capture.browser_disconnected is True
+
+        # Must not hang or raise trying to query a page we're pretending is
+        # already gone — and must not need the page to still work at all.
+        capture.__exit__(None, None, None)
+
+        browser.close()
+
+    assert len(capture.actions) == 1
+    action = capture.actions[0]
+    assert action.url_after == action.url_before
+    assert action.dom_after == action.dom_before

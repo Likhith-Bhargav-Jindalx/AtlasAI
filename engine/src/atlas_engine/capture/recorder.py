@@ -63,6 +63,7 @@ class CaptureSession:
         self.page = page
         self.actions: list[RecordedAction] = []
         self._pending: dict | None = None
+        self.browser_disconnected = False
 
     def __enter__(self) -> "CaptureSession":
         self.page.expose_binding("__atlas_record", self._on_event)
@@ -70,7 +71,21 @@ class CaptureSession:
         self.page.evaluate(_LISTENER_SCRIPT)  # attach to the already-loaded document too
         return self
 
+    def mark_browser_disconnected(self) -> None:
+        """The browser process is gone — e.g. a human closed the window
+        before clicking Stop, or it crashed. __exit__ can no longer ask a
+        live page for a fresh snapshot; anything already pending gets
+        finalized against its own before-state instead of blocking on a
+        Playwright call that will never return."""
+        self.browser_disconnected = True
+
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        if self.browser_disconnected:
+            if self._pending is not None:
+                self._finalize_pending(
+                    url_after=self._pending["url_before"], dom_after=self._pending["dom_before"]
+                )
+            return
         self.page.wait_for_load_state("domcontentloaded")
         self._finalize_pending(url_after=self.page.url, dom_after=self.page.content())
 
