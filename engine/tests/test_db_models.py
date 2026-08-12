@@ -126,3 +126,19 @@ def test_action_cache_unique_constraint():
 
         assert cache_row.id is not None
         assert cache_row.selector_candidates[0]["selector"] == "#login"
+
+
+def test_golden_script_accepts_partially_certified_status():
+    engine = _sqlite_engine()
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        org = Organization(name="Anka Health", slug="anka-health-partial-cert")
+        profile = PortalProfile(org=org, domain="portal-partial.example.com")
+        script = GoldenScript(
+            org=org, portal_profile=profile, version=1, script_blob_ref="v1.py", status="partially_certified",
+        )
+        session.add_all([org, profile, script])
+        session.commit()
+
+        assert script.status == "partially_certified"

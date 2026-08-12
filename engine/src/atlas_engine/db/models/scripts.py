@@ -6,7 +6,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from atlas_engine.db import Base, PortableJSON
 
-GOLDEN_SCRIPT_STATUSES = ("draft", "certified", "active", "deprecated")
+GOLDEN_SCRIPT_STATUSES = ("draft", "certified", "partially_certified", "active", "deprecated")
 HEAL_TRIGGERS = ("runtime_auto", "on_demand")
 HEAL_STATUSES = ("pending_approval", "approved", "rejected", "auto_approved")
 
