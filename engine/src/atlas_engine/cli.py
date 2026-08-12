@@ -1,4 +1,5 @@
 import json
+import shutil
 import uuid
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from atlas_engine.auth.passwords import hash_password
 from atlas_engine.authoring_service import author_from_recording
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.capture.recorder import CaptureSession
+from atlas_engine.capture.video import finalize_video, start_capture_context
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import User
 from atlas_engine.llm.client import LlmClient
@@ -34,23 +36,30 @@ def main() -> None:
 @click.option("--role", default="demo", type=click.Choice(["demo", "authoring"]))
 def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
     """Open a headed browser at URL, capture actions until you press Enter,
-    persist the recording, and print its ID."""
+    persist the recording (with video), and print its ID."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=False)
-        page = browser.new_page()
+        context, page, video_started_at_ms, video_dir = start_capture_context(browser)
         page.goto(url)
 
         with CaptureSession(page) as capture:
             click.echo("Recording... perform your steps in the opened browser, then press Enter here to finish.")
             input()
 
+        video_path, video_ended_at_ms = finalize_video(context, page)
         browser.close()
 
-    recording_id = persist_recording(
-        org_id, url, capture.actions,
-        request_id=uuid.UUID(request_id) if request_id else None,
-        role=role,
-    )
+    try:
+        recording_id = persist_recording(
+            org_id, url, capture.actions,
+            request_id=uuid.UUID(request_id) if request_id else None,
+            role=role,
+            video_path=video_path,
+            video_started_at_ms=video_started_at_ms,
+            video_ended_at_ms=video_ended_at_ms,
+        )
+    finally:
+        shutil.rmtree(video_dir, ignore_errors=True)
     click.echo(f"Recording saved: {recording_id}")
 
 
