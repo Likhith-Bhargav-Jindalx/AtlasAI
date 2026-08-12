@@ -17,6 +17,7 @@ class VideoAsset(Base):
     org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
     recording_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recordings.id", ondelete="CASCADE"))
     kind: Mapped[str] = mapped_column(Enum(*VIDEO_ASSET_KINDS, name="video_asset_kind"), default="raw")
+    page_index: Mapped[int] = mapped_column(default=0)
     storage_ref: Mapped[str]
     started_at_ms: Mapped[int | None] = mapped_column(BigInteger, default=None)
     transcript_ref: Mapped[str | None] = mapped_column(default=None)
