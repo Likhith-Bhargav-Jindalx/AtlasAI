@@ -1,16 +1,22 @@
 import uuid
 
-from fastapi import FastAPI
+from fastapi import Cookie, FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
+from atlas_engine.auth.passwords import verify_password
+from atlas_engine.auth.session import create_session_token, verify_session_token
 from atlas_engine.authoring_service import author_from_recording
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
+from atlas_engine.db import session_scope
+from atlas_engine.db.models import User
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import claim_recording_request, create_recording_request, list_recording_requests
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
 app = FastAPI(title="Atlas Engine Local API")
+
+SESSION_COOKIE_NAME = "atlas_session"
 
 
 class AuthorRequest(BaseModel):
@@ -112,3 +118,57 @@ def author_from_recording_endpoint(recording_id: str) -> AuthorResponse:
     llm = create_llm_client()
     result = author_from_recording(uuid.UUID(recording_id), llm=llm)
     return AuthorResponse(**result)
+
+
+class LoginBody(BaseModel):
+    email: str
+    password: str
+
+
+class MeResponse(BaseModel):
+    user_id: str
+    org_id: str
+    email: str
+    role: str
+    job_function: str | None = None
+
+
+def _me_response_for(user: User) -> MeResponse:
+    return MeResponse(
+        user_id=str(user.id), org_id=str(user.org_id), email=user.email,
+        role=user.role, job_function=user.job_function,
+    )
+
+
+@app.post("/auth/login", response_model=MeResponse)
+def login(body: LoginBody, response: Response) -> MeResponse:
+    with session_scope() as session:
+        user = session.query(User).filter_by(email=body.email).one_or_none()
+        if user is None or not verify_password(body.password, user.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid email or password")
+
+        token = create_session_token({"user_id": str(user.id), "org_id": str(user.org_id)})
+        response.set_cookie(SESSION_COOKIE_NAME, token, httponly=True, samesite="lax")
+        return _me_response_for(user)
+
+
+@app.post("/auth/logout")
+def logout(response: Response) -> dict:
+    response.delete_cookie(SESSION_COOKIE_NAME)
+    return {"ok": True}
+
+
+@app.get("/auth/me", response_model=MeResponse)
+def me(atlas_session: str | None = Cookie(default=None)) -> MeResponse:
+    if atlas_session is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = verify_session_token(atlas_session)
+    if payload is None:
+        raise HTTPException(status_code=401, detail="Session expired or invalid")
+
+    with session_scope() as session:
+        user = session.get(User, uuid.UUID(payload["user_id"]))
+        if user is None:
+            raise HTTPException(status_code=401, detail="User no longer exists")
+        return _me_response_for(user)
