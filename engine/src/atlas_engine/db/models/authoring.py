@@ -45,3 +45,18 @@ class AuthoringRunEvent(Base):
     message: Mapped[str]
 
     authoring_run: Mapped["AuthoringRun"] = relationship()
+
+
+CERTIFICATION_RUN_STATUSES = ("pass", "fail")
+
+
+class CertificationRun(Base):
+    __tablename__ = "certification_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    authoring_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("authoring_runs.id", ondelete="CASCADE"))
+    run_number: Mapped[int]
+    status: Mapped[str] = mapped_column(Enum(*CERTIFICATION_RUN_STATUSES, name="certification_run_status"))
+    failure_evidence_blob_ref: Mapped[str | None] = mapped_column(default=None)
+
+    authoring_run: Mapped["AuthoringRun"] = relationship()

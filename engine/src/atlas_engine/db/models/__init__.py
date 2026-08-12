@@ -1,5 +1,5 @@
 from atlas_engine.db.models.audit import AuditLog
-from atlas_engine.db.models.authoring import AuthoringRun, AuthoringRunEvent
+from atlas_engine.db.models.authoring import AuthoringRun, AuthoringRunEvent, CertificationRun
 from atlas_engine.db.models.execution import Run, UsageLedgerEntry
 from atlas_engine.db.models.identity import Organization, User
 from atlas_engine.db.models.portal import (
@@ -17,6 +17,7 @@ __all__ = [
     "AuthoringRun",
     "AuthoringRunEvent",
     "AuditLog",
+    "CertificationRun",
     "GoldenScript",
     "HealEvent",
     "Organization",
