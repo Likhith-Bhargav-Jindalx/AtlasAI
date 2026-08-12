@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { MonitorPlay, Square } from 'lucide-react'
 import { useAuth } from '../../auth/AuthContext'
+import { ApiError } from '../../lib/api'
 import { useStartRecording, useStopRecording } from '../../lib/recordings'
 
 export function LiveRecordingPage() {
@@ -15,6 +16,7 @@ export function LiveRecordingPage() {
   const stopRecording = useStopRecording()
   const [captureSessionId, setCaptureSessionId] = useState<string | null>(null)
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
+  const [stopError, setStopError] = useState<string | null>(null)
   const startedRef = useRef(false)
 
   useEffect(() => {
@@ -34,8 +36,13 @@ export function LiveRecordingPage() {
 
   async function handleStop() {
     if (!captureSessionId) return
-    const result = await stopRecording.mutateAsync(captureSessionId)
-    navigate(`/agent/recordings/${result.recording_id}`)
+    setStopError(null)
+    try {
+      const result = await stopRecording.mutateAsync(captureSessionId)
+      navigate(`/agent/recordings/${result.recording_id}`)
+    } catch (err) {
+      setStopError(err instanceof ApiError ? err.message : 'Could not stop the recording. If you closed the browser window, wait a moment and try again.')
+    }
   }
 
   const minutes = Math.floor(elapsedSeconds / 60)
@@ -67,6 +74,8 @@ export function LiveRecordingPage() {
         <Square size={11} fill="white" />
         {stopRecording.isPending ? 'Stopping…' : 'Stop and review'}
       </button>
+
+      {stopError && <div className="text-[13px] text-atlas-danger">{stopError}</div>}
     </div>
   )
 }
