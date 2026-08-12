@@ -104,6 +104,11 @@ def author_from_recorded_actions(
     domain = start_url.split("/")[2]
     with session_scope() as session:
         profile = get_or_create_portal_profile(session, org_id, domain)
+        if profile.inferred_login_url is None:
+            # We already know exactly which URL this trajectory was
+            # authored against — reuse it verbatim so a later heal
+            # revisits the same scheme/host/path, not a guessed one.
+            profile.inferred_login_url = start_url
 
         recording = Recording(
             org_id=uuid.UUID(org_id),
