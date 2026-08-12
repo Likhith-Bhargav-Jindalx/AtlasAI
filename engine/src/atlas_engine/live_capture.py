@@ -36,11 +36,17 @@ class _LiveCaptureSession:
                 browser = playwright.chromium.launch(headless=False)
                 context, page, video_started_at_ms, video_dir = start_capture_context(browser)
                 page.goto(self.start_url)
+
                 with CaptureSession(page) as capture:
+                    browser.on("disconnected", lambda _browser: self._handle_disconnect(capture))
                     self.stop_event.wait()
+
                 actions = capture.actions
                 video_path, video_ended_at_ms = finalize_video(context, page)
-                browser.close()
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
             self.recording_id = persist_recording(
                 self.org_id, self.start_url, actions,
@@ -55,6 +61,16 @@ class _LiveCaptureSession:
             if video_dir is not None:
                 shutil.rmtree(video_dir, ignore_errors=True)
             self.done_event.set()
+
+    def _handle_disconnect(self, capture: "CaptureSession") -> None:
+        """The browser vanished out from under a live capture — most often
+        a human closing the window before clicking Stop. Treat it exactly
+        like an explicit stop: mark the capture so its exit path won't try
+        to query a dead page, then release stop_event so _run proceeds to
+        finalize and persist whatever was captured instead of hanging
+        forever waiting for a signal that will never come now."""
+        capture.mark_browser_disconnected()
+        self.stop_event.set()
 
     def start(self) -> None:
         self.thread.start()
