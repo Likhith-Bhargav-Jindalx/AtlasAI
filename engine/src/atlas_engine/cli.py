@@ -43,11 +43,15 @@ def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
         page.goto(url)
 
         with CaptureSession(page) as capture:
+            browser.on("disconnected", lambda _browser: capture.mark_browser_disconnected())
             click.echo("Recording... perform your steps in the opened browser, then press Enter here to finish.")
             input()
 
         video_path, video_ended_at_ms = finalize_video(context, page)
-        browser.close()
+        try:
+            browser.close()
+        except Exception:
+            pass
 
     try:
         recording_id = persist_recording(
