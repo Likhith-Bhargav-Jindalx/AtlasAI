@@ -21,6 +21,7 @@ def test_think_validates_and_returns_a_selector_that_exists_on_the_live_page(fix
         outcome = evaluate(
             step, url_before=page.url, url_after=page.url,
             dom_before=page.content(), dom_after=page.content(),
+            resolved_selector="#does-not-exist",
         )
         result = think(fake_llm, step, page, outcome)
 
@@ -45,6 +46,7 @@ def test_think_coerces_a_selector_that_does_not_exist_on_the_page_to_give_up(fix
         outcome = evaluate(
             step, url_before=page.url, url_after=page.url,
             dom_before=page.content(), dom_after=page.content(),
+            resolved_selector="#does-not-exist",
         )
         result = think(fake_llm, step, page, outcome)
 

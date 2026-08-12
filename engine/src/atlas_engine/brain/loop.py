@@ -36,13 +36,21 @@ def run_step(
     url_before = page.url
     dom_before = page.content()
 
-    _act(page, selector or _first_selector(step), step, force=force, timeout_ms=timeout_ms)
+    resolved_selector = selector or _first_selector(step)
+    _act(page, resolved_selector, step, force=force, timeout_ms=timeout_ms)
 
     page.wait_for_load_state("domcontentloaded")
     url_after = page.url
     dom_after = page.content()
 
-    return evaluate(step, url_before=url_before, url_after=url_after, dom_before=dom_before, dom_after=dom_after)
+    return evaluate(
+        step,
+        url_before=url_before,
+        url_after=url_after,
+        dom_before=dom_before,
+        dom_after=dom_after,
+        resolved_selector=resolved_selector,
+    )
 
 
 class BrainLoop:
@@ -72,7 +80,11 @@ class BrainLoop:
             except Exception:
                 # The recorded selector didn't even resolve — treat as
                 # maximally off-track and let repair take over below.
-                outcome = StepOutcome(step_index=step.index, on_track=False, url_after=self.page.url, dom_after=self.page.content())
+                outcome = StepOutcome(
+                    step_index=step.index, on_track=False,
+                    url_after=self.page.url, dom_after=self.page.content(),
+                    resolved_selector=_first_selector(step),
+                )
 
             if not outcome.on_track:
                 if self.on_off_track is not None:

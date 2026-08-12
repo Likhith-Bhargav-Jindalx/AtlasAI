@@ -14,6 +14,7 @@ def test_evaluate_on_track_when_url_changed_as_expected():
         _step("url_changed"),
         url_before="https://x/login", url_after="https://x/dashboard",
         dom_before="<a/>", dom_after="<a/>",
+        resolved_selector="#btn",
     )
     assert outcome.on_track is True
 
@@ -23,6 +24,7 @@ def test_evaluate_off_track_when_nothing_changed_but_change_was_expected():
         _step("url_changed"),
         url_before="https://x/login", url_after="https://x/login",
         dom_before="<a/>", dom_after="<a/>",
+        resolved_selector="#btn",
     )
     assert outcome.on_track is False
 
@@ -32,6 +34,7 @@ def test_evaluate_on_track_when_dom_changed_as_expected():
         _step("dom_changed"),
         url_before="https://x/dashboard", url_after="https://x/dashboard",
         dom_before="<a/>", dom_after="<b/>",
+        resolved_selector="#btn",
     )
     assert outcome.on_track is True
 
@@ -41,5 +44,6 @@ def test_evaluate_on_track_for_none_effect_regardless_of_change():
         _step("none"),
         url_before="https://x/login", url_after="https://x/login",
         dom_before="<a/>", dom_after="<a/>",
+        resolved_selector="#btn",
     )
     assert outcome.on_track is True

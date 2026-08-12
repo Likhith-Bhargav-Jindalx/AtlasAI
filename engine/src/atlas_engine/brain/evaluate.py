@@ -9,6 +9,7 @@ class StepOutcome:
     on_track: bool
     url_after: str
     dom_after: str
+    resolved_selector: str
 
 
 def evaluate(
@@ -18,6 +19,7 @@ def evaluate(
     url_after: str,
     dom_before: str,
     dom_after: str,
+    resolved_selector: str,
 ) -> StepOutcome:
     """Deterministic — compares the step's expected effect (recorded at
     capture time) against what actually happened live. This is the check
@@ -29,4 +31,10 @@ def evaluate(
     else:
         on_track = True
 
-    return StepOutcome(step_index=step.index, on_track=on_track, url_after=url_after, dom_after=dom_after)
+    return StepOutcome(
+        step_index=step.index,
+        on_track=on_track,
+        url_after=url_after,
+        dom_after=dom_after,
+        resolved_selector=resolved_selector,
+    )
