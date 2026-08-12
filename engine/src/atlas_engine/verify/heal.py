@@ -80,9 +80,11 @@ def heal_golden_script(
         )
         browser.close()
 
-    if all(outcome.on_track for outcome in outcomes):
-        return {"status": "already_certified", "heal_event_id": None, "golden_script_id": str(golden_script_id)}
-
+    # BrainLoop.run() already applies any successful repair internally, so
+    # outcome.on_track alone can't distinguish "was already fine" from
+    # "needed and got a repair" — both look on-track afterwards. Whether
+    # anything actually changed is what the diff (built from each step's
+    # resolved_selector) tells us.
     new_trajectory = ReferenceTrajectory(
         steps=tuple(
             TrajectoryStep(
@@ -96,6 +98,10 @@ def heal_golden_script(
         )
     )
     diff = compute_trajectory_diff(old_trajectory, new_trajectory)
+    all_on_track = all(outcome.on_track for outcome in outcomes)
+
+    if not diff and all_on_track:
+        return {"status": "already_certified", "heal_event_id": None, "golden_script_id": str(golden_script_id)}
 
     store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="goldens")
@@ -103,7 +109,7 @@ def heal_golden_script(
     script_path = run_dir.path / "golden.py"
     script_path.write_text(script_text)
 
-    if all(outcome.on_track for outcome in outcomes):
+    if all_on_track:
         certification = certify_golden_script(script_path, runs=2)
         new_status = "certified" if certification.is_certified else "draft"
     else:

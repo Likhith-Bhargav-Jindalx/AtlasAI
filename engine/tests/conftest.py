@@ -21,8 +21,13 @@ from tests.fixtures.fixture_portal.server import FixturePortalServer  # noqa: E4
 
 
 @pytest.fixture(scope="session")
-def fixture_portal_url():
+def fixture_portal_server():
     server = FixturePortalServer(port=8731)
     server.start()
-    yield server.base_url
+    yield server
     server.stop()
+
+
+@pytest.fixture(scope="session")
+def fixture_portal_url(fixture_portal_server):
+    return fixture_portal_server.base_url
