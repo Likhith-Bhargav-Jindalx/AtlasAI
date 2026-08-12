@@ -19,6 +19,14 @@ def start_capture_context(browser: Browser) -> tuple[BrowserContext, Page, int, 
     return context, page, started_at_ms, video_dir
 
 
+def video_path_for_page(page: Page) -> Path | None:
+    """Reads a page's video path without touching its context — safe to
+    call once per page when a context has more than one (e.g. a tab/popup
+    opened during the recording). context.close() only needs to happen
+    once, after every page's path has already been read this way."""
+    return Path(page.video.path()) if page.video else None
+
+
 def finalize_video(context: BrowserContext, page: Page) -> tuple[Path | None, int]:
     """Closes the context — which flushes the recorded video to disk —
     and returns its path (None if this page had no video recording) plus
