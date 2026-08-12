@@ -80,20 +80,46 @@ emitting anything. Any step that doesn't reproduce live is either repaired
 has actually been proven to work against the live page, not just replayed
 blindly from what was captured.
 
+## Healing a golden script
+
+If a portal's UI changes, a certified golden script's steps can drift out
+of date. Re-validate it against the live portal:
+
+```bash
+atlas heal <golden-script-id>
+```
+
+If every step still works, this reports "Already on-track — nothing to
+heal." If something's off, it re-resolves the failing step (from the
+action cache first, then an LLM if one is configured), prints a diff, and
+creates a new, *unapproved* version. Set `ATLAS_AZURE_OPENAI_ENDPOINT` /
+`_API_KEY` / `_MODEL` in your environment first if you want an actual LLM
+repair attempt rather than just drift detection —
+`atlas_engine.llm.factory.create_llm_client` returns `None`, and any step
+the cache can't fix on its own is simply left off-track, when they're unset.
+
+Review the diff, then either:
+
+```bash
+atlas approve-heal <heal-event-id>   # activates the new version, deprecates the old one
+atlas reject-heal <heal-event-id>    # discards the proposed version, nothing changes
+```
+
+A healed version is never active until you explicitly approve it — this
+holds whether the fix came from the LLM or from a cached selector found
+during an earlier heal of the same script.
+
 ## What's next
 
-This plan covers Phase 0 only: a real, tested engine and a CLI/local API
-that prove the "record → certified golden script" loop end to end,
-including the brain's live validation of every step. Not built yet, and
-each a separate plan of its own:
+Phase 0 and Phase 1 together cover: record -> certified golden script ->
+detect drift -> repair -> approve -> new version live, all provable
+without real credentials or a real portal (see
+`tests/test_end_to_end_heal.py` for the full loop, including simulated
+portal drift). Not built yet, each its own plan:
 
-- Wiring a real `LlmClient` (the `AzureOpenAiClient` already exists) into
-  `atlas author-from-actions` so an off-track step actually gets a bounded
-  repair attempt instead of just falling back to `draft`.
 - The desktop EXE shell (PyInstaller + pywebview) and packaging.
-- The versioned heal-and-approve workflow and the action cache (the
-  `heal_events`/`action_cache` tables already exist in the schema).
-- The cloud multi-tenant backend, enterprise dashboard, and video/voice
-  knowledge base.
+- The cloud multi-tenant backend and the enterprise dashboard — including
+  a UI for the approval queue this plan's CLI/API already support.
+- The video/voice knowledge base.
 
 See the architecture spec's roadmap (§18) for the full phase breakdown.
