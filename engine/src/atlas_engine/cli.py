@@ -5,21 +5,12 @@ from pathlib import Path
 import click
 from playwright.sync_api import sync_playwright
 
-from atlas_engine.brain.loop import BrainLoop
-from atlas_engine.brain.serialize import trajectory_to_dict
+from atlas_engine.authoring_service import author_from_recording
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.capture.recorder import CaptureSession
-from atlas_engine.codegen.emit import emit_golden_script
-from atlas_engine.config import settings
-from atlas_engine.db import session_scope
-from atlas_engine.db.models import GoldenScript, PortalProfile, Recording, ReferenceTrajectory
-from atlas_engine.db.repo import get_or_create_portal_profile, next_golden_script_version
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.llm.factory import create_llm_client
-from atlas_engine.portal_profile.infer import infer_portal_profile
-from atlas_engine.storage import LocalRunStore
-from atlas_engine.trajectory.extract import extract_trajectory
-from atlas_engine.verify.certify import certify_golden_script
+from atlas_engine.recording_service import persist_recording
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
 
 
@@ -31,12 +22,11 @@ def main() -> None:
 @main.command("record")
 @click.argument("url")
 @click.option("--org-id", required=True)
-def record(url: str, org_id: str) -> None:
+@click.option("--request-id", default=None)
+@click.option("--role", default="demo", type=click.Choice(["demo", "authoring"]))
+def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
     """Open a headed browser at URL, capture actions until you press Enter,
     persist the recording, and print its ID."""
-    store = LocalRunStore(root=settings.ensure_run_root())
-    run_dir = store.new_run_dir(prefix="recordings")
-
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=False)
         page = browser.new_page()
@@ -48,125 +38,26 @@ def record(url: str, org_id: str) -> None:
 
         browser.close()
 
-    run_dir.write_json("actions.json", [vars(a) for a in capture.actions])
-
-    with session_scope() as session:
-        profile_data = infer_portal_profile(url, capture.actions)
-        profile = PortalProfile(
-            org_id=uuid.UUID(org_id),
-            domain=profile_data.domain,
-            inferred_login_url=profile_data.login_url,
-            inferred_success_signal=profile_data.success_signal,
-            confidence_score=profile_data.confidence,
-        )
-        session.add(profile)
-        session.flush()
-
-        recording = Recording(
-            org_id=uuid.UUID(org_id),
-            portal_profile_id=profile.id,
-            status="captured",
-            capture_blob_prefix=run_dir.blob_ref,
-        )
-        session.add(recording)
-        session.flush()
-        click.echo(f"Recording saved: {recording.id}")
-        click.echo(f"Actions file: {run_dir.path / 'actions.json'}")
+    recording_id = persist_recording(
+        org_id, url, capture.actions,
+        request_id=uuid.UUID(request_id) if request_id else None,
+        role=role,
+    )
+    click.echo(f"Recording saved: {recording_id}")
 
 
 def author_from_recorded_actions(
     org_id: str, start_url: str, actions: list[RecordedAction], *, llm: LlmClient | None = None
 ) -> dict:
-    """Shared authoring logic used by both the CLI and the local API:
-    capture (already done, passed in as `actions`) -> trajectory ->
-    **live brain validation** -> emit -> certify.
-
-    The trajectory is replayed through a real, fresh browser session via
-    BrainLoop before anything is emitted — this is "the brain" from the
-    architecture spec, not a separate unwired feature: a step that doesn't
-    reproduce live either gets a bounded repair attempt (when `llm` is
-    given) or is left off-track, and a trajectory with any off-track step
-    is never certified, only saved as a draft.
-
-    Persisting the recording and trajectory (not just the emitted script)
-    is what makes on-demand healing possible later — heal_golden_script
-    reloads exactly this trajectory to re-validate a script long after it
-    was authored.
-
-    Returns {"status", "script_path", "golden_script_id"}.
+    """Backward-compatible convenience wrapper: persist the recording, then
+    author from it. Kept for existing callers (the author-from-actions CLI
+    command and the /author API endpoint); new code should call
+    recording_service.persist_recording and authoring_service.
+    author_from_recording separately when the two need to happen at
+    different times or by different people.
     """
-    store = LocalRunStore(root=settings.ensure_run_root())
-    recording_run_dir = store.new_run_dir(prefix="recordings")
-    recording_run_dir.write_json("actions.json", [vars(a) for a in actions])
-
-    trajectory = extract_trajectory(actions)
-    trajectory_path = recording_run_dir.path / "trajectory.json"
-    trajectory_path.write_text(json.dumps(trajectory_to_dict(trajectory), indent=2))
-
-    domain = start_url.split("/")[2]
-    with session_scope() as session:
-        profile = get_or_create_portal_profile(session, org_id, domain)
-        if profile.inferred_login_url is None:
-            # We already know exactly which URL this trajectory was
-            # authored against — reuse it verbatim so a later heal
-            # revisits the same scheme/host/path, not a guessed one.
-            profile.inferred_login_url = start_url
-
-        recording = Recording(
-            org_id=uuid.UUID(org_id),
-            portal_profile_id=profile.id,
-            status="captured",
-            capture_blob_prefix=recording_run_dir.blob_ref,
-        )
-        session.add(recording)
-        session.flush()
-
-        session.add(
-            ReferenceTrajectory(
-                recording_id=recording.id,
-                trajectory_blob_ref=str(trajectory_path),
-                step_count=len(trajectory.steps),
-            )
-        )
-
-        recording_id = recording.id
-        portal_profile_id = profile.id
-
-    goldens_run_dir = store.new_run_dir(prefix="goldens")
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(start_url)
-        outcomes = BrainLoop(page, llm=llm).run(trajectory)
-        browser.close()
-
-    all_on_track = all(outcome.on_track for outcome in outcomes)
-
-    script_text = emit_golden_script(trajectory, start_url=start_url)
-    script_path = goldens_run_dir.path / "golden.py"
-    script_path.write_text(script_text)
-
-    if not all_on_track:
-        status = "draft"
-    else:
-        certification = certify_golden_script(script_path, runs=2)
-        status = "certified" if certification.is_certified else "draft"
-
-    with session_scope() as session:
-        golden = GoldenScript(
-            org_id=uuid.UUID(org_id),
-            portal_profile_id=portal_profile_id,
-            version=next_golden_script_version(session, portal_profile_id),
-            script_blob_ref=str(script_path),
-            status=status,
-            created_from_recording_id=recording_id,
-        )
-        session.add(golden)
-        session.flush()
-        golden_script_id = str(golden.id)
-
-    return {"status": status, "script_path": str(script_path), "golden_script_id": golden_script_id}
+    recording_id = persist_recording(org_id, start_url, actions)
+    return author_from_recording(recording_id, llm=llm)
 
 
 @main.command("author-from-actions")
