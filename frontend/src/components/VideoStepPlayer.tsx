@@ -21,12 +21,13 @@ export function nextStepIndex(steps: RecordingStep[], currentIndex: number, dire
 
 interface Props {
   recordingId: string
+  pageIndex: number
   hasVideo: boolean
   steps: RecordingStep[]
   durationSeconds: number | null
 }
 
-export function VideoStepPlayer({ recordingId, hasVideo, steps, durationSeconds }: Props) {
+export function VideoStepPlayer({ recordingId, pageIndex, hasVideo, steps, durationSeconds }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [currentTime, setCurrentTime] = useState(0)
   const [browserDuration, setBrowserDuration] = useState(0)
@@ -75,7 +76,7 @@ export function VideoStepPlayer({ recordingId, hasVideo, steps, durationSeconds 
           <>
             <video
               ref={videoRef}
-              src={recordingVideoUrl(recordingId)}
+              src={recordingVideoUrl(recordingId, pageIndex)}
               className="rounded-2xl overflow-hidden border border-atlas-border bg-black aspect-video w-full cursor-pointer"
               onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
               onDurationChange={(e) => setBrowserDuration(e.currentTarget.duration)}

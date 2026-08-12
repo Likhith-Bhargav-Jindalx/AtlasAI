@@ -14,6 +14,9 @@ export function AuthoringPage() {
 
   if (isLoading || !recording) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
+  const totalActions = recording.pages.reduce((sum, page) => sum + page.steps.length, 0)
+  const mainPage = recording.pages[0]
+
   return (
     <div className="flex flex-col h-screen box-border">
       <div className="flex-none px-7 py-[18px] border-b border-atlas-border bg-atlas-card flex items-center justify-between gap-5">
@@ -26,7 +29,10 @@ export function AuthoringPage() {
           </button>
           <div className="flex flex-col gap-0.5 min-w-0">
             <div className="text-[15px] font-semibold tracking-tight">Authoring workspace</div>
-            <div className="text-xs text-atlas-muted">{formatDuration(recording.duration_seconds)} · {recording.steps.length} actions</div>
+            <div className="text-xs text-atlas-muted">
+              {formatDuration(mainPage?.duration_seconds ?? null)} · {totalActions} actions
+              {recording.pages.length > 1 ? ` · ${recording.pages.length} tabs` : ''}
+            </div>
           </div>
           {authorRecording.data && <StatusPill status={authorRecording.data.status} />}
         </div>
@@ -39,20 +45,30 @@ export function AuthoringPage() {
         </button>
       </div>
 
-      <div className="flex-1 overflow-auto p-7">
-        <VideoStepPlayer
-          recordingId={recording.id}
-          hasVideo={recording.has_video}
-          steps={recording.steps}
-          durationSeconds={recording.duration_seconds}
-        />
+      <div className="flex-1 overflow-auto p-7 flex flex-col gap-6">
+        {recording.pages.map((page) => (
+          <div key={page.page_index} className="flex flex-col gap-3">
+            {recording.pages.length > 1 && (
+              <div className="text-[12.5px] font-medium text-atlas-body">
+                {page.page_index === 0 ? 'Main window' : `Tab ${page.page_index + 1}`}
+              </div>
+            )}
+            <VideoStepPlayer
+              recordingId={recording.id}
+              pageIndex={page.page_index}
+              hasVideo={page.has_video}
+              steps={page.steps}
+              durationSeconds={page.duration_seconds}
+            />
+          </div>
+        ))}
         {authorRecording.data && (
-          <div className="mt-5 text-[13px] text-atlas-body">
+          <div className="text-[13px] text-atlas-body">
             Golden script <span className="font-medium text-atlas-ink">{authorRecording.data.golden_script_id}</span> — {authorRecording.data.status}
           </div>
         )}
         {authorRecording.isError && (
-          <div className="mt-5 text-[13px] text-atlas-diffOldText">{(authorRecording.error as Error).message}</div>
+          <div className="text-[13px] text-atlas-diffOldText">{(authorRecording.error as Error).message}</div>
         )}
       </div>
     </div>

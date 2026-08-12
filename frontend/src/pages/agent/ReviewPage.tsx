@@ -11,6 +11,9 @@ export function ReviewPage() {
 
   if (isLoading || !recording) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
+  const totalActions = recording.pages.reduce((sum, page) => sum + page.steps.length, 0)
+  const mainPage = recording.pages[0]
+
   return (
     <div className="p-9 pb-16 flex flex-col gap-6 max-w-[1280px]">
       <div className="flex items-start justify-between gap-6">
@@ -18,7 +21,8 @@ export function ReviewPage() {
           <div className="flex items-center gap-2.5">
             <StatusPill status={recording.status} />
             <span className="text-[12.5px] text-atlas-muted">
-              {formatDuration(recording.duration_seconds)} · {recording.steps.length} action{recording.steps.length === 1 ? '' : 's'}
+              {formatDuration(mainPage?.duration_seconds ?? null)} · {totalActions} action{totalActions === 1 ? '' : 's'}
+              {recording.pages.length > 1 ? ` · ${recording.pages.length} tabs` : ''}
             </span>
           </div>
           <h1 className="font-display text-[28px] font-semibold tracking-tight m-0">Recording review</h1>
@@ -34,12 +38,22 @@ export function ReviewPage() {
         </button>
       </div>
 
-      <VideoStepPlayer
-        recordingId={recording.id}
-        hasVideo={recording.has_video}
-        steps={recording.steps}
-        durationSeconds={recording.duration_seconds}
-      />
+      {recording.pages.map((page) => (
+        <div key={page.page_index} className="flex flex-col gap-3">
+          {recording.pages.length > 1 && (
+            <div className="text-[12.5px] font-medium text-atlas-body">
+              {page.page_index === 0 ? 'Main window' : `Tab ${page.page_index + 1}`}
+            </div>
+          )}
+          <VideoStepPlayer
+            recordingId={recording.id}
+            pageIndex={page.page_index}
+            hasVideo={page.has_video}
+            steps={page.steps}
+            durationSeconds={page.duration_seconds}
+          />
+        </div>
+      ))}
     </div>
   )
 }
