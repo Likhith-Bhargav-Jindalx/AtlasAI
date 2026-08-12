@@ -10,6 +10,7 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import User
+from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import claim_recording_request, create_recording_request, list_recording_requests
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, reject_heal_event
@@ -172,3 +173,34 @@ def me(atlas_session: str | None = Cookie(default=None)) -> MeResponse:
         if user is None:
             raise HTTPException(status_code=401, detail="User no longer exists")
         return _me_response_for(user)
+
+
+class StartRecordingBody(BaseModel):
+    org_id: str
+    start_url: str
+    request_id: str | None = None
+    role: str = "demo"
+
+
+class StartRecordingResponse(BaseModel):
+    capture_session_id: str
+
+
+class StopRecordingResponse(BaseModel):
+    recording_id: str
+
+
+@app.post("/recordings/start", response_model=StartRecordingResponse)
+def start_recording_endpoint(body: StartRecordingBody) -> StartRecordingResponse:
+    capture_session_id = start_live_capture(
+        body.org_id, body.start_url,
+        request_id=uuid.UUID(body.request_id) if body.request_id else None,
+        role=body.role,
+    )
+    return StartRecordingResponse(capture_session_id=str(capture_session_id))
+
+
+@app.post("/recordings/{capture_session_id}/stop", response_model=StopRecordingResponse)
+def stop_recording_endpoint(capture_session_id: str) -> StopRecordingResponse:
+    recording_id = stop_live_capture(uuid.UUID(capture_session_id))
+    return StopRecordingResponse(recording_id=str(recording_id))
