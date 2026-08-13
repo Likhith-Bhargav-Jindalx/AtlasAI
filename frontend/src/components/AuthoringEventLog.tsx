@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { AuthoringRunEvent } from '../lib/authoring'
 
 const LEVEL_COLORS: Record<string, string> = {
@@ -15,6 +16,15 @@ interface Props {
 }
 
 export function AuthoringEventLog({ events }: Props) {
+  const scrollRef = useRef<HTMLDivElement>(null)
+
+  // New events append every poll during a live run; keep the newest line in
+  // view instead of leaving it below the fold.
+  useEffect(() => {
+    const container = scrollRef.current
+    if (container) container.scrollTop = container.scrollHeight
+  }, [events.length])
+
   if (events.length === 0) {
     return <div className="text-[13px] text-atlas-muted">No events yet.</div>
   }
@@ -22,7 +32,7 @@ export function AuthoringEventLog({ events }: Props) {
   return (
     <div className="bg-atlas-card border border-atlas-border rounded-2xl overflow-hidden">
       <div className="px-[18px] py-3.5 border-b border-atlas-border text-[13.5px] font-semibold">Log</div>
-      <div className="max-h-[280px] overflow-auto flex flex-col">
+      <div ref={scrollRef} className="max-h-[280px] overflow-auto flex flex-col">
         {events.map((event, i) => (
           <div
             key={i}

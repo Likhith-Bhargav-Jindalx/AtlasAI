@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { useRecordingDetail } from '../../lib/recordings'
 import {
+  isTerminalStatus,
   useAuthoringRun,
   useResumeAuthoringRun,
   useStartAuthoringRun,
@@ -31,7 +32,22 @@ export function AuthoringPage() {
   const totalActions = recording.pages.reduce((sum, page) => sum + page.steps.length, 0)
   const mainPage = recording.pages[0]
   const run = authoringRun.data
-  const isActive = run !== undefined && (run.status === 'running' || run.status === 'waiting_for_developer')
+  const isActive = run !== undefined && !isTerminalStatus(run.status)
+
+  // A run exists server-side from the moment the start mutation succeeds, but
+  // the first GET /authoring-runs/{id} needs a round trip to prove it. Between
+  // those two moments `run` is still undefined, so without this guard the
+  // primary button would flip back to an enabled "Generate golden script" and a
+  // second click would launch a second real pipeline we can neither see nor stop.
+  const hasRun = authoringRunId !== undefined
+  const awaitingFirstRunData = hasRun && !authoringRun.isError && (authoringRun.isLoading || run === undefined)
+  const primaryDisabled = startRun.isPending || awaitingFirstRunData
+  const primaryLabel =
+    startRun.isPending || awaitingFirstRunData
+      ? 'Starting…'
+      : run
+        ? 'Regenerate golden script'
+        : 'Generate golden script'
 
   function handleStart() {
     startRun.mutate(undefined, {
@@ -80,16 +96,22 @@ export function AuthoringPage() {
           {!isActive && (
             <button
               onClick={handleStart}
-              disabled={startRun.isPending}
+              disabled={primaryDisabled}
               className="px-[18px] py-2.5 rounded-full bg-atlas-primary hover:bg-atlas-primaryHover text-white text-[13px] font-medium disabled:opacity-60"
             >
-              {startRun.isPending ? 'Starting…' : run ? 'Regenerate golden script' : 'Generate golden script'}
+              {primaryLabel}
             </button>
           )}
         </div>
       </div>
 
       <div className="flex-1 overflow-auto p-7 flex flex-col gap-6">
+        {authoringRun.isError && (
+          <div className="bg-atlas-card border border-atlas-border rounded-2xl px-[18px] py-3.5 text-[13px] text-atlas-diffOldText">
+            Could not load authoring run status: {(authoringRun.error as Error).message}
+          </div>
+        )}
+
         {run && (
           <div className="flex flex-col gap-4">
             <AuthoringPhaseTracker
@@ -121,6 +143,14 @@ export function AuthoringPage() {
 
         {startRun.isError && (
           <div className="text-[13px] text-atlas-diffOldText">{(startRun.error as Error).message}</div>
+        )}
+        {resumeRun.isError && (
+          <div className="text-[13px] text-atlas-diffOldText">
+            Resume failed: {(resumeRun.error as Error).message}
+          </div>
+        )}
+        {stopRun.isError && (
+          <div className="text-[13px] text-atlas-diffOldText">Stop failed: {(stopRun.error as Error).message}</div>
         )}
       </div>
     </div>
