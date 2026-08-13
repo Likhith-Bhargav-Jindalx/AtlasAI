@@ -80,13 +80,22 @@ def run_golden_phase(
     return golden_script_id, script_path
 
 
-def run_certify_phase(script_path: Path, authoring_run_id: uuid.UUID, *, runs: int = 3) -> tuple[int, int]:
+def run_certify_phase(
+    script_path: Path, authoring_run_id: uuid.UUID, *, runs: int = 3, run_number_offset: int = 0,
+) -> tuple[int, int]:
     """Runs the frozen golden script headless, `runs` times from fresh
     processes, recording one CertificationRun row per attempt. Returns
     (passed, runs) — the orchestrator decides certified/partially_certified/
-    repair-and-retry from this."""
+    repair-and-retry from this.
+
+    `run_number_offset` lets a caller that invokes this more than once for
+    the same authoring_run_id (e.g. the orchestrator's repair loop) avoid
+    colliding with CertificationRun's UniqueConstraint("authoring_run_id",
+    "run_number") — each retry passes a different offset so its rows get
+    fresh run_numbers instead of re-using 1..runs."""
     passed = 0
-    for run_number in range(1, runs + 1):
+    for i in range(1, runs + 1):
+        run_number = run_number_offset + i
         ok, failure_output = certify_golden_script_once(script_path)
 
         failure_ref = None

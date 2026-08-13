@@ -10,6 +10,7 @@ from atlas_engine.authoring.events import log_event
 from atlas_engine.authoring.phases import run_brain_phase, run_certify_phase, run_extract_phase, run_golden_phase
 from atlas_engine.authoring.replay import run_replay_phase
 from atlas_engine.authoring.state import update_run
+from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 from atlas_engine.brain.serialize import trajectory_from_dict
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import AuthoringRun, GoldenScript, PortalProfile, Recording
@@ -53,7 +54,11 @@ class _AuthoringRunSession:
 
     def stop(self, timeout: float = 30.0) -> None:
         self.stop_event.set()
-        self.done_event.wait(timeout=timeout)
+        completed = self.done_event.wait(timeout=timeout)
+        if not completed:
+            raise TimeoutError("Authoring run did not finish stopping in time")
+        if self.error is not None:
+            raise self.error
 
     def _run(self) -> None:
         try:
@@ -92,6 +97,10 @@ class _AuthoringRunSession:
                     update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                     return
 
+                with session_scope() as session:
+                    run = session.get(AuthoringRun, self.authoring_run_id)
+                    repair_attempt = run.repair_attempt
+
                 update_run(self.authoring_run_id, current_phase="brain")
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch(headless=False)
@@ -100,9 +109,29 @@ class _AuthoringRunSession:
                     outcomes = run_brain_phase(page, trajectory, self.authoring_run_id, llm=self.llm)
                     browser.close()
 
+                if self.stop_event.is_set():
+                    update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
+                    return
+
                 if not all(outcome.on_track for outcome in outcomes):
                     update_run(self.authoring_run_id, status="failed", ended_at=_now())
                     return
+
+                # BrainLoop already applies any successful repair internally
+                # (retrying with a cached/LLM-resolved selector) — fold that
+                # back into the trajectory so golden/certify freeze the
+                # selector that actually worked, not the stale recorded one.
+                # Mirrors verify/heal.py's heal_golden_script.
+                trajectory = ReferenceTrajectory(
+                    steps=tuple(
+                        TrajectoryStep(
+                            index=step.index, kind=step.kind,
+                            selector_candidates=[{"selector": outcome.resolved_selector, "rank": 0}],
+                            value=step.value, expected_effect=step.expected_effect,
+                        )
+                        for step, outcome in zip(trajectory.steps, outcomes)
+                    )
+                )
 
                 update_run(self.authoring_run_id, current_phase="golden")
                 golden_script_id, script_path = run_golden_phase(
@@ -110,18 +139,23 @@ class _AuthoringRunSession:
                 )
                 update_run(self.authoring_run_id, golden_script_id=golden_script_id)
 
+                if self.stop_event.is_set():
+                    update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
+                    return
+
                 update_run(self.authoring_run_id, current_phase="certifying")
                 passed, total = run_certify_phase(
                     script_path, self.authoring_run_id, runs=_CERTIFY_RUNS,
+                    run_number_offset=repair_attempt * _CERTIFY_RUNS,
                 )
+
+                if self.stop_event.is_set():
+                    update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
+                    return
 
                 if passed == total:
                     self._finalize_golden(golden_script_id, "certified")
                     break
-
-                with session_scope() as session:
-                    run = session.get(AuthoringRun, self.authoring_run_id)
-                    repair_attempt = run.repair_attempt
 
                 if repair_attempt >= _MAX_REPAIR_ATTEMPTS:
                     self._finalize_golden(golden_script_id, "partially_certified")
@@ -141,6 +175,8 @@ class _AuthoringRunSession:
             self.error = exc
             update_run(self.authoring_run_id, status="failed", ended_at=_now())
         finally:
+            with _registry_lock:
+                _sessions.pop(self.authoring_run_id, None)
             self.done_event.set()
 
     def _finalize_golden(self, golden_script_id: uuid.UUID, status: str) -> None:

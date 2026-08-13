@@ -1,3 +1,4 @@
+import threading
 import time
 import uuid
 
@@ -84,6 +85,83 @@ def test_stop_authoring_run_cancels_while_waiting_for_developer(fixture_portal_u
             assert run.golden_script_id is None
     finally:
         fixture_portal_server.set_drift_mode(False)
+
+
+def test_start_authoring_run_repairs_and_reaches_partially_certified(fixture_portal_url, fixture_portal_server):
+    """Drives the repair loop through the REAL golden/certify pipeline
+    (not a standalone certify call) by keeping the fixture portal drifted
+    only while the orchestrator is in its "golden" or "certifying" phase,
+    and undrifted everywhere else (replay/extract/brain).
+
+    This makes brain always resolve the real, working
+    "#generate-report-btn" selector (drift is off there, so nothing needs
+    repairing and no LLM is involved), but every certify subprocess run —
+    which headlessly replays that exact frozen selector — hits the
+    drifted dashboard (button renamed to "#run-report-btn") and reliably
+    fails, every single time, for all 3 repair iterations. That forces
+    the loop to exhaust _MAX_REPAIR_ATTEMPTS (2) and finalize as
+    partially_certified, while proving run_certify_phase's
+    run_number_offset fix prevents the second and third certify calls
+    from colliding with CertificationRun's UniqueConstraint.
+
+    A background thread toggles drift based on polling
+    AuthoringRun.current_phase — safe because each phase transition is
+    committed to the DB well before the next slow operation (a fresh
+    headless chromium subprocess, or a fresh headed browser) actually
+    reaches the point in the fixture portal where drift would matter.
+    """
+    with session_scope() as session:
+        org = Organization(name="Repair Run Org", slug=f"repair-run-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = _record_against_fixture(org_id, fixture_portal_url)
+
+    authoring_run_id = start_authoring_run(recording_id)
+
+    stop_watching = threading.Event()
+
+    def _drift_watcher():
+        drifted = False
+        while not stop_watching.is_set():
+            with session_scope() as session:
+                run = session.get(AuthoringRun, authoring_run_id)
+                should_drift = run.current_phase in ("golden", "certifying")
+                terminal = run.status in ("completed", "failed", "cancelled")
+            if should_drift != drifted:
+                fixture_portal_server.set_drift_mode(should_drift)
+                drifted = should_drift
+            if terminal:
+                break
+            time.sleep(0.02)
+        fixture_portal_server.set_drift_mode(False)
+
+    watcher = threading.Thread(target=_drift_watcher, daemon=True)
+    watcher.start()
+    try:
+        status = _wait_for_status(authoring_run_id, {"completed", "failed", "cancelled"}, timeout=600)
+    finally:
+        stop_watching.set()
+        watcher.join(timeout=10)
+        fixture_portal_server.set_drift_mode(False)
+
+    assert status == "completed"
+    with session_scope() as session:
+        run = session.get(AuthoringRun, authoring_run_id)
+        assert run.current_phase == "done"
+        assert run.repair_attempt == 2
+        golden = session.get(GoldenScript, run.golden_script_id)
+        assert golden.status == "partially_certified"
+        cert_runs = (
+            session.query(CertificationRun)
+            .filter_by(authoring_run_id=authoring_run_id)
+            .order_by(CertificationRun.run_number)
+            .all()
+        )
+        assert len(cert_runs) == 9
+        assert [c.run_number for c in cert_runs] == list(range(1, 10))
+        assert all(c.status == "fail" for c in cert_runs)
 
 
 def test_resume_authoring_run_raises_for_unknown_run():
