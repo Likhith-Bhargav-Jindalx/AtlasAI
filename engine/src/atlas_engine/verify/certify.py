@@ -28,3 +28,20 @@ def certify_golden_script(script_path: Path, *, args: list[str] | None = None, r
         if result.returncode == 0:
             succeeded += 1
     return CertificationResult(runs=runs, succeeded=succeeded)
+
+
+def certify_golden_script_once(script_path: Path, *, args: list[str] | None = None) -> tuple[bool, str | None]:
+    """Runs a golden script once from a fresh process. Unlike
+    certify_golden_script (which only returns an aggregate pass count),
+    this exposes per-run failure evidence — the authoring orchestrator
+    needs one CertificationRun row per attempt, each with its own
+    evidence when it fails."""
+    result = subprocess.run(
+        [sys.executable, str(script_path), *(args or [])],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode == 0:
+        return True, None
+    return False, (result.stdout or "") + (result.stderr or "")

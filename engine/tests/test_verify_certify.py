@@ -38,3 +38,26 @@ def test_certify_golden_script_fails_when_a_run_fails(tmp_path):
 
     assert result.succeeded == 0
     assert result.is_certified is False
+
+
+def test_certify_golden_script_once_returns_true_and_no_evidence_on_success(tmp_path, fixture_portal_url):
+    from atlas_engine.verify.certify import certify_golden_script_once
+
+    script_path = _write_fixture_golden(tmp_path, fixture_portal_url)
+
+    passed, evidence = certify_golden_script_once(script_path)
+
+    assert passed is True
+    assert evidence is None
+
+
+def test_certify_golden_script_once_returns_false_and_evidence_on_failure(tmp_path):
+    from atlas_engine.verify.certify import certify_golden_script_once
+
+    script_path = tmp_path / "broken.py"
+    script_path.write_text("import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n")
+
+    passed, evidence = certify_golden_script_once(script_path)
+
+    assert passed is False
+    assert "boom" in evidence
