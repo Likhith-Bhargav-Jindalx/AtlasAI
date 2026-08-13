@@ -14,6 +14,10 @@ const PILL_COLORS: Record<string, { bg: string; fg: string }> = {
   approved: { bg: '#edf5f3', fg: '#144e48' },
   rejected: { bg: '#fdf0f0', fg: '#8a3a3a' },
   auto_approved: { bg: '#edf5f3', fg: '#144e48' },
+  running: { bg: '#fdf6e7', fg: '#8a6a1f' },
+  waiting_for_developer: { bg: '#fdf6e7', fg: '#8a6a1f' },
+  completed: { bg: '#144e48', fg: '#ffffff' },
+  partially_certified: { bg: '#fdf6e7', fg: '#8a6a1f' },
 }
 
 export function StatusPill({ status }: { status: string }) {
