@@ -13,13 +13,14 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import AuthoringRun, AuthoringRunEvent, CertificationRun, GoldenScript, User, VideoAsset
+from atlas_engine.db.models import AuthoringRun, AuthoringRunEvent, CertificationRun, GoldenScript, Recording, User, VideoAsset
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import (
     claim_recording_request,
     create_recording_request,
     get_recording_detail,
+    list_page_extractions,
     list_recording_requests,
     list_recordings,
 )
@@ -376,6 +377,14 @@ class RecordingDetailResponse(BaseModel):
     pages: list[RecordingPageResponse]
 
 
+class PageExtractionResponse(BaseModel):
+    id: str
+    page_index: int
+    url: str
+    data: dict
+    extracted_at: str
+
+
 @app.get("/recordings/{recording_id}", response_model=RecordingDetailResponse)
 def get_recording_endpoint(recording_id: str) -> RecordingDetailResponse:
     try:
@@ -402,3 +411,11 @@ def get_recording_video_endpoint(recording_id: str, page_index: int):
         raise HTTPException(status_code=404, detail="Video file missing on disk")
 
     return FileResponse(video_path, media_type="video/webm")
+
+
+@app.get("/recordings/{recording_id}/extractions", response_model=list[PageExtractionResponse])
+def list_extractions_endpoint(recording_id: str) -> list[PageExtractionResponse]:
+    with session_scope() as session:
+        if session.get(Recording, uuid.UUID(recording_id)) is None:
+            raise HTTPException(status_code=404, detail=f"No such recording: {recording_id}")
+    return [PageExtractionResponse(**e) for e in list_page_extractions(uuid.UUID(recording_id))]

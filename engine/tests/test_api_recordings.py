@@ -109,3 +109,34 @@ def test_list_recordings_handles_multi_page_recordings(tmp_path, fixture_portal_
     matching = [r for r in body if r["id"] == str(recording_id)]
     assert len(matching) == 1
     assert matching[0]["has_video"] is True
+
+
+def test_list_extractions_endpoint_returns_stored_extractions(tmp_path, fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Extraction API Org", slug=f"extraction-api-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    recording_id = persist_recording(
+        org_id, start_url, [],
+        page_extractions=[
+            {"page_index": 0, "url": f"{fixture_portal_url}/extraction_target.html", "data": {"fields": {"mrn": "MRN-4821"}, "tables": []}},
+        ],
+    )
+
+    client = TestClient(app)
+    response = client.get(f"/recordings/{recording_id}/extractions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["page_index"] == 0
+    assert body[0]["data"]["fields"]["mrn"] == "MRN-4821"
+
+
+def test_list_extractions_endpoint_404_for_unknown_recording():
+    client = TestClient(app)
+    response = client.get(f"/recordings/{uuid.uuid4()}/extractions")
+    assert response.status_code == 404
