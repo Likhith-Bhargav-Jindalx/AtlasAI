@@ -78,3 +78,17 @@ def test_wait_for_stop_or_disconnect_calls_on_tick_every_iteration_and_at_the_en
 
     assert disconnected is False
     assert tick_count["n"] == 4  # 3 ticks inside the loop, 1 more after it exits
+
+
+def test_resolve_page_index_identifies_main_and_extra_pages():
+    from atlas_engine.live_capture import _resolve_page_index
+
+    main_page = object()
+    extra_page_1 = object()
+    extra_page_2 = object()
+    extra_captures = [(extra_page_1, None, None), (extra_page_2, None, None)]
+
+    assert _resolve_page_index(main_page, main_page, extra_captures) == 0
+    assert _resolve_page_index(extra_page_1, main_page, extra_captures) == 1
+    assert _resolve_page_index(extra_page_2, main_page, extra_captures) == 2
+    assert _resolve_page_index(object(), main_page, extra_captures) is None

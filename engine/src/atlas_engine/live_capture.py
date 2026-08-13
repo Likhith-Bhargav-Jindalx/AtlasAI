@@ -5,6 +5,7 @@ import uuid
 
 from playwright.sync_api import sync_playwright
 
+from atlas_engine.capture.extraction import attach_extraction_button, collect_page_data
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
 from atlas_engine.recording_service import PageCapture, persist_recording
@@ -45,6 +46,20 @@ def _wait_for_stop_or_disconnect(
     return False
 
 
+def _resolve_page_index(page, main_page, extra_captures: list[tuple]) -> int | None:
+    """Maps a Page object back to the page_index it has (or will have)
+    in the eventual PageCapture list — 0 for the main page, position+1
+    for a page already tracked in extra_captures, None if the page isn't
+    tracked yet (e.g. a grab request that raced a not-yet-attached
+    popup; the caller drops these rather than guessing)."""
+    if page is main_page:
+        return 0
+    for i, (extra_page, _capture, _started_at_ms) in enumerate(extra_captures):
+        if extra_page is page:
+            return i + 1
+    return None
+
+
 class _LiveCaptureSession:
     """Owns the Playwright sync-API objects for the lifetime of one live
     recording. Everything outside this class communicates with it only
@@ -68,12 +83,17 @@ class _LiveCaptureSession:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=False)
                 context, page, video_started_at_ms, video_dir = start_capture_context(browser)
+
+                pending_grab_pages: list = []
+                attach_extraction_button(context, pending_grab_pages.append)
+
                 page.goto(self.start_url)
 
                 new_pages: list = []
                 context.on("page", lambda new_page: new_pages.append(new_page))
 
                 extra_captures: list[tuple] = []
+                pending_extractions: list[dict] = []
 
                 def _attach_new_pages() -> None:
                     while new_pages:
@@ -82,6 +102,20 @@ class _LiveCaptureSession:
                         capture = CaptureSession(new_page)
                         capture.__enter__()
                         extra_captures.append((new_page, capture, started_at_ms))
+
+                    while pending_grab_pages:
+                        grabbed_page = pending_grab_pages.pop(0)
+                        page_index = _resolve_page_index(grabbed_page, page, extra_captures)
+                        if page_index is None:
+                            continue
+                        collected = collect_page_data(grabbed_page)
+                        if not collected["fields"] and not collected["tables"]:
+                            continue
+                        pending_extractions.append({
+                            "page_index": page_index,
+                            "url": grabbed_page.url,
+                            "data": collected,
+                        })
 
                 with CaptureSession(page) as capture:
                     if _wait_for_stop_or_disconnect(self.stop_event, page, on_tick=_attach_new_pages):
@@ -117,6 +151,7 @@ class _LiveCaptureSession:
                 video_started_at_ms=video_started_at_ms,
                 video_ended_at_ms=video_ended_at_ms,
                 additional_pages=additional_pages,
+                page_extractions=pending_extractions,
             )
         except Exception as exc:  # surfaced to the caller of stop()
             self.error = exc
