@@ -14,6 +14,8 @@ import { StatusPill } from '../../components/StatusPill'
 import { AuthoringPhaseTracker } from '../../components/AuthoringPhaseTracker'
 import { AuthoringEventLog } from '../../components/AuthoringEventLog'
 import { GoldenScriptViewer } from '../../components/GoldenScriptViewer'
+import { PageExtractionsList } from '../../components/PageExtractionsList'
+import { useRecordingExtractions } from '../../lib/extractions'
 import { formatDuration } from '../../lib/format'
 
 export function AuthoringPage() {
@@ -26,6 +28,7 @@ export function AuthoringPage() {
   const authoringRun = useAuthoringRun(authoringRunId)
   const resumeRun = useResumeAuthoringRun(authoringRunId)
   const stopRun = useStopAuthoringRun(authoringRunId)
+  const extractions = useRecordingExtractions(recordingId)
 
   if (isLoading || !recording) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
@@ -140,6 +143,10 @@ export function AuthoringPage() {
             />
           </div>
         ))}
+
+        {extractions.data && extractions.data.length > 0 && (
+          <PageExtractionsList extractions={extractions.data} />
+        )}
 
         {startRun.isError && (
           <div className="text-[13px] text-atlas-diffOldText">{(startRun.error as Error).message}</div>
