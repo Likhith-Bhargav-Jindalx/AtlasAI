@@ -80,12 +80,14 @@ def test_collect_page_data_extracts_table_and_labeled_fields(fixture_portal_url)
     assert len(data["tables"]) == 1
     table = data["tables"][0]
     assert table["name"] == "visits_table"
-    assert table["rowSelector"] == "table#visits-table tbody tr"
-    assert [c["name"] for c in table["columns"]] == ["date", "reason"]
+    assert table["headers"] == ["Date", "Reason"]
+    assert table["rows"] == [["2026-08-01", "Checkup"], ["2026-07-15", "Follow-up"]]
 ```
 
 Run: `cd engine && .venv/bin/pytest tests/test_capture_extraction.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'atlas_engine.capture.extraction'`
+
+Note: `SERIALIZER` returns two parallel table shapes: `out.tables` (`{name, rowSelector, columns}` — selector-based, meant for a golden script to re-read the same table on a future run) and `out.data.tables` (`{name, headers, rows}` — the human-readable value dump). `collect_page_data` merges from `out.data` (the human-readable dump), since a `PageExtraction` is downloaded and read by a person, not replayed by automation — assert against `headers`/`rows`, not `rowSelector`/`columns`.
 
 Note: `CSS.escape` only backslash-escapes characters that are invalid in a CSS identifier (leading digits, a lone leading `-`, control characters, etc.) — an internal `-` in `visits-table` is already a valid identifier character and is NOT escaped, so `esc(t.id)` here is just `"visits-table"` unchanged. If your local run shows a different value, fix the assertion to match what `CSS.escape` actually produces in the installed Chromium (do not change `SERIALIZER` to work around it).
 
@@ -218,7 +220,7 @@ def collect_page_data(page: Page) -> dict[str, Any]:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cd engine && .venv/bin/pytest tests/test_capture_extraction.py -v`
-Expected: PASS. If the `rowSelector` assertion fails on the exact escaped form, adjust the assertion (not `SERIALIZER`) to match reality.
+Expected: PASS
 
 - [ ] **Step 5: Commit**
 
