@@ -42,6 +42,8 @@ let currentRun: AuthoringRunDetail
 let startResponse: ReturnType<typeof deferred<unknown>>
 let firstPoll: ReturnType<typeof deferred<unknown>>
 let pollCount: number
+/** Overridable so a test can make the extractions request fail. */
+let extractionsResponse: () => Promise<unknown>
 
 beforeEach(() => {
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -49,6 +51,7 @@ beforeEach(() => {
   startResponse = deferred<unknown>()
   firstPoll = deferred<unknown>()
   pollCount = 0
+  extractionsResponse = () => Promise.resolve(jsonResponse([]))
 
   vi.stubGlobal(
     'fetch',
@@ -56,6 +59,9 @@ beforeEach(() => {
       const path = String(url).replace('http://localhost:8000', '')
       if (path === '/recordings/rec-1' && (init?.method ?? 'GET') === 'GET') {
         return Promise.resolve(jsonResponse(RECORDING))
+      }
+      if (path === '/recordings/rec-1/extractions') {
+        return extractionsResponse()
       }
       if (path === '/recordings/rec-1/author') return startResponse.promise
       if (path === '/authoring-runs/run-1/stop') return Promise.resolve(jsonResponse({ ok: true }))
@@ -140,5 +146,16 @@ describe('AuthoringPage primary button gating', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Regenerate golden script' })).toBeEnabled())
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
+  })
+})
+
+describe('AuthoringPage page extractions', () => {
+  it('shows an error banner when the extractions request fails', async () => {
+    extractionsResponse = () => Promise.reject(new Error('extractions boom'))
+    renderPage()
+
+    expect(await screen.findByText(/Could not load page extractions/i)).toHaveTextContent(
+      'extractions boom',
+    )
   })
 })

@@ -14,13 +14,28 @@ _LISTENER_SCRIPT = """
   const push = (kind, el, value) => {
     if (!el) return;
     if (el.closest && el.closest('#__atlasGrabBtn')) return;
+    // The extraction button's own label mutates while a grab is in flight
+    // ("extracting…" -> "captured" -> reverts after 2.5s), so leaving it in
+    // the snapshot would make a real action's dom_before/dom_after differ on
+    // the button alone and be misclassified as dom_changed by the verbatim
+    // string-diff classifier in trajectory/extract.py. Clone-and-strip only
+    // when the button is actually present — during authoring replay/brain
+    // phases it never is, so this stays free.
+    const btn = document.getElementById('__atlasGrabBtn');
+    let dom = document.documentElement.outerHTML;
+    if (btn) {
+      const root = document.documentElement.cloneNode(true);
+      const clone = root.querySelector('#__atlasGrabBtn');
+      if (clone) clone.remove();
+      dom = root.outerHTML;
+    }
     window.__atlas_record({
       kind,
       value: value ?? null,
       id: el.id || null,
       testId: el.getAttribute ? el.getAttribute("data-testid") : null,
       url: window.location.href,
-      dom: document.documentElement.outerHTML,
+      dom,
     });
   };
   document.addEventListener(

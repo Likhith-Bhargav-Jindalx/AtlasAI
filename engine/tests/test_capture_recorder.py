@@ -2,6 +2,7 @@ from playwright.sync_api import sync_playwright
 
 from atlas_engine.capture.extraction import attach_extraction_button
 from atlas_engine.capture.recorder import CaptureSession
+from atlas_engine.trajectory.extract import expected_effect_for_action
 
 
 def test_capture_session_records_click_and_fill(fixture_portal_url):
@@ -98,3 +99,35 @@ def test_capture_session_ignores_clicks_on_the_extraction_button(fixture_portal_
         for candidate in action.selector_candidates
     )
     assert [action.kind for action in capture.actions] == ["fill"]
+
+
+def test_recorded_dom_snapshots_exclude_the_extraction_button(fixture_portal_url):
+    """The button's label mutates while a grab is in flight ("⏳ extracting…"
+    → "✓ …" → reverts after 2.5s). If it were part of the DOM snapshots, a
+    neighbouring *real* action whose before/after straddled that window would
+    be misclassified as dom_changed by the verbatim diff in
+    trajectory/extract.py — and read as off-track on replay, where the button
+    does not exist at all."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
+        attach_extraction_button(context, lambda _page: None)
+
+        page.goto(f"{fixture_portal_url}/login.html")
+        page.wait_for_selector("#__atlasGrabBtn")
+
+        with CaptureSession(page) as capture:
+            page.click("#__atlasGrabBtn")  # starts the label mutation
+            page.fill("#username", "demo")  # a real action, mid-mutation
+            page.fill("#password", "demo-pass")  # finalizes the username fill
+
+        browser.close()
+
+    username_fill = capture.actions[0]
+    assert username_fill.kind == "fill"
+    assert "__atlasGrabBtn" not in username_fill.dom_before
+    assert "__atlasGrabBtn" not in username_fill.dom_after
+    # A fill sets the value property, not markup — so with the button gone
+    # from both snapshots the action's true effect is visible as "none".
+    assert expected_effect_for_action(username_fill) == "none"

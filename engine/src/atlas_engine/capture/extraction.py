@@ -96,6 +96,28 @@ BUTTON = """
 """
 
 
+def sanitize_collected_text(value: Any) -> Any:
+    """Scrubs anything Postgres JSONB will refuse from every string in a
+    collected extraction payload: lone UTF-16 surrogates (which JS
+    textContent/innerText can legally hold and SERIALIZER's clean() does not
+    filter) and embedded NUL bytes.
+
+    This is the point of control for that concern — where JS strings first
+    become Python strings. persist_recording inserts PageExtraction rows in
+    the same transaction as the Recording itself, so one bad character
+    reaching the driver would roll back the ENTIRE recording, not just the
+    offending extraction. Everything else in this feature is best-effort
+    (per-frame try/except below, whole-loop try/except in live_capture.py);
+    this keeps the payload itself from being the one fatal path."""
+    if isinstance(value, str):
+        return value.encode("utf-8", errors="replace").decode("utf-8").replace("\x00", "")
+    if isinstance(value, dict):
+        return {sanitize_collected_text(k): sanitize_collected_text(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [sanitize_collected_text(v) for v in value]
+    return value
+
+
 def collect_page_data(page: Page) -> dict[str, Any]:
     """Runs SERIALIZER on every frame of `page` (including cross-origin
     iframes, which is exactly why this is a Python-side loop over
@@ -118,7 +140,7 @@ def collect_page_data(page: Page) -> dict[str, Any]:
             continue
         merged["fields"].update(data.get("fields") or {})
         merged["tables"].extend(data.get("tables") or [])
-    return merged
+    return sanitize_collected_text(merged)
 
 
 def attach_extraction_button(context: BrowserContext, on_requested: Callable[[Page], None]) -> None:
