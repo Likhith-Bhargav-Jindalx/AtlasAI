@@ -69,4 +69,7 @@ def test_recording_author_endpoint(fixture_portal_url):
 
     assert response.status_code == 200
     assert "authoring_run_id" in response.json()
-    uuid.UUID(response.json()["authoring_run_id"])  # raises ValueError if not a real UUID
+    authoring_run_id = response.json()["authoring_run_id"]
+    uuid.UUID(authoring_run_id)  # raises ValueError if not a real UUID
+
+    client.post(f"/authoring-runs/{authoring_run_id}/stop")

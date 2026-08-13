@@ -8,11 +8,13 @@ from playwright.sync_api import sync_playwright
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import AuthoringRun, CertificationRun, GoldenScript, Organization
-from atlas_engine.recording_service import persist_recording
+from atlas_engine.db.models import AuthoringRun, CertificationRun, GoldenScript, Organization, RecordingRequest, User
+from atlas_engine.recording_service import create_recording_request, persist_recording
 
 
-def _record_against_fixture(org_id: str, fixture_portal_url: str) -> uuid.UUID:
+def _record_against_fixture(
+    org_id: str, fixture_portal_url: str, request_id=None, role="demo",
+) -> uuid.UUID:
     start_url = f"{fixture_portal_url}/login.html"
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -25,7 +27,7 @@ def _record_against_fixture(org_id: str, fixture_portal_url: str) -> uuid.UUID:
             page.wait_for_url("**/dashboard.html")
             page.click("#generate-report-btn")
         browser.close()
-    return persist_recording(org_id, start_url, capture.actions)
+    return persist_recording(org_id, start_url, capture.actions, request_id=request_id, role=role)
 
 
 def _wait_for_status(authoring_run_id, statuses, timeout=90):
@@ -177,3 +179,30 @@ def test_stop_authoring_run_raises_for_unknown_run():
 def test_start_authoring_run_raises_for_unknown_recording():
     with pytest.raises(ValueError, match="No such recording"):
         start_authoring_run(uuid.uuid4())
+
+
+def test_start_authoring_run_fulfills_a_linked_request_on_success(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Run Fulfill Org", slug=f"run-fulfill-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        agent = User(org_id=org.id, email=f"agent-{uuid.uuid4()}@example.com", password_hash="x", role="member")
+        session.add(agent)
+        session.flush()
+        org_id = str(org.id)
+        agent_id = str(agent.id)
+
+    request_id = create_recording_request(org_id, agent_id, "http://placeholder/", "Fulfillment test")
+    recording_id = _record_against_fixture(org_id, fixture_portal_url, request_id=request_id, role="authoring")
+
+    authoring_run_id = start_authoring_run(recording_id)
+    status = _wait_for_status(authoring_run_id, {"completed", "failed", "cancelled"})
+    assert status == "completed"
+
+    with session_scope() as session:
+        run = session.get(AuthoringRun, authoring_run_id)
+        golden_script_id = run.golden_script_id
+
+        request = session.get(RecordingRequest, request_id)
+        assert request.status == "fulfilled"
+        assert request.fulfilled_golden_script_id == golden_script_id

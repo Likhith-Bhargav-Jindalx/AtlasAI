@@ -114,10 +114,35 @@ def test_get_authoring_run_404_for_unknown_id():
     assert response.status_code == 404
 
 
+def test_get_authoring_run_404_for_malformed_id():
+    client = TestClient(app)
+    response = client.get("/authoring-runs/not-a-uuid")
+    assert response.status_code == 404
+
+
 def test_resume_authoring_run_endpoint_404_for_unknown_run():
     client = TestClient(app)
     response = client.post(f"/authoring-runs/{uuid.uuid4()}/resume")
     assert response.status_code == 404
+
+
+def test_resume_authoring_run_endpoint_409_when_not_waiting_for_developer():
+    with session_scope() as session:
+        org = Organization(name="Resume Guard Org", slug=f"resume-guard-org-{uuid.uuid4()}")
+        profile = PortalProfile(org=org, domain="portal-resume-guard.example.com")
+        recording = Recording(
+            org=org, portal_profile=profile, status="captured", capture_blob_prefix="orgs/x/recordings/3/",
+        )
+        session.add_all([org, profile, recording])
+        session.flush()
+        run = AuthoringRun(org=org, recording=recording, status="running", current_phase="brain")
+        session.add(run)
+        session.flush()
+        authoring_run_id = run.id
+
+    client = TestClient(app)
+    response = client.post(f"/authoring-runs/{authoring_run_id}/resume")
+    assert response.status_code == 409
 
 
 def test_stop_authoring_run_endpoint_404_for_unknown_run():
@@ -191,5 +216,47 @@ def test_stop_authoring_run_via_http_while_waiting_for_developer(fixture_portal_
 
         final = client.get(f"/authoring-runs/{authoring_run_id}")
         assert final.json()["status"] == "cancelled"
+    finally:
+        fixture_portal_server.set_drift_mode(False)
+
+
+def test_resume_authoring_run_via_http_unpauses_and_the_run_completes(fixture_portal_url, fixture_portal_server):
+    with session_scope() as session:
+        org = Organization(name="HTTP Resume Org", slug=f"http-resume-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = _record_against_fixture(org_id, fixture_portal_url)
+
+    fixture_portal_server.set_drift_mode(True)
+    try:
+        client = TestClient(app)
+        start_response = client.post(f"/recordings/{recording_id}/author")
+        authoring_run_id = start_response.json()["authoring_run_id"]
+
+        deadline = time.time() + 30
+        paused = False
+        while time.time() < deadline:
+            poll = client.get(f"/authoring-runs/{authoring_run_id}")
+            if poll.json()["status"] == "waiting_for_developer":
+                paused = True
+                break
+            time.sleep(0.3)
+        assert paused, "authoring run never reached waiting_for_developer via HTTP polling"
+
+        resume_response = client.post(f"/authoring-runs/{authoring_run_id}/resume")
+        assert resume_response.status_code == 200
+        assert resume_response.json() == {"ok": True}
+
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            poll = client.get(f"/authoring-runs/{authoring_run_id}")
+            if poll.json()["status"] in ("completed", "failed", "cancelled"):
+                break
+            time.sleep(0.5)
+
+        final = client.get(f"/authoring-runs/{authoring_run_id}")
+        assert final.json()["status"] == "completed"
     finally:
         fixture_portal_server.set_drift_mode(False)

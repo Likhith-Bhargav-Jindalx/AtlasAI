@@ -13,7 +13,7 @@ from atlas_engine.authoring.state import update_run
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 from atlas_engine.brain.serialize import trajectory_from_dict
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import AuthoringRun, GoldenScript, PortalProfile, Recording
+from atlas_engine.db.models import AuthoringRun, GoldenScript, PortalProfile, Recording, RecordingRequest
 from atlas_engine.db.models import ReferenceTrajectory as ReferenceTrajectoryModel
 from atlas_engine.llm.client import LlmClient
 
@@ -72,6 +72,7 @@ class _AuthoringRunSession:
                 portal_profile_id = recording.portal_profile_id
                 start_url = profile.inferred_login_url or f"https://{profile.domain}"
                 trajectory_blob_ref = trajectory_row.trajectory_blob_ref
+                request_id = recording.request_id
 
             trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
 
@@ -159,11 +160,11 @@ class _AuthoringRunSession:
                     return
 
                 if passed == total:
-                    self._finalize_golden(golden_script_id, "certified")
+                    self._finalize_golden(golden_script_id, "certified", request_id)
                     break
 
                 if repair_attempt >= _MAX_REPAIR_ATTEMPTS:
-                    self._finalize_golden(golden_script_id, "partially_certified")
+                    self._finalize_golden(golden_script_id, "partially_certified", request_id)
                     break
 
                 update_run(self.authoring_run_id, repair_attempt=repair_attempt + 1)
@@ -192,10 +193,18 @@ class _AuthoringRunSession:
                 _sessions.pop(self.authoring_run_id, None)
             self.done_event.set()
 
-    def _finalize_golden(self, golden_script_id: uuid.UUID, status: str) -> None:
+    def _finalize_golden(
+        self, golden_script_id: uuid.UUID, status: str, request_id: uuid.UUID | None = None,
+    ) -> None:
         with session_scope() as session:
             golden = session.get(GoldenScript, golden_script_id)
             golden.status = status
+
+            if status == "certified" and request_id is not None:
+                request = session.get(RecordingRequest, request_id)
+                if request is not None:
+                    request.status = "fulfilled"
+                    request.fulfilled_golden_script_id = golden_script_id
         log_event(self.authoring_run_id, phase="certifying", message=f"Golden script finalized as {status}")
 
 

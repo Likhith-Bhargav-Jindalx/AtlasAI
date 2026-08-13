@@ -183,8 +183,13 @@ class AuthoringRunDetailResponse(BaseModel):
 
 @app.get("/authoring-runs/{authoring_run_id}", response_model=AuthoringRunDetailResponse)
 def get_authoring_run_endpoint(authoring_run_id: str) -> AuthoringRunDetailResponse:
+    try:
+        run_uuid = uuid.UUID(authoring_run_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"No such authoring run: {authoring_run_id}")
+
     with session_scope() as session:
-        run = session.get(AuthoringRun, uuid.UUID(authoring_run_id))
+        run = session.get(AuthoringRun, run_uuid)
         if run is None:
             raise HTTPException(status_code=404, detail=f"No such authoring run: {authoring_run_id}")
 
@@ -236,6 +241,14 @@ def get_authoring_run_endpoint(authoring_run_id: str) -> AuthoringRunDetailRespo
 
 @app.post("/authoring-runs/{authoring_run_id}/resume")
 def resume_authoring_run_endpoint(authoring_run_id: str) -> dict:
+    with session_scope() as session:
+        run = session.get(AuthoringRun, uuid.UUID(authoring_run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No such authoring run: {authoring_run_id}")
+        if run.status != "waiting_for_developer":
+            raise HTTPException(
+                status_code=409, detail=f"Authoring run is not waiting for a developer (status={run.status})"
+            )
     try:
         resume_authoring_run(uuid.UUID(authoring_run_id))
     except ValueError as exc:
