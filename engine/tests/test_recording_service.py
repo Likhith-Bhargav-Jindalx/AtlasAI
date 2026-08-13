@@ -270,14 +270,22 @@ def test_persist_recording_stores_page_extractions(fixture_portal_url):
         org_id, start_url, [],
         page_extractions=[
             {"page_index": 0, "url": f"{fixture_portal_url}/extraction_target.html", "data": {"fields": {"mrn": "MRN-4821"}, "tables": []}},
+            {"page_index": 1, "url": f"{fixture_portal_url}/details.html", "data": {"fields": {"dob": "1990-01-01"}, "tables": []}},
         ],
     )
 
     extractions = list_page_extractions(recording_id)
-    assert len(extractions) == 1
+    assert len(extractions) == 2
+    # Verify first extraction
     assert extractions[0]["page_index"] == 0
     assert extractions[0]["url"] == f"{fixture_portal_url}/extraction_target.html"
     assert extractions[0]["data"]["fields"]["mrn"] == "MRN-4821"
+    # Verify second extraction
+    assert extractions[1]["page_index"] == 1
+    assert extractions[1]["url"] == f"{fixture_portal_url}/details.html"
+    assert extractions[1]["data"]["fields"]["dob"] == "1990-01-01"
+    # Verify ordering is maintained (deterministic insertion order)
+    assert extractions[0]["extracted_at"] <= extractions[1]["extracted_at"]
 
 
 def test_list_page_extractions_returns_empty_list_when_none_exist(fixture_portal_url):

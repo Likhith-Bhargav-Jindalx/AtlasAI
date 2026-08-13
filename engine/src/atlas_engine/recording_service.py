@@ -112,6 +112,7 @@ def persist_recording(
                     page_index=extraction["page_index"],
                     url=extraction["url"],
                     data=extraction["data"],
+                    extracted_at=datetime.now(timezone.utc),
                 )
             )
 
