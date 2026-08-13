@@ -91,3 +91,9 @@ def test_get_authoring_run_404_for_unknown_id():
     client = TestClient(app)
     response = client.get(f"/authoring-runs/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+def test_resume_authoring_run_endpoint_404_for_unknown_run():
+    client = TestClient(app)
+    response = client.post(f"/authoring-runs/{uuid.uuid4()}/resume")
+    assert response.status_code == 404
