@@ -4,7 +4,6 @@ from playwright.sync_api import sync_playwright
 
 from atlas_engine.authoring.phases import run_brain_phase, run_extract_phase
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
-from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import AuthoringRun, AuthoringRunEvent, Organization, PortalProfile, Recording
 from atlas_engine.llm.client import FakeLlmClient
