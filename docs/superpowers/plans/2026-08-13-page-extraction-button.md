@@ -80,14 +80,14 @@ def test_collect_page_data_extracts_table_and_labeled_fields(fixture_portal_url)
     assert len(data["tables"]) == 1
     table = data["tables"][0]
     assert table["name"] == "visits_table"
-    assert table["rowSelector"] == "table#visits\\-table tbody tr"
+    assert table["rowSelector"] == "table#visits-table tbody tr"
     assert [c["name"] for c in table["columns"]] == ["date", "reason"]
 ```
 
 Run: `cd engine && .venv/bin/pytest tests/test_capture_extraction.py -v`
 Expected: FAIL with `ModuleNotFoundError: No module named 'atlas_engine.capture.extraction'`
 
-Note: `CSS.escape` in `SERIALIZER` escapes the `-` in `visits-table` as `\-` — assert against the actual escaped value; if your local run shows a different escaped form, fix the assertion to match what `CSS.escape` actually produces in the installed Chromium (do not change `SERIALIZER` to work around it).
+Note: `CSS.escape` only backslash-escapes characters that are invalid in a CSS identifier (leading digits, a lone leading `-`, control characters, etc.) — an internal `-` in `visits-table` is already a valid identifier character and is NOT escaped, so `esc(t.id)` here is just `"visits-table"` unchanged. If your local run shows a different value, fix the assertion to match what `CSS.escape` actually produces in the installed Chromium (do not change `SERIALIZER` to work around it).
 
 - [ ] **Step 3: Write `capture/extraction.py` with the ported JS and `collect_page_data`**
 
