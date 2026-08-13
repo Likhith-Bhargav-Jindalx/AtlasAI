@@ -172,7 +172,11 @@ def list_recordings(org_id: str, status: str | None = None) -> list[dict]:
 
         results = []
         for recording in query.order_by(Recording.created_at.desc()).all():
-            video_asset = session.query(VideoAsset).filter_by(recording_id=recording.id).one_or_none()
+            video_asset = (
+                session.query(VideoAsset)
+                .filter_by(recording_id=recording.id, page_index=0)
+                .one_or_none()
+            )
             request = session.get(RecordingRequest, recording.request_id) if recording.request_id else None
             profile = session.get(PortalProfile, recording.portal_profile_id)
             results.append({

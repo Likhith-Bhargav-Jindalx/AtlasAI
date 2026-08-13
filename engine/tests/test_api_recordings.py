@@ -6,7 +6,7 @@ from atlas_engine.api import app
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import Organization
-from atlas_engine.recording_service import persist_recording
+from atlas_engine.recording_service import PageCapture, persist_recording
 
 
 def test_get_recording_detail_includes_video_steps(tmp_path, fixture_portal_url):
@@ -73,3 +73,39 @@ def test_list_recordings_returns_newest_first_and_filters_by_status(fixture_port
     filtered = client.get(f"/recordings?org_id={org_id}&status=discarded")
     filtered_ids = [r["id"] for r in filtered.json()]
     assert filtered_ids == [str(older_id)]
+
+
+def test_list_recordings_handles_multi_page_recordings(tmp_path, fixture_portal_url):
+    """Regression test: a recording with a popup/tab has more than one
+    VideoAsset row. list_recordings must not assume exactly one."""
+    with session_scope() as session:
+        org = Organization(name="Multi Page Org", slug=f"multi-page-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    main_video = tmp_path / "main.webm"
+    main_video.write_bytes(b"fake-webm-bytes")
+    popup_video = tmp_path / "popup.webm"
+    popup_video.write_bytes(b"fake-webm-bytes")
+
+    start_url = f"{fixture_portal_url}/login.html"
+    recording_id = persist_recording(
+        org_id, start_url, [],
+        video_path=main_video, video_started_at_ms=0, video_ended_at_ms=1000,
+        additional_pages=[
+            PageCapture(
+                page_index=1, actions=[],
+                video_path=popup_video, video_started_at_ms=0, video_ended_at_ms=1000,
+            ),
+        ],
+    )
+
+    client = TestClient(app)
+    response = client.get(f"/recordings?org_id={org_id}")
+
+    assert response.status_code == 200
+    body = response.json()
+    matching = [r for r in body if r["id"] == str(recording_id)]
+    assert len(matching) == 1
+    assert matching[0]["has_video"] is True
