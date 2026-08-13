@@ -9,6 +9,7 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import (
+    PageExtraction,
     PortalProfile,
     Recording,
     RecordingRequest,
@@ -45,6 +46,7 @@ def persist_recording(
     video_started_at_ms: int | None = None,
     video_ended_at_ms: int | None = None,
     additional_pages: list[PageCapture] | None = None,
+    page_extractions: list[dict] | None = None,
 ) -> uuid.UUID:
     """Persists a captured recording — actions.json, the extracted
     trajectory, one VideoAsset per page (main plus any tabs/popups opened
@@ -101,6 +103,16 @@ def persist_recording(
                 session, org_id, recording.id, run_dir, f"video-page{page_capture.page_index}.webm",
                 page_capture.page_index, page_capture.video_path,
                 page_capture.video_started_at_ms, page_capture.video_ended_at_ms, page_capture.actions,
+            )
+
+        for extraction in (page_extractions or []):
+            session.add(
+                PageExtraction(
+                    recording_id=recording.id,
+                    page_index=extraction["page_index"],
+                    url=extraction["url"],
+                    data=extraction["data"],
+                )
             )
 
         if request_id is not None:
@@ -230,6 +242,26 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
             "role": recording.role,
             "pages": pages,
         }
+
+
+def list_page_extractions(recording_id: uuid.UUID) -> list[dict]:
+    with session_scope() as session:
+        extractions = (
+            session.query(PageExtraction)
+            .filter_by(recording_id=recording_id)
+            .order_by(PageExtraction.extracted_at)
+            .all()
+        )
+        return [
+            {
+                "id": str(e.id),
+                "page_index": e.page_index,
+                "url": e.url,
+                "data": e.data,
+                "extracted_at": e.extracted_at.isoformat(),
+            }
+            for e in extractions
+        ]
 
 
 def _caption_for(action: RecordedAction) -> str:

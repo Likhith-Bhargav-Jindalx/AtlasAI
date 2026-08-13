@@ -7,13 +7,14 @@ from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import (
     Organization,
+    PageExtraction,
     PortalProfile,
     Recording,
     ReferenceTrajectory,
     VideoAsset,
     VideoStep,
 )
-from atlas_engine.recording_service import persist_recording
+from atlas_engine.recording_service import list_page_extractions, persist_recording
 
 
 def test_persist_recording_creates_recording_and_trajectory(fixture_portal_url):
@@ -255,3 +256,37 @@ def test_create_list_and_claim_recording_request(fixture_portal_url):
         request = session.get(RecordingRequest, request_id)
         assert request.claimed_by == developer_id
         assert request.claimed_at is not None
+
+
+def test_persist_recording_stores_page_extractions(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Extraction Org", slug=f"extraction-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    recording_id = persist_recording(
+        org_id, start_url, [],
+        page_extractions=[
+            {"page_index": 0, "url": f"{fixture_portal_url}/extraction_target.html", "data": {"fields": {"mrn": "MRN-4821"}, "tables": []}},
+        ],
+    )
+
+    extractions = list_page_extractions(recording_id)
+    assert len(extractions) == 1
+    assert extractions[0]["page_index"] == 0
+    assert extractions[0]["url"] == f"{fixture_portal_url}/extraction_target.html"
+    assert extractions[0]["data"]["fields"]["mrn"] == "MRN-4821"
+
+
+def test_list_page_extractions_returns_empty_list_when_none_exist(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="No Extraction Org", slug=f"no-extraction-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    assert list_page_extractions(recording_id) == []
