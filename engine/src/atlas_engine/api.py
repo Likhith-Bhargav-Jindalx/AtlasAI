@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from atlas_engine.auth.passwords import verify_password
 from atlas_engine.auth.session import create_session_token, verify_session_token
-from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run
+from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.config import settings
@@ -238,6 +238,15 @@ def get_authoring_run_endpoint(authoring_run_id: str) -> AuthoringRunDetailRespo
 def resume_authoring_run_endpoint(authoring_run_id: str) -> dict:
     try:
         resume_authoring_run(uuid.UUID(authoring_run_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True}
+
+
+@app.post("/authoring-runs/{authoring_run_id}/stop")
+def stop_authoring_run_endpoint(authoring_run_id: str) -> dict:
+    try:
+        stop_authoring_run(uuid.UUID(authoring_run_id))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return {"ok": True}
