@@ -1,8 +1,13 @@
 import dataclasses
 import threading
+import uuid
 
-from atlas_engine.brain.models import TrajectoryStep
+from atlas_engine.authoring.events import log_event
+from atlas_engine.authoring.state import update_run
+from atlas_engine.brain.loop import run_step
+from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 from atlas_engine.capture.events import RecordedAction
+from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.trajectory.extract import expected_effect_for_action
 
 
@@ -44,3 +49,67 @@ def _splice_developer_actions(
     ]
     combined = list(before) + converted + list(after)
     return [dataclasses.replace(step, index=i) for i, step in enumerate(combined)]
+
+
+def run_replay_phase(
+    page, trajectory: ReferenceTrajectory, authoring_run_id: uuid.UUID,
+    resume_event: threading.Event, stop_event: threading.Event,
+) -> ReferenceTrajectory | None:
+    """Deterministic, non-LLM re-run of the recorded trajectory, headed so
+    a developer can watch and — on a step failure — intervene directly in
+    the live browser. Returns the (possibly developer-corrected)
+    trajectory, or None if stopped mid-replay or while paused."""
+    steps = list(trajectory.steps)
+    i = 0
+    while i < len(steps):
+        if stop_event.is_set():
+            return None
+
+        step = steps[i]
+        try:
+            outcome = run_step(page, step)
+        except Exception:
+            outcome = None
+
+        if outcome is not None and outcome.on_track:
+            log_event(
+                authoring_run_id, phase="replay", step_index=step.index,
+                message=f"Step {step.index}: {step.kind} - OK",
+            )
+            i += 1
+            continue
+
+        log_event(
+            authoring_run_id, phase="replay", step_index=step.index, level="warning",
+            message=f"Step {step.index}: {step.kind} failed, waiting for developer",
+        )
+        update_run(authoring_run_id, status="waiting_for_developer")
+
+        # KNOWN LIMITATION: a fresh CaptureSession is created per pause, but
+        # CaptureSession.__enter__ calls page.expose_binding("__atlas_record", ...),
+        # and Playwright raises if that name is already registered on the page —
+        # it is, from any *earlier* pause in this same run_replay_phase call.
+        # A second developer-intervention pause within one run will therefore
+        # raise here instead of pausing cleanly. Fixing this needs either a
+        # way to reset/reuse one CaptureSession's recording window across
+        # pauses, or a public unbind/reset hook on CaptureSession itself
+        # (recorder.py) — out of scope for this task, which only exercises
+        # zero-pause and single-pause-then-stop trajectories.
+        capture = CaptureSession(page)
+        capture.__enter__()
+        wait_result = _wait_for_resume_or_stop(resume_event, stop_event)
+        capture.__exit__(None, None, None)
+
+        if wait_result == "stopped":
+            return None
+
+        developer_actions: list[RecordedAction] = capture.actions
+        steps = _splice_developer_actions(steps, i, developer_actions)
+        update_run(authoring_run_id, status="running")
+        log_event(
+            authoring_run_id, phase="replay", step_index=i,
+            message=f"Developer resolved step {step.index} with {len(developer_actions)} action(s)",
+        )
+        i += len(developer_actions)
+
+    return ReferenceTrajectory(steps=tuple(steps))
