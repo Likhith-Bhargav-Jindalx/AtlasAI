@@ -144,6 +144,12 @@ export function AuthoringPage() {
           </div>
         ))}
 
+        {extractions.isError && (
+          <div className="bg-atlas-card border border-atlas-border rounded-2xl px-[18px] py-3.5 text-[13px] text-atlas-diffOldText">
+            Could not load page extractions: {(extractions.error as Error).message}
+          </div>
+        )}
+
         {extractions.data && extractions.data.length > 0 && (
           <PageExtractionsList extractions={extractions.data} />
         )}
