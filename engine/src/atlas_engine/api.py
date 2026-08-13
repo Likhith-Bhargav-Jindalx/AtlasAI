@@ -1,4 +1,5 @@
 import uuid
+from pathlib import Path
 
 from fastapi import Cookie, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,7 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import User, VideoAsset
+from atlas_engine.db.models import AuthoringRun, AuthoringRunEvent, CertificationRun, GoldenScript, User, VideoAsset
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import (
@@ -148,6 +149,89 @@ def author_from_recording_endpoint(recording_id: str) -> StartAuthoringRunRespon
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return StartAuthoringRunResponse(authoring_run_id=str(authoring_run_id))
+
+
+class AuthoringRunEventResponse(BaseModel):
+    phase: str
+    step_index: int | None = None
+    level: str
+    message: str
+
+
+class CertificationRunResponse(BaseModel):
+    run_number: int
+    status: str
+    failure_evidence_blob_ref: str | None = None
+
+
+class GoldenScriptSummaryResponse(BaseModel):
+    id: str
+    version: int
+    status: str
+    script_text: str | None = None
+
+
+class AuthoringRunDetailResponse(BaseModel):
+    id: str
+    status: str
+    current_phase: str
+    repair_attempt: int
+    events: list[AuthoringRunEventResponse]
+    golden_script: GoldenScriptSummaryResponse | None = None
+    certification_runs: list[CertificationRunResponse]
+
+
+@app.get("/authoring-runs/{authoring_run_id}", response_model=AuthoringRunDetailResponse)
+def get_authoring_run_endpoint(authoring_run_id: str) -> AuthoringRunDetailResponse:
+    with session_scope() as session:
+        run = session.get(AuthoringRun, uuid.UUID(authoring_run_id))
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"No such authoring run: {authoring_run_id}")
+
+        events = (
+            session.query(AuthoringRunEvent)
+            .filter_by(authoring_run_id=run.id)
+            .order_by(AuthoringRunEvent.seq)
+            .all()
+        )
+        certification_runs = (
+            session.query(CertificationRun)
+            .filter_by(authoring_run_id=run.id)
+            .order_by(CertificationRun.run_number)
+            .all()
+        )
+
+        golden_script = None
+        if run.golden_script_id is not None:
+            golden = session.get(GoldenScript, run.golden_script_id)
+            if golden is not None:
+                script_text = None
+                script_path = Path(golden.script_blob_ref)
+                if script_path.exists():
+                    script_text = script_path.read_text()
+                golden_script = GoldenScriptSummaryResponse(
+                    id=str(golden.id), version=golden.version, status=golden.status, script_text=script_text,
+                )
+
+        return AuthoringRunDetailResponse(
+            id=str(run.id),
+            status=run.status,
+            current_phase=run.current_phase,
+            repair_attempt=run.repair_attempt,
+            events=[
+                AuthoringRunEventResponse(
+                    phase=e.phase, step_index=e.step_index, level=e.level, message=e.message,
+                )
+                for e in events
+            ],
+            golden_script=golden_script,
+            certification_runs=[
+                CertificationRunResponse(
+                    run_number=c.run_number, status=c.status, failure_evidence_blob_ref=c.failure_evidence_blob_ref,
+                )
+                for c in certification_runs
+            ],
+        )
 
 
 class LoginBody(BaseModel):
