@@ -21,3 +21,23 @@ def test_collect_page_data_extracts_table_and_labeled_fields(fixture_portal_url)
     assert table["name"] == "visits_table"
     assert table["headers"] == ["Date", "Reason"]
     assert table["rows"] == [["2026-08-01", "Checkup"], ["2026-07-15", "Follow-up"]]
+
+
+def test_attach_extraction_button_notifies_on_click(fixture_portal_url):
+    from atlas_engine.capture.extraction import attach_extraction_button
+
+    requested_pages = []
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        attach_extraction_button(context, requested_pages.append)
+        page = context.new_page()
+        page.goto(f"{fixture_portal_url}/extraction_target.html")
+
+        page.click("#__atlasGrabBtn")
+        page.wait_for_function("document.getElementById('__atlasGrabBtn').textContent.includes('captured')")
+
+        browser.close()
+
+    assert requested_pages == [page]

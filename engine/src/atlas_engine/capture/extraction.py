@@ -1,6 +1,6 @@
-from typing import Any
+from typing import Any, Callable
 
-from playwright.sync_api import Page
+from playwright.sync_api import BrowserContext, Page
 
 # Ported verbatim from the previous Atlas AI application
 # (/Users/apple/Desktop/atlasAI/core/src/capture/grabEmit.ts, lines 22-82).
@@ -119,3 +119,26 @@ def collect_page_data(page: Page) -> dict[str, Any]:
         merged["fields"].update(data.get("fields") or {})
         merged["tables"].extend(data.get("tables") or [])
     return merged
+
+
+def attach_extraction_button(context: BrowserContext, on_requested: Callable[[Page], None]) -> None:
+    """Mounts the floating extraction button in every page (current and
+    future) of `context`. The button's click handler only calls the
+    exposed binding to notify Python — it carries no payload and Python
+    must not run any nested Playwright call (e.g. frame.evaluate) from
+    inside `_on_grab` below, since a sync-API binding callback making a
+    synchronous call back into the same page deadlocks (see
+    capture/recorder.py's _LISTENER_SCRIPT comment for the established
+    precedent this follows). on_requested is called with the Page that
+    was clicked; the actual data collection (collect_page_data) must
+    happen later, back on the thread that owns this context's Playwright
+    connection — not from inside on_requested itself unless the caller
+    already guarantees that thread-ownership, which live_capture.py's
+    wiring in Task 3 is responsible for."""
+    context.add_init_script(BUTTON)
+
+    def _on_grab(source: dict) -> dict:
+        on_requested(source["page"])
+        return {"summary": "captured"}
+
+    context.expose_binding("__atlasGrab", _on_grab)
