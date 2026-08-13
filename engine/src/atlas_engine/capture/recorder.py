@@ -13,6 +13,7 @@ _LISTENER_SCRIPT = """
 (() => {
   const push = (kind, el, value) => {
     if (!el) return;
+    if (el.closest && el.closest('#__atlasGrabBtn')) return;
     window.__atlas_record({
       kind,
       value: value ?? null,

@@ -1,3 +1,4 @@
+import logging
 import shutil
 import threading
 import time
@@ -9,6 +10,8 @@ from atlas_engine.capture.extraction import attach_extraction_button, collect_pa
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
 from atlas_engine.recording_service import PageCapture, persist_recording
+
+logger = logging.getLogger(__name__)
 
 _sessions: dict[uuid.UUID, "_LiveCaptureSession"] = {}
 _registry_lock = threading.Lock()
@@ -105,17 +108,31 @@ class _LiveCaptureSession:
 
                     while pending_grab_pages:
                         grabbed_page = pending_grab_pages.pop(0)
-                        page_index = _resolve_page_index(grabbed_page, page, extra_captures)
-                        if page_index is None:
-                            continue
-                        collected = collect_page_data(grabbed_page)
-                        if not collected["fields"] and not collected["tables"]:
-                            continue
-                        pending_extractions.append({
-                            "page_index": page_index,
-                            "url": grabbed_page.url,
-                            "data": collected,
-                        })
+                        try:
+                            page_index = _resolve_page_index(grabbed_page, page, extra_captures)
+                            if page_index is None:
+                                logger.warning(
+                                    "Dropping page extraction: clicked page is not yet tracked "
+                                    "(likely raced a not-yet-attached popup)"
+                                )
+                                continue
+                            collected = collect_page_data(grabbed_page)
+                            if not collected["fields"] and not collected["tables"]:
+                                logger.warning(
+                                    "Dropping page extraction for page_index=%s url=%s: "
+                                    "no fields or tables found",
+                                    page_index, grabbed_page.url,
+                                )
+                                continue
+                            pending_extractions.append({
+                                "page_index": page_index,
+                                "url": grabbed_page.url,
+                                "data": collected,
+                            })
+                        except Exception:
+                            # Best-effort side feature: a failed extraction must
+                            # never take down the whole recording.
+                            logger.exception("Failed to process a page-extraction request")
 
                 with CaptureSession(page) as capture:
                     if _wait_for_stop_or_disconnect(self.stop_event, page, on_tick=_attach_new_pages):

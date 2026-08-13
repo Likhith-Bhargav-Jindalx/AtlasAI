@@ -1,5 +1,6 @@
 from playwright.sync_api import sync_playwright
 
+from atlas_engine.capture.extraction import attach_extraction_button
 from atlas_engine.capture.recorder import CaptureSession
 
 
@@ -68,3 +69,32 @@ def test_exit_after_browser_disconnected_finalizes_without_querying_the_page(fix
     action = capture.actions[0]
     assert action.url_after == action.url_before
     assert action.dom_after == action.dom_before
+
+
+def test_capture_session_ignores_clicks_on_the_extraction_button(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
+        grabbed_pages = []
+        attach_extraction_button(context, grabbed_pages.append)
+
+        page.goto(f"{fixture_portal_url}/login.html")
+        page.wait_for_selector("#__atlasGrabBtn")
+
+        with CaptureSession(page) as capture:
+            page.click("#__atlasGrabBtn")
+            page.fill("#username", "demo")  # a real action, to prove capture still works
+
+        browser.close()
+
+    # The button click really happened (it notified Python)...
+    assert grabbed_pages == [page]
+    # ...but it must never show up as a recorded trajectory step, since the
+    # button only exists during live capture and can never be replayed.
+    assert not any(
+        candidate["selector"] == "#__atlasGrabBtn"
+        for action in capture.actions
+        for candidate in action.selector_candidates
+    )
+    assert [action.kind for action in capture.actions] == ["fill"]
