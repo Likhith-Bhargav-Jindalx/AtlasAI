@@ -68,4 +68,5 @@ def test_recording_author_endpoint(fixture_portal_url):
     response = client.post(f"/recordings/{recording_id}/author")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "certified"
+    assert "authoring_run_id" in response.json()
+    uuid.UUID(response.json()["authoring_run_id"])  # raises ValueError if not a real UUID

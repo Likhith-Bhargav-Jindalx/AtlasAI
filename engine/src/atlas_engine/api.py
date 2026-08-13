@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from atlas_engine.auth.passwords import verify_password
 from atlas_engine.auth.session import create_session_token, verify_session_token
-from atlas_engine.authoring_service import author_from_recording
+from atlas_engine.authoring.run import start_authoring_run
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.config import settings
@@ -136,11 +136,18 @@ def claim_recording_request_endpoint(request_id: str, body: ClaimRequestBody) ->
     return {"ok": True}
 
 
-@app.post("/recordings/{recording_id}/author", response_model=AuthorResponse)
-def author_from_recording_endpoint(recording_id: str) -> AuthorResponse:
+class StartAuthoringRunResponse(BaseModel):
+    authoring_run_id: str
+
+
+@app.post("/recordings/{recording_id}/author", response_model=StartAuthoringRunResponse)
+def author_from_recording_endpoint(recording_id: str) -> StartAuthoringRunResponse:
     llm = create_llm_client()
-    result = author_from_recording(uuid.UUID(recording_id), llm=llm)
-    return AuthorResponse(**result)
+    try:
+        authoring_run_id = start_authoring_run(uuid.UUID(recording_id), llm=llm)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return StartAuthoringRunResponse(authoring_run_id=str(authoring_run_id))
 
 
 class LoginBody(BaseModel):
