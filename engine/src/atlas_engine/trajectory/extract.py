@@ -2,7 +2,7 @@ from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 from atlas_engine.capture.events import RecordedAction
 
 
-def _expected_effect(action: RecordedAction) -> str:
+def expected_effect_for_action(action: RecordedAction) -> str:
     if action.url_before != action.url_after:
         return "url_changed"
     if action.dom_before != action.dom_after:
@@ -19,7 +19,7 @@ def extract_trajectory(actions: list[RecordedAction]) -> ReferenceTrajectory:
             kind=action.kind,
             selector_candidates=action.selector_candidates,
             value=action.value,
-            expected_effect=_expected_effect(action),
+            expected_effect=expected_effect_for_action(action),
         )
         for action in actions
     )
