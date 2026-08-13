@@ -1,4 +1,6 @@
+import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 from atlas_engine.codegen.emit import emit_golden_script
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
@@ -61,3 +63,24 @@ def test_certify_golden_script_once_returns_false_and_evidence_on_failure(tmp_pa
 
     assert passed is False
     assert "boom" in evidence
+
+
+def test_certify_golden_script_once_handles_subprocess_timeout(tmp_path):
+    """subprocess.run(..., timeout=60) raises TimeoutExpired on expiry rather
+    than returning — certify_golden_script_once must catch that and report it
+    as an ordinary (False, evidence) failure rather than letting it propagate
+    and hard-fail the whole authoring run. Mocks subprocess.run instead of
+    actually sleeping 60+ seconds in the test suite."""
+    from atlas_engine.verify.certify import certify_golden_script_once
+
+    script_path = tmp_path / "slow.py"
+    script_path.write_text("import time\ntime.sleep(120)\n")
+
+    timeout_exc = subprocess.TimeoutExpired(cmd=["python", str(script_path)], timeout=60, output="partial-out", stderr="partial-err")
+    with patch("atlas_engine.verify.certify.subprocess.run", side_effect=timeout_exc):
+        passed, evidence = certify_golden_script_once(script_path)
+
+    assert passed is False
+    assert "timed out" in evidence
+    assert "partial-out" in evidence
+    assert "partial-err" in evidence

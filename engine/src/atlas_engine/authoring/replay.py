@@ -66,10 +66,12 @@ def run_replay_phase(
             return None
 
         step = steps[i]
+        exc: Exception | None = None
         try:
             outcome = run_step(page, step)
-        except Exception:
+        except Exception as caught_exc:
             outcome = None
+            exc = caught_exc
 
         if outcome is not None and outcome.on_track:
             log_event(
@@ -79,9 +81,10 @@ def run_replay_phase(
             i += 1
             continue
 
+        failure_reason = str(exc) if exc is not None else "effect did not match"
         log_event(
             authoring_run_id, phase="replay", step_index=step.index, level="warning",
-            message=f"Step {step.index}: {step.kind} failed, waiting for developer",
+            message=f"Step {step.index}: {step.kind} failed ({failure_reason}), waiting for developer",
         )
         update_run(authoring_run_id, status="waiting_for_developer")
 
@@ -103,7 +106,7 @@ def run_replay_phase(
         if wait_result == "stopped":
             return None
 
-        developer_actions: list[RecordedAction] = capture.actions
+        developer_actions: list[RecordedAction] = list(capture.actions)
         steps = _splice_developer_actions(steps, i, developer_actions)
         update_run(authoring_run_id, status="running")
         log_event(

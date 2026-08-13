@@ -36,12 +36,17 @@ def certify_golden_script_once(script_path: Path, *, args: list[str] | None = No
     this exposes per-run failure evidence — the authoring orchestrator
     needs one CertificationRun row per attempt, each with its own
     evidence when it fails."""
-    result = subprocess.run(
-        [sys.executable, str(script_path), *(args or [])],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, str(script_path), *(args or [])],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+        return False, f"timed out after 60s\n{stdout}{stderr}"
     if result.returncode == 0:
         return True, None
     return False, (result.stdout or "") + (result.stderr or "")

@@ -86,6 +86,7 @@ class _AuthoringRunSession:
                 browser.close()
 
             if trajectory is None:
+                log_event(self.authoring_run_id, phase="replay", message="Run cancelled")
                 update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                 return
 
@@ -94,6 +95,7 @@ class _AuthoringRunSession:
 
             while True:
                 if self.stop_event.is_set():
+                    log_event(self.authoring_run_id, phase="extract", message="Run cancelled")
                     update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                     return
 
@@ -110,6 +112,7 @@ class _AuthoringRunSession:
                     browser.close()
 
                 if self.stop_event.is_set():
+                    log_event(self.authoring_run_id, phase="brain", message="Run cancelled")
                     update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                     return
 
@@ -140,6 +143,7 @@ class _AuthoringRunSession:
                 update_run(self.authoring_run_id, golden_script_id=golden_script_id)
 
                 if self.stop_event.is_set():
+                    log_event(self.authoring_run_id, phase="golden", message="Run cancelled")
                     update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                     return
 
@@ -150,6 +154,7 @@ class _AuthoringRunSession:
                 )
 
                 if self.stop_event.is_set():
+                    log_event(self.authoring_run_id, phase="certifying", message="Run cancelled")
                     update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                     return
 
@@ -170,9 +175,17 @@ class _AuthoringRunSession:
                     ),
                 )
 
+            log_event(self.authoring_run_id, phase="certifying", message="Authoring run completed")
             update_run(self.authoring_run_id, status="completed", current_phase="done", ended_at=_now())
         except Exception as exc:  # surfaced to the caller of stop(), and leaves the run in a diagnosable state
             self.error = exc
+            with session_scope() as session:
+                run = session.get(AuthoringRun, self.authoring_run_id)
+                failure_phase = run.current_phase if run is not None else "replay"
+            log_event(
+                self.authoring_run_id, phase=failure_phase, level="error",
+                message=f"{type(exc).__name__}: {exc}",
+            )
             update_run(self.authoring_run_id, status="failed", ended_at=_now())
         finally:
             with _registry_lock:
@@ -215,7 +228,7 @@ def resume_authoring_run(authoring_run_id: uuid.UUID) -> None:
 
 def stop_authoring_run(authoring_run_id: uuid.UUID, *, timeout: float = 30.0) -> None:
     with _registry_lock:
-        session_obj = _sessions.pop(authoring_run_id, None)
+        session_obj = _sessions.get(authoring_run_id)
     if session_obj is None:
         raise ValueError(f"No active authoring run: {authoring_run_id}")
     session_obj.stop(timeout=timeout)
