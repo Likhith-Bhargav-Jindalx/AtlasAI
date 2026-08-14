@@ -26,6 +26,7 @@ from atlas_engine.db.models import (
 )
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
+from atlas_engine.llm.usage import list_llm_usage_summary
 from atlas_engine.recording_service import (
     claim_recording_request,
     create_recording_request,
@@ -93,7 +94,10 @@ def author(request: AuthorRequest) -> AuthorResponse:
 
 @app.post("/golden-scripts/{golden_script_id}/heal", response_model=HealResponse)
 def heal_endpoint(golden_script_id: str) -> HealResponse:
-    llm = create_llm_client()
+    with session_scope() as session:
+        golden = session.get(GoldenScript, uuid.UUID(golden_script_id))
+        usage_context = (str(golden.org_id), str(golden.created_from_recording_id)) if golden else None
+    llm = create_llm_client(usage_context=usage_context)
     result = heal_golden_script(uuid.UUID(golden_script_id), llm=llm)
     return HealResponse(**result)
 
@@ -185,12 +189,22 @@ class StartAuthoringRunResponse(BaseModel):
 def author_from_recording_endpoint(
     recording_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
 ) -> StartAuthoringRunResponse:
-    llm = create_llm_client()
+    with session_scope() as session:
+        recording = session.get(Recording, uuid.UUID(recording_id))
+        usage_context = (str(recording.org_id), recording_id) if recording else None
+    llm = create_llm_client(usage_context=usage_context)
     try:
         authoring_run_id = start_authoring_run(uuid.UUID(recording_id), llm=llm)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return StartAuthoringRunResponse(authoring_run_id=str(authoring_run_id))
+
+
+@app.get("/llm-usage/summary")
+def llm_usage_summary_endpoint(
+    org_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> dict:
+    return list_llm_usage_summary(org_id)
 
 
 class AuthoringRunEventResponse(BaseModel):

@@ -13,7 +13,7 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.capture.video import finalize_video, start_capture_context
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import User
+from atlas_engine.db.models import GoldenScript, Recording, User
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import (
@@ -122,7 +122,10 @@ def author_from_actions(org_id: str, start_url: str, actions_file: str) -> None:
 def heal(golden_script_id: str) -> None:
     """Re-validate a golden script against its live portal and, if a step
     has drifted, propose a repaired version pending approval."""
-    llm = create_llm_client()
+    with session_scope() as session:
+        golden = session.get(GoldenScript, uuid.UUID(golden_script_id))
+        usage_context = (str(golden.org_id), str(golden.created_from_recording_id)) if golden else None
+    llm = create_llm_client(usage_context=usage_context)
     result = heal_golden_script(uuid.UUID(golden_script_id), llm=llm)
     if result["status"] == "already_certified":
         click.echo("Already on-track — nothing to heal.")
@@ -192,7 +195,10 @@ def author(recording_id: str) -> None:
     """Author a golden script from an already-persisted recording —
     the decoupled counterpart to author-from-actions, for recordings that
     already exist as Recording rows (via `atlas record`, by anyone)."""
-    llm = create_llm_client()
+    with session_scope() as session:
+        recording = session.get(Recording, uuid.UUID(recording_id))
+        usage_context = (str(recording.org_id), recording_id) if recording else None
+    llm = create_llm_client(usage_context=usage_context)
     result = author_from_recording(uuid.UUID(recording_id), llm=llm)
     if result["status"] == "certified":
         click.echo(f"CERTIFIED golden script: {result['script_path']}")

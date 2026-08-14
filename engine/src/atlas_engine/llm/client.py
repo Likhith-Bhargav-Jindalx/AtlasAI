@@ -1,7 +1,7 @@
 import base64
 import json
 import re
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import httpx
 
@@ -56,11 +56,15 @@ class AzureOpenAiClient:
     """Azure OpenAI implementation of LlmClient — faithful port of legacy
     AzureOpenAiClient.ts."""
 
-    def __init__(self, endpoint: str, api_key: str, deployment: str, api_version: str = "2024-10-21"):
+    def __init__(
+        self, endpoint: str, api_key: str, deployment: str, api_version: str = "2024-10-21",
+        on_usage: "Callable[[dict], None] | None" = None,
+    ):
         self.endpoint = endpoint.rstrip("/")
         self.api_key = api_key
         self.deployment = deployment
         self.api_version = api_version
+        self.on_usage = on_usage
 
     def complete(
         self,
@@ -117,7 +121,20 @@ class AzureOpenAiClient:
 
         response = httpx.post(url, headers={"api-key": self.api_key}, json=payload, timeout=60.0)
         response.raise_for_status()
-        raw_text = response.json()["choices"][0]["message"]["content"]
+        data = response.json()
+
+        if self.on_usage is not None:
+            try:
+                usage = data.get("usage") or {}
+                self.on_usage({
+                    "model": target_model,
+                    "input_tokens": usage.get("prompt_tokens"),
+                    "output_tokens": usage.get("completion_tokens"),
+                })
+            except Exception:
+                pass
+
+        raw_text = data["choices"][0]["message"]["content"]
         # Clean potential markdown wrappers
         cleaned = re.sub(r"```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
         cleaned = cleaned.replace("```", "").strip()

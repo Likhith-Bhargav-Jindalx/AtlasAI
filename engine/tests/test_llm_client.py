@@ -82,3 +82,59 @@ def test_azure_openai_client_constructs_proper_messages_and_headers(monkeypatch)
     assert user_msg["content"][2]["image_url"]["detail"] == "low"
     assert payload["response_format"] == {"type": "json_object"}
 
+
+def test_azure_client_invokes_on_usage_with_token_counts(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "{}"}}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 45},
+            }
+
+    monkeypatch.setattr("httpx.post", lambda *a, **k: FakeResponse())
+
+    client = AzureOpenAiClient(
+        endpoint="https://x", api_key="k", deployment="gpt-4o",
+        on_usage=lambda usage: captured.update(usage),
+    )
+    client.complete("prompt", json_mode=True)
+
+    assert captured == {"model": "gpt-4o", "input_tokens": 120, "output_tokens": 45}
+
+
+def test_azure_client_on_usage_never_raises_on_malformed_usage(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": "{}"}}]}  # no "usage" key at all
+
+    monkeypatch.setattr("httpx.post", lambda *a, **k: FakeResponse())
+
+    def blow_up(usage):
+        raise RuntimeError("should never propagate")
+
+    client = AzureOpenAiClient(endpoint="https://x", api_key="k", deployment="gpt-4o", on_usage=blow_up)
+    result = client.complete("prompt", json_mode=True)
+    assert result == {}
+
+
+def test_azure_client_without_on_usage_is_unaffected(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"ok": true}'}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
+    monkeypatch.setattr("httpx.post", lambda *a, **k: FakeResponse())
+
+    client = AzureOpenAiClient(endpoint="https://x", api_key="k", deployment="gpt-4o")
+    assert client.complete("prompt", json_mode=True) == {"ok": True}
+
