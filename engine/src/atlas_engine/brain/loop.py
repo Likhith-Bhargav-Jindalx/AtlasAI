@@ -624,6 +624,23 @@ class BrainLoop:
                     done = True
                     break
 
+                if repair.action == "reexec_prev":
+                    # Re-run the PREVIOUS step (a silently failed prior action),
+                    # then retry the current one — the old app re-executes
+                    # prevIdx (best-effort, never verified) and lets the loop
+                    # retry this step. No previous step → REJECTED feedback.
+                    act_key = json.dumps(dataclasses.asdict(repair), default=str)
+                    attempts.append(f"(applied) ::{act_key}")
+                    if pos > 0:
+                        try:
+                            self._execute(steps[pos - 1], shot_dir)
+                        except Exception:
+                            pass
+                        attempts.append("reexec_prev")
+                    else:
+                        attempts.append("reexec_prev — REJECTED: no previous step")
+                    continue
+
                 if repair.action == "remove_step":
                     # Drop the entry — it is never verified, never emitted.
                     attempts.append(f"remove_step ({repair.reason}) — recorded action was a fumble/no-op")
@@ -775,10 +792,6 @@ class BrainLoop:
                 except Exception:
                     ok = False
             attempts.append(f"dismiss {repair.selector} → {'clicked' if ok else 'not visible'}")
-            return step, True
-
-        if repair.action == "reexec_prev":
-            attempts.append("reexec_prev")
             return step, True
 
         return step, False
