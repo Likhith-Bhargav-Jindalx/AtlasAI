@@ -1,9 +1,11 @@
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../auth/AuthContext'
 import { useClaimRecordingRequest, useRecordingRequests } from '../../lib/recordingRequests'
 import { useRecordings } from '../../lib/recordings'
 import { StatusPill } from '../../components/StatusPill'
 
 export function RequestQueuePage() {
+  const navigate = useNavigate()
   const { user } = useAuth()
   const orgId = user!.org_id
   const { data: openRequests } = useRecordingRequests(orgId, 'open')
@@ -59,9 +61,12 @@ export function RequestQueuePage() {
                 <div className="text-[12.5px] text-atlas-body">{r.target_url}</div>
               </div>
               {recording ? (
-                <a href={`/dev/recordings/${recording.id}`} className="text-[12.5px] text-atlas-primary font-medium">
+                <button
+                  onClick={() => navigate(`/dev/recordings/${recording.id}`)}
+                  className="text-[12.5px] text-atlas-primary font-medium bg-transparent border-0 cursor-pointer p-0 hover:underline"
+                >
                   Open recording →
-                </a>
+                </button>
               ) : (
                 <span className="text-[12.5px] text-atlas-muted">Waiting for a recording</span>
               )}
