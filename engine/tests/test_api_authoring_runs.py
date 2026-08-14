@@ -165,7 +165,7 @@ def test_full_authoring_run_via_http_reaches_certified(fixture_portal_url):
     assert start_response.status_code == 200
     authoring_run_id = start_response.json()["authoring_run_id"]
 
-    deadline = time.time() + 90
+    deadline = time.time() + 180
     while time.time() < deadline:
         poll = client.get(f"/authoring-runs/{authoring_run_id}")
         assert poll.status_code == 200

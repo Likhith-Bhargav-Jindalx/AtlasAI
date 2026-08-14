@@ -334,3 +334,26 @@ def test_list_page_extractions_returns_empty_list_when_none_exist(fixture_portal
     recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
 
     assert list_page_extractions(recording_id) == []
+
+
+def test_get_recording_detail_synthesizes_codegen_script_when_missing(fixture_portal_url):
+    from atlas_engine.recording_service import get_recording_detail
+
+    with session_scope() as session:
+        org = Organization(name="Codegen Auto Org", slug=f"codegen-auto-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    actions = [
+        RecordedAction(0, "fill", [{"selector": "#username", "rank": 0}], "user1", f"{fixture_portal_url}/login.html", f"{fixture_portal_url}/login.html", "", ""),
+        RecordedAction(1, "click", [{"selector": "#login-btn", "rank": 0}], None, f"{fixture_portal_url}/login.html", f"{fixture_portal_url}/dashboard.html", "", ""),
+    ]
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", actions)
+
+    detail = get_recording_detail(recording_id)
+    assert detail["codegen_script"] is not None
+    assert "#username" in detail["codegen_script"]
+    assert "#login-btn" in detail["codegen_script"]
+

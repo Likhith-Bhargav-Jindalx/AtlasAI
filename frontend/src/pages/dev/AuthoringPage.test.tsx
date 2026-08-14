@@ -171,3 +171,46 @@ describe('AuthoringPage recorded script', () => {
     expect(screen.getByText(/page\.goto\("https:\/\/portal\.example"\)/)).toBeInTheDocument()
   })
 })
+
+describe('AuthoringPage progress persistence', () => {
+  it('automatically resumes tracking an existing run from latest_authoring_run_id on refresh', async () => {
+    const RUN_DETAIL: AuthoringRunDetail = {
+      id: 'run-persisted',
+      status: 'completed',
+      current_phase: 'done',
+      repair_attempt: 0,
+      events: [{ phase: 'done', step_index: null, level: 'info', message: 'Authoring complete' }],
+      golden_script: {
+        id: 'gold-1',
+        version: 1,
+        status: 'certified',
+        script_text: 'def run(): pass',
+      },
+      certification_runs: [],
+    }
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        const path = String(url).replace('http://localhost:8000', '')
+        if (path === '/recordings/rec-1') {
+          return Promise.resolve(
+            jsonResponse({
+              ...RECORDING,
+              latest_authoring_run_id: 'run-persisted',
+            }),
+          )
+        }
+        if (path === '/recordings/rec-1/extractions') return Promise.resolve(jsonResponse([]))
+        if (path === '/authoring-runs/run-persisted') return Promise.resolve(jsonResponse(RUN_DETAIL))
+        return Promise.reject(new Error(`unexpected fetch: ${path}`))
+      }),
+    )
+
+    renderPage()
+
+    expect(await screen.findByText(/Authoring complete/i)).toBeInTheDocument()
+    expect(screen.getByText(/Golden script v1/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Regenerate golden script' })).toBeEnabled()
+  })
+})

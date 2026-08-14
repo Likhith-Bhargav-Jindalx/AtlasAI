@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft } from 'lucide-react'
 import { useRecordingDetail } from '../../lib/recordings'
@@ -15,7 +15,6 @@ import { GoldenScriptViewer } from '../../components/GoldenScriptViewer'
 import { PageExtractionsList } from '../../components/PageExtractionsList'
 import { RecordingScriptViewer } from '../../components/RecordingScriptViewer'
 import { PipelineTimeline } from '../../components/PipelineTimeline'
-import { StepsViewer } from '../../components/StepsViewer'
 import { useRecordingExtractions } from '../../lib/extractions'
 import { formatDuration } from '../../lib/format'
 
@@ -25,9 +24,17 @@ export function AuthoringPage() {
   const { data: recording, isLoading } = useRecordingDetail(recordingId)
 
   const [authoringRunId, setAuthoringRunId] = useState<string | undefined>(undefined)
+
+  useEffect(() => {
+    if (recording?.latest_authoring_run_id && authoringRunId === undefined) {
+      setAuthoringRunId(recording.latest_authoring_run_id)
+    }
+  }, [recording?.latest_authoring_run_id, authoringRunId])
+
+  const effectiveRunId = authoringRunId ?? recording?.latest_authoring_run_id ?? undefined
   const startRun = useStartAuthoringRun(recordingId!)
-  const authoringRun = useAuthoringRun(authoringRunId)
-  const stopRun = useStopAuthoringRun(authoringRunId)
+  const authoringRun = useAuthoringRun(effectiveRunId)
+  const stopRun = useStopAuthoringRun(effectiveRunId)
   const extractions = useRecordingExtractions(recordingId)
 
   if (isLoading || !recording) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
@@ -42,7 +49,7 @@ export function AuthoringPage() {
   // those two moments `run` is still undefined, so without this guard the
   // primary button would flip back to an enabled "Generate golden script" and a
   // second click would launch a second real pipeline we can neither see nor stop.
-  const hasRun = authoringRunId !== undefined
+  const hasRun = effectiveRunId !== undefined
   const awaitingFirstRunData = hasRun && !authoringRun.isError && (authoringRun.isLoading || run === undefined)
   const primaryDisabled = startRun.isPending || awaitingFirstRunData
   const primaryLabel =
@@ -121,11 +128,7 @@ export function AuthoringPage() {
           </div>
         )}
 
-        {recording.codegen_script !== undefined && (
-          <RecordingScriptViewer script={recording.codegen_script} />
-        )}
-
-        <StepsViewer steps={recording.pages.flatMap((page) => page.steps)} />
+        <RecordingScriptViewer script={recording.codegen_script} />
 
         {recording.pages.map((page) => (
           <div key={page.page_index} className="flex flex-col gap-3">

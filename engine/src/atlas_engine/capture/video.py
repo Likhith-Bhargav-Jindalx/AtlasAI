@@ -13,7 +13,7 @@ def start_capture_context(browser: Browser) -> tuple[BrowserContext, Page, int, 
     that directory once the path returned by finalize_video has been
     consumed (persist_recording reads it into permanent storage)."""
     video_dir = Path(tempfile.mkdtemp(prefix="atlas-video-"))
-    context = browser.new_context(record_video_dir=str(video_dir))
+    context = browser.new_context(record_video_dir=str(video_dir), accept_downloads=True)
     started_at_ms = int(time.time() * 1000)
     page = context.new_page()
     return context, page, started_at_ms, video_dir

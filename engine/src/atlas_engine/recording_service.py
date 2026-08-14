@@ -9,6 +9,7 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import (
+    AuthoringRun,
     PageExtraction,
     PortalProfile,
     Recording,
@@ -60,12 +61,12 @@ def persist_recording(
     run_dir = store.new_run_dir(prefix="recordings")
     run_dir.write_json("actions.json", [vars(a) for a in actions])
 
-    if codegen_script is not None:
-        (run_dir.path / "codegen.py").write_text(codegen_script)
-
     trajectory = extract_trajectory(actions)
     trajectory_path = run_dir.path / "trajectory.json"
     trajectory_path.write_text(json.dumps(trajectory_to_dict(trajectory), indent=2))
+
+    if codegen_script is not None:
+        (run_dir.path / "codegen.py").write_text(codegen_script)
 
     profile_data = infer_portal_profile(start_url, actions)
 
@@ -242,14 +243,48 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
             })
 
         codegen_script = None
-        codegen_path = Path(settings.ensure_run_root()) / recording.capture_blob_prefix / "codegen.py"
+        run_root = Path(settings.ensure_run_root())
+        codegen_path = run_root / recording.capture_blob_prefix / "codegen.py"
+        if not codegen_path.exists():
+            codegen_path = Path(recording.capture_blob_prefix) / "codegen.py"
+
         if codegen_path.exists() and codegen_path.stat().st_size > 0:
             codegen_script = codegen_path.read_text()
+        else:
+            traj_path = run_root / recording.capture_blob_prefix / "trajectory.json"
+            if not traj_path.exists():
+                traj_path = Path(recording.capture_blob_prefix) / "trajectory.json"
+            if traj_path.exists() and traj_path.stat().st_size > 0:
+                try:
+                    from atlas_engine.brain.serialize import trajectory_from_dict
+                    from atlas_engine.codegen.emit import emit_golden_script
+                    traj_dict = json.loads(traj_path.read_text())
+                    traj = trajectory_from_dict(traj_dict)
+                    if traj.steps:
+                        profile = session.get(PortalProfile, recording.portal_profile_id)
+                        inferred_url = profile.inferred_login_url if profile else "http://localhost/"
+                        start_url = inferred_url or "http://localhost/"
+                        codegen_script = emit_golden_script(traj, start_url=start_url)
+                        try:
+                            codegen_path.write_text(codegen_script)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+        latest_run = (
+            session.query(AuthoringRun)
+            .filter_by(recording_id=recording.id)
+            .order_by(AuthoringRun.created_at.desc())
+            .first()
+        )
+        latest_authoring_run_id = str(latest_run.id) if latest_run is not None else None
 
         return {
             "id": str(recording.id),
             "status": recording.status,
             "role": recording.role,
+            "latest_authoring_run_id": latest_authoring_run_id,
             "codegen_script": codegen_script,
             "pages": pages,
         }

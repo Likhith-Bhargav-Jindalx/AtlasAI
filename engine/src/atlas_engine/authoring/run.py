@@ -108,20 +108,39 @@ class _AuthoringRunSession:
                 )
 
             update_run(self.authoring_run_id, current_phase="replay")
-            with sync_playwright() as playwright:
-                browser = playwright.chromium.launch(headless=False)
-                page = browser.new_page()
-                page.goto(start_url)
-                trajectory = run_replay_phase(
-                    page, trajectory, self.authoring_run_id, self.resume_event, self.stop_event,
+            replayed_trajectory = None
+            try:
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch(headless=False)
+                    context = browser.new_context(accept_downloads=True)
+                    context.set_default_timeout(60000)
+                    context.on("page", lambda p: p.on("dialog", lambda d: d.dismiss()))
+                    page = context.new_page()
+                    page.on("dialog", lambda d: d.dismiss())
+                    try:
+                        page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
+                    except Exception as goto_exc:
+                        log_event(
+                            self.authoring_run_id, phase="replay", level="warning",
+                            message=f"Initial navigation to {start_url} slow or redirected ({goto_exc}) — proceeding with recorded steps",
+                        )
+                    replayed_trajectory = run_replay_phase(
+                        page, trajectory, self.authoring_run_id, self.resume_event, self.stop_event,
+                    )
+                    browser.close()
+            except Exception as replay_exc:
+                log_event(
+                    self.authoring_run_id, phase="replay", level="warning",
+                    message=f"Replay stopped early ({replay_exc}) — partial reference captured; the brain will work the rest live.",
                 )
-                browser.close()
+                replayed_trajectory = trajectory
 
-            if trajectory is None:
+            if self.stop_event.is_set() or replayed_trajectory is None:
                 log_event(self.authoring_run_id, phase="replay", message="Run cancelled")
                 update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                 return
 
+            trajectory = replayed_trajectory
             update_run(self.authoring_run_id, current_phase="extract")
             trajectory = run_extract_phase(trajectory)
 
@@ -138,8 +157,18 @@ class _AuthoringRunSession:
                 update_run(self.authoring_run_id, current_phase="brain")
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch(headless=False)
-                    page = browser.new_page()
-                    page.goto(start_url)
+                    context = browser.new_context(accept_downloads=True)
+                    context.set_default_timeout(60000)
+                    context.on("page", lambda p: p.on("dialog", lambda d: d.dismiss()))
+                    page = context.new_page()
+                    page.on("dialog", lambda d: d.dismiss())
+                    try:
+                        page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
+                    except Exception as goto_exc:
+                        log_event(
+                            self.authoring_run_id, phase="brain", level="warning",
+                            message=f"Initial navigation to {start_url}: {goto_exc}",
+                        )
                     result = run_brain_phase(page, trajectory, self.authoring_run_id, llm=self.llm)
                     browser.close()
 

@@ -1,5 +1,7 @@
+import base64
 import json
-from typing import Protocol
+import re
+from typing import Any, Protocol
 
 import httpx
 
@@ -9,9 +11,12 @@ class LlmClient(Protocol):
         self,
         prompt: str,
         *,
-        images: list[bytes] | None = None,
+        system: str | None = None,
+        images: list[dict | bytes] | None = None,
         json_mode: bool = True,
         temperature: float = 0.0,
+        max_tokens: int | None = 700,
+        model: str | None = None,
     ) -> dict: ...
 
 
@@ -26,19 +31,30 @@ class FakeLlmClient:
         self,
         prompt: str,
         *,
-        images: list[bytes] | None = None,
+        system: str | None = None,
+        images: list[dict | bytes] | None = None,
         json_mode: bool = True,
         temperature: float = 0.0,
+        max_tokens: int | None = 700,
+        model: str | None = None,
     ) -> dict:
         self.calls.append(
-            {"prompt": prompt, "images": images, "json_mode": json_mode, "temperature": temperature}
+            {
+                "prompt": prompt,
+                "system": system,
+                "images": images,
+                "json_mode": json_mode,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "model": model,
+            }
         )
         return self._responses.pop(0)
 
 
 class AzureOpenAiClient:
-    """Real client — used in production, never exercised by this plan's
-    automated tests (no credentials required to run the test suite)."""
+    """Azure OpenAI implementation of LlmClient — faithful port of legacy
+    AzureOpenAiClient.ts."""
 
     def __init__(self, endpoint: str, api_key: str, deployment: str, api_version: str = "2024-10-21"):
         self.endpoint = endpoint.rstrip("/")
@@ -50,29 +66,60 @@ class AzureOpenAiClient:
         self,
         prompt: str,
         *,
-        images: list[bytes] | None = None,
+        system: str | None = None,
+        images: list[dict | bytes] | None = None,
         json_mode: bool = True,
         temperature: float = 0.0,
+        max_tokens: int | None = 700,
+        model: str | None = None,
     ) -> dict:
-        content: list[dict] = [{"type": "text", "text": prompt}]
-        for image_bytes in images or []:
-            import base64
+        user_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        for item in images or []:
+            if isinstance(item, dict):
+                img_bytes = item.get("bytes")
+                detail = item.get("detail", "auto")
+            else:
+                img_bytes = item
+                detail = "auto"
 
-            b64 = base64.b64encode(image_bytes).decode("ascii")
-            content.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}})
+            if img_bytes:
+                b64 = base64.b64encode(img_bytes).decode("ascii")
+                img_entry: dict[str, Any] = {"url": f"data:image/png;base64,{b64}"}
+                if detail:
+                    img_entry["detail"] = detail
+                user_content.append({"type": "image_url", "image_url": img_entry})
 
+        messages: list[dict[str, Any]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": user_content})
+
+        target_model = model or self.deployment
         url = (
-            f"{self.endpoint}/openai/deployments/{self.deployment}/chat/completions"
+            f"{self.endpoint}/openai/deployments/{target_model}/chat/completions"
             f"?api-version={self.api_version}"
         )
-        payload = {
-            "messages": [{"role": "user", "content": content}],
-            "temperature": temperature,
+
+        payload: dict[str, Any] = {
+            "messages": messages,
+            "max_tokens": max_tokens or 4096,
         }
+
+        # gpt-5 reasoning models reject a non-default temperature and use reasoning_effort instead
+        is_reasoning = target_model.startswith("gpt-5") and "chat" not in target_model
+        if is_reasoning:
+            payload["reasoning_effort"] = "low"
+        else:
+            payload["temperature"] = temperature
+
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
         response = httpx.post(url, headers={"api-key": self.api_key}, json=payload, timeout=60.0)
         response.raise_for_status()
-        message = response.json()["choices"][0]["message"]["content"]
-        return json.loads(message)
+        raw_text = response.json()["choices"][0]["message"]["content"]
+        # Clean potential markdown wrappers
+        cleaned = re.sub(r"```(?:json)?\s*", "", raw_text, flags=re.IGNORECASE)
+        cleaned = cleaned.replace("```", "").strip()
+        return json.loads(cleaned)
+

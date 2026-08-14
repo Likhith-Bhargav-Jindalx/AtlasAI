@@ -47,9 +47,62 @@ _CODEGEN_EXPR_PREFIX = "codegen_expr:"
 
 _PAGE_ROOT_RE = re.compile(r"^(page\d*)\.(.*)$", re.DOTALL)
 
+# ── visible=true preference ──────────────────────────────────────────────
+# Port of the old app's preferVisible(): the brain's runtime resolver always
+# prefers the VISIBLE element on a multi-match (hidden-duplicate trap — e.g.
+# Waystar's 64× id="Checkbox1"); a frozen `.first` can't, so appending
+# `>> visible=true` picks the visible one.  Only for locator()-based (CSS/id/
+# structural) selectors — get_by_* go through _emit_locator_call which doesn't
+# take the >> filter.  Never for force_click (that step interacts with a
+# deliberately-hidden element).  Placed BEFORE any nth suffix.
+_NTH_SUFFIX_RE = re.compile(r"^(.*?)(\s*>>\s*nth=\d+)\s*$")
 
-def _selector(step: TrajectoryStep) -> str:
-    return sorted(step.selector_candidates, key=lambda c: c["rank"])[0]["selector"]
+
+def _prefer_visible(selector: str, force_click: bool) -> str:
+    """Mirror the brain's runtime behavior ('act on the VISIBLE match') in
+    the static golden.  Ported verbatim from emitGolden.ts preferVisible()."""
+    if force_click:
+        return selector
+    if "visible=true" in selector:
+        return selector
+    # codegen_expr: selectors use get_by_* which don't take >> filters
+    if selector.startswith(_CODEGEN_EXPR_PREFIX):
+        return selector
+    m = _NTH_SUFFIX_RE.match(selector)
+    if m:
+        return f"{m.group(1)} >> visible=true{m.group(2)}"
+    return f"{selector} >> visible=true"
+
+
+# ── session-random ID detection ──────────────────────────────────────────
+# Port of the old app's looksSessionRandom(): an id with a trailing token of
+# 6+ alphanumerics containing a digit, or any 3+ digit run, is common for
+# session-random ids (#search__input__id_jnm8z6qetrg, #ctl00_12345).
+# Conservative: a false positive only costs falling back to the (proven
+# cross-session) next candidate; a false negative freezes an id that breaks.
+
+def _looks_session_random(id_value: str) -> bool:
+    """Ported verbatim from emitGolden.ts looksSessionRandom()."""
+    if re.search(r"\d{3,}", id_value):
+        return True
+    tail = id_value.rsplit("_", 1)[-1].rsplit("-", 1)[-1]
+    return len(tail) >= 6 and bool(re.search(r"\d", tail)) and bool(re.fullmatch(r"[a-zA-Z0-9]+", tail))
+
+
+def _best_selector(step: TrajectoryStep) -> str:
+    """Pick the best selector from a step's candidates, skipping session-random
+    IDs (which break across sessions) and applying visible=true for CSS selectors
+    that might match hidden duplicates.  Ported from emitGolden.ts's selector
+    selection + preferVisible + looksSessionRandom logic."""
+    ranked = sorted(step.selector_candidates, key=lambda c: c["rank"])
+    for cand in ranked:
+        sel = cand["selector"]
+        # Skip session-random bare #id selectors — fall to the next candidate
+        if sel.startswith("#") and _looks_session_random(sel.lstrip("#")):
+            continue
+        return sel
+    # All candidates were session-random — use the first one anyway
+    return ranked[0]["selector"]
 
 
 def _emit_locator_gesture(call: str, step: TrajectoryStep) -> list[str]:
@@ -66,7 +119,7 @@ def _emit_locator_gesture(call: str, step: TrajectoryStep) -> list[str]:
     if step.kind == "hover_click":
         return [f"{call}.hover()", "        page.wait_for_timeout(900)", f"{call}.click()"]
     if step.kind == "dispatch_click":
-        return [f"{call}.dispatch_event(\"click\")"]
+        return [f'{call}.dispatch_event("click")']
     if step.kind == "fill":
         return [f"{call}.fill({step.value!r})"]
     if step.kind == "type":
@@ -95,6 +148,15 @@ def _emit_locator_call(expr: str, step: TrajectoryStep) -> list[str]:
 
 
 def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
+    """Emit a step that uses a plain CSS selector.  The selector has ALREADY
+    been run through _prefer_visible by _emit_step, so it may contain
+    >> visible=true — use page.locator() which supports the >> filter."""
+    # When the selector contains >> visible=true (or any >> filter), we MUST use
+    # page.locator(sel) because page.click(sel) etc. do not support >> filters.
+    use_locator = ">>" in selector
+    if use_locator:
+        call = f"page.locator({selector!r}).first"
+        return _emit_locator_gesture(call, step)
     if step.kind == "click":
         return [f"page.click({selector!r}{', force=True' if step.force_click else ''})"]
     if step.kind == "dblclick":
@@ -104,7 +166,7 @@ def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
     if step.kind == "hover_click":
         return [f"page.hover({selector!r})", "        page.wait_for_timeout(900)", f"page.click({selector!r})"]
     if step.kind == "dispatch_click":
-        return [f"page.locator({selector!r}).dispatch_event(\"click\")"]
+        return [f'page.locator({selector!r}).dispatch_event("click")']
     if step.kind == "fill":
         return [f"page.fill({selector!r}, {step.value!r})"]
     if step.kind == "type":
@@ -121,7 +183,7 @@ def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
 
 
 def _emit_step(step: TrajectoryStep) -> str:
-    selector = _selector(step)
+    selector = _best_selector(step)
     if step.kind == "goto":
         lines = [f"page.goto({selector!r})"]
     elif step.kind == "click_xy":
@@ -132,6 +194,9 @@ def _emit_step(step: TrajectoryStep) -> str:
         "click", "dblclick", "hover", "hover_click", "dispatch_click",
         "fill", "type", "press", "check", "uncheck", "select_option",
     ):
+        # Apply visible=true preference for CSS selectors (ported from
+        # emitGolden.ts preferVisible) — handles hidden-duplicate trap.
+        selector = _prefer_visible(selector, step.force_click)
         lines = _emit_css_step(selector, step)
     else:
         raise ValueError(f"Unsupported step kind for emission: {step.kind}")

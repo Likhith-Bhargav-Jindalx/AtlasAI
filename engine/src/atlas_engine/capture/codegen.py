@@ -227,7 +227,18 @@ def parse_codegen_actions(codegen: str) -> list[CodegenAction]:
 
 
 # Kinds that produce replay steps (kept faithful to the recorded gesture).
-_TRAJECTORY_KINDS = {"goto", "click", "fill", "press", "select_option"}
+_TRAJECTORY_KINDS = {
+    "goto",
+    "click",
+    "dblclick",
+    "fill",
+    "hover",
+    "press",
+    "select_option",
+    "type",
+    "check",
+    "uncheck",
+}
 
 
 def build_codegen_trajectory(codegen_actions: list[CodegenAction]) -> ReferenceTrajectory | None:
@@ -258,6 +269,7 @@ def build_codegen_trajectory(codegen_actions: list[CodegenAction]) -> ReferenceT
                 expected_effect=effect,
                 expects_popup=action.expects_popup,
                 expects_download=action.expects_download,
+                wait_ceiling_ms=60000,
             )
         )
     if not steps:

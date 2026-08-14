@@ -374,6 +374,7 @@ class RecordingDetailResponse(BaseModel):
     id: str
     status: str
     role: str
+    latest_authoring_run_id: str | None = None
     codegen_script: str | None = None
     pages: list[RecordingPageResponse]
 

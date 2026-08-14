@@ -1,5 +1,6 @@
 import json
 import shutil
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -37,26 +38,38 @@ def main() -> None:
 def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
     """Open a headed browser at URL, capture actions until you press Enter,
     persist the recording (with video), and print its ID."""
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
-        context, page, video_started_at_ms, video_dir = start_capture_context(browser)
-        page.goto(url)
+    codegen_dir = None
+    codegen_script = None
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=False)
+            context, page, video_started_at_ms, video_dir = start_capture_context(browser)
+            codegen_dir = Path(tempfile.mkdtemp(prefix="atlas-codegen-"))
+            codegen_path = codegen_dir / "codegen.py"
+            from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers
+            attach_codegen_recorder(context, codegen_path)
+            page.goto(url)
 
-        with CaptureSession(page) as capture:
-            click.echo("Recording... perform your steps in the opened browser, then press Enter here to finish.")
-            input()
+            with CaptureSession(page) as capture:
+                click.echo("Recording... perform your steps in the opened browser, then press Enter here to finish.")
+                input()
+                try:
+                    page.title()
+                except Exception:
+                    capture.mark_browser_disconnected()
+
+            video_path, video_ended_at_ms = finalize_video(context, page)
             try:
-                page.title()
+                browser.close()
             except Exception:
-                capture.mark_browser_disconnected()
+                pass
 
-        video_path, video_ended_at_ms = finalize_video(context, page)
         try:
-            browser.close()
+            if codegen_path.exists() and codegen_path.stat().st_size > 0:
+                codegen_script = strip_extraction_markers(codegen_path.read_text())
         except Exception:
             pass
 
-    try:
         recording_id = persist_recording(
             org_id, url, capture.actions,
             request_id=uuid.UUID(request_id) if request_id else None,
@@ -64,9 +77,13 @@ def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
             video_path=video_path,
             video_started_at_ms=video_started_at_ms,
             video_ended_at_ms=video_ended_at_ms,
+            codegen_script=codegen_script,
         )
     finally:
-        shutil.rmtree(video_dir, ignore_errors=True)
+        if video_dir is not None:
+            shutil.rmtree(video_dir, ignore_errors=True)
+        if codegen_dir is not None:
+            shutil.rmtree(codegen_dir, ignore_errors=True)
     click.echo(f"Recording saved: {recording_id}")
 
 

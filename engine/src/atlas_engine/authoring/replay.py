@@ -31,10 +31,10 @@ def run_replay_phase(
             continue  # page closes are teardown, not flow — never carried forward
 
         try:
-            # The 3000ms fast-fail resolve ceiling keeps an off-track step
-            # cheap during reference replay: its evidence is still captured and
-            # the brain phase repairs it with the ceiling it needs.
-            outcome = run_step(page, step, shot_dir=str(ref_dir))
+            # A 15s resolve ceiling keeps an off-track step bounded during
+            # reference replay while allowing slow portals to render: evidence
+            # is captured and the brain phase repairs with full 60s budget.
+            outcome = run_step(page, step, shot_dir=str(ref_dir), timeout_ms=min(step.wait_ceiling_ms or 15000, 15000))
         except Exception as exc:  # keep the step — the brain repairs it
             log_event(
                 authoring_run_id, phase="replay", step_index=step.index, level="warning",
@@ -61,7 +61,7 @@ def run_replay_phase(
                 ref_shot_after=outcome.shot_after or step.ref_shot_after,
                 identity=outcome.resolved_identity or step.identity,
                 expected_effect=_reference_effect(step, outcome),
-                wait_ceiling_ms=max(30000, (outcome.elapsed_ms or 0) * 10),
+                wait_ceiling_ms=max(30000, (outcome.elapsed_ms or 0) * 10) if outcome.on_track else (step.wait_ceiling_ms or 30000),
             )
         )
 

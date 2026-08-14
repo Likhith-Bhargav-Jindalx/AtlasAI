@@ -3,6 +3,12 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# Certification timeout per run — real portal golden scripts can take 2-3
+# minutes (report generation, download waits, slow SPAs).  The old app used
+# 120s for download steps; 300s is a conservative upper bound that avoids
+# false failures on legitimately slow portals.
+_CERTIFY_TIMEOUT_SECONDS = 300
+
 
 @dataclass(frozen=True)
 class CertificationResult:
@@ -23,7 +29,7 @@ def certify_golden_script(script_path: Path, *, args: list[str] | None = None, r
             [sys.executable, str(script_path), *(args or [])],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_CERTIFY_TIMEOUT_SECONDS,
         )
         if result.returncode == 0:
             succeeded += 1
@@ -41,12 +47,13 @@ def certify_golden_script_once(script_path: Path, *, args: list[str] | None = No
             [sys.executable, str(script_path), *(args or [])],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_CERTIFY_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
         stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return False, f"timed out after 60s\n{stdout}{stderr}"
+        return False, f"timed out after {_CERTIFY_TIMEOUT_SECONDS}s\n{stdout}{stderr}"
     if result.returncode == 0:
         return True, None
     return False, (result.stdout or "") + (result.stderr or "")
+

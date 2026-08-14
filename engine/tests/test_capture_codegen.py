@@ -152,7 +152,7 @@ def test_build_codegen_trajectory_maps_actions_to_steps():
 
 
 def test_build_codegen_trajectory_returns_none_for_unsupported_only():
-    assert build_codegen_trajectory([CodegenAction("hover", "text=Menu")]) is None
+    assert build_codegen_trajectory([CodegenAction("drag_to", "text=Menu")]) is None
     assert build_codegen_trajectory([]) is None
 
 

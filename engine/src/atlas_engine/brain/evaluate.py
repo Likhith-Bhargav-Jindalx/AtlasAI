@@ -1,6 +1,21 @@
+import os
+import re
 from dataclasses import dataclass
 
 from atlas_engine.brain.models import TrajectoryStep
+
+_REDACTED_RE = re.compile(r"<(?:REDACTED|SECRET):([A-Za-z0-9_]+)>")
+
+
+def _rematerialize(val: str | None) -> str:
+    if not val:
+        return ""
+    m = _REDACTED_RE.fullmatch(val.strip())
+    if m:
+        env_var = m.group(1)
+        return os.environ.get(env_var, "")
+    return _REDACTED_RE.sub(lambda match: os.environ.get(match.group(1), ""), val)
+
 
 # Gestures whose PURPOSE is to change the page — for these, "the reference
 # changed the page, live changed nothing" is a silent no-op worth flagging.
@@ -70,6 +85,7 @@ def evaluate(
     Anything else — including a recorded-only-URL change — passes: the previous
     app never REQUIRES a URL change, it only treats the recorded dom change as
     the reference for the silent-no-op gate."""
+    actual_value = _rematerialize(step.value)
     if error:
         on_track = False
     elif step.expects_popup and not popup_opened:
@@ -79,7 +95,7 @@ def evaluate(
     elif (
         step.kind in ("fill", "type")
         and step.value is not None
-        and input_value == step.value
+        and (input_value == step.value or (actual_value and input_value == actual_value))
     ):
         on_track = True
     elif enters_iframe:

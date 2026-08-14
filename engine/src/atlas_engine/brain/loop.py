@@ -2,6 +2,7 @@ import ast
 import dataclasses
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
@@ -16,13 +17,49 @@ from atlas_engine.brain.repair import RepairAction, think
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.llm.sanitize import sanitize_dom
 
-# The recorded selector is expected to match immediately on replay; a short
-# resolve ceiling here means a genuinely stale selector fails fast into repair
-# instead of waiting out Playwright's 30s default on every off-track step.
-# Production trajectories carry wait_ceiling_ms (replay derives it from the
-# recorded step's observed latency), so this default only paces test runs —
-# a latency choice, never a logic one.
-_INITIAL_ATTEMPT_TIMEOUT_MS = 3000
+_REDACTED_RE = re.compile(r"<(?:REDACTED|SECRET):([A-Za-z0-9_]+)>")
+
+
+def _rematerialize(val: str | None) -> str:
+    """A scrubbed value <REDACTED:ENV> or <SECRET:ENV> (secret or PHI input)
+    is re-materialized from os.environ at replay/brain execution time so the
+    live browser types the real credential/input value, never the placeholder."""
+    if not val:
+        return ""
+    m = _REDACTED_RE.fullmatch(val.strip())
+    if m:
+        env_var = m.group(1)
+        return os.environ.get(env_var, "")
+    return _REDACTED_RE.sub(lambda match: os.environ.get(match.group(1), ""), val)
+
+
+def _settle_frames(pg, timeout_ms: int = 3000) -> None:
+    """Bounded wait for the page's iframe tree to stop changing — i.e. nested frames
+    finished (re)loading. Portals like eCW / Cognos / Epic reload nested frames on
+    navigation, and resolving before they load fails."""
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    prev = None
+    stable = 0
+    while time.monotonic() < deadline:
+        try:
+            sig = tuple(sorted((f.url or "") for f in pg.frames))
+        except Exception:
+            return
+        if sig == prev:
+            stable += 1
+            if stable >= 2:
+                return
+        else:
+            stable = 0
+        prev = sig
+        try:
+            pg.wait_for_timeout(300)
+        except Exception:
+            return
+
+
+# Default ceiling per action attempt (15s default for un-paced steps; codegen sets 60s).
+_INITIAL_ATTEMPT_TIMEOUT_MS = 15000
 
 # How many bounded LLM corrections the brain applies to one step before
 # giving up on it (mirrors the old app's BRAIN_MAX_THINKS_PER_STEP default).
@@ -279,10 +316,12 @@ def _resolve_locator(page, candidates: list[dict], timeout_ms: int | None):
 
 
 def _act_on_locator(locator, step: TrajectoryStep, *, force: bool = False, timeout_ms: float | None = None, key: str | None = None) -> None:
+    val = _rematerialize(step.value)
     if step.kind in ("click", "dblclick"):
         getattr(locator, step.kind)(force=force, timeout=timeout_ms)
     elif step.kind == "hover":
         locator.hover(force=force, timeout=timeout_ms)
+        locator.page.wait_for_timeout(900)
     elif step.kind == "hover_click":
         locator.hover(timeout=timeout_ms)
         locator.page.wait_for_timeout(900)
@@ -292,17 +331,17 @@ def _act_on_locator(locator, step: TrajectoryStep, *, force: bool = False, timeo
     elif step.kind == "type":
         locator.click(force=force, timeout=timeout_ms)
         locator.fill("")
-        locator.press_sequentially(step.value or "", delay=100)
+        locator.press_sequentially(val, delay=100)
     elif step.kind == "check":
-        locator.check(force=force)
+        locator.check(force=force, timeout=timeout_ms)
     elif step.kind == "uncheck":
-        locator.uncheck(force=force)
+        locator.uncheck(force=force, timeout=timeout_ms)
     elif step.kind == "fill":
-        locator.fill(step.value or "", timeout=timeout_ms)
+        locator.fill(val, timeout=timeout_ms)
     elif step.kind == "press":
-        locator.press(key or step.value or "Enter", timeout=timeout_ms)
+        locator.press(key or val or "Enter", timeout=timeout_ms)
     elif step.kind == "select_option":
-        locator.select_option(step.value)
+        locator.select_option(val, timeout=timeout_ms)
     else:
         raise ValueError(f"Unsupported step kind: {step.kind}")
 
@@ -320,7 +359,8 @@ def _act(
     loc=None,
 ) -> None:
     if step.kind == "goto":
-        page.goto(selector, wait_until="domcontentloaded", timeout=timeout_ms)
+        nav_timeout = max(timeout_ms or 0, 60000)
+        page.goto(selector, wait_until="domcontentloaded", timeout=nav_timeout)
         return
     if step.kind == "close":
         page.close()
@@ -393,10 +433,12 @@ def run_step(
     popup_opened = False
     download_started = False
     download_saved: str | None = None
-    enters_iframe = "content_frame" in resolved_selector
+    enters_iframe = "content_frame" in resolved_selector or "frame_locator" in resolved_selector
 
     loc = None
     if step.kind not in ("goto", "close", "click_xy"):
+        if hasattr(target, "frames") and len(target.frames) > 1:
+            _settle_frames(target, 3000)
         # An explicit `selector` overrides resolution entirely — it is the ONE
         # candidate to try (used by the repair cache's re-verify).
         candidates = [{"selector": selector, "rank": 0}] if selector else step.selector_candidates

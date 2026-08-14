@@ -181,3 +181,35 @@ def test_list_extractions_endpoint_404_for_unknown_recording():
     client = TestClient(app)
     response = client.get(f"/recordings/{uuid.uuid4()}/extractions")
     assert response.status_code == 404
+
+
+def test_get_recording_detail_includes_latest_authoring_run_id(fixture_portal_url):
+    from atlas_engine.db.models import AuthoringRun
+
+    with session_scope() as session:
+        org = Organization(name="Authoring Run Detail Org", slug=f"auth-run-detail-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    client = TestClient(app)
+    # Before any authoring run
+    detail_before = client.get(f"/recordings/{recording_id}").json()
+    assert detail_before["latest_authoring_run_id"] is None
+
+    with session_scope() as session:
+        run = AuthoringRun(
+            org_id=uuid.UUID(org_id),
+            recording_id=recording_id,
+            status="running",
+            current_phase="replay",
+        )
+        session.add(run)
+        session.flush()
+        run_id = str(run.id)
+
+    detail_after = client.get(f"/recordings/{recording_id}").json()
+    assert detail_after["latest_authoring_run_id"] == run_id
+

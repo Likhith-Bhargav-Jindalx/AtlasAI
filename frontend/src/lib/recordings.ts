@@ -31,6 +31,7 @@ export interface RecordingDetail {
   id: string
   status: string
   role: string
+  latest_authoring_run_id: string | null
   codegen_script: string | null
   pages: RecordingPage[]
 }

@@ -31,10 +31,14 @@ class _Handler(SimpleHTTPRequestHandler):
         pass  # silence per-request logging in test output
 
 
+class _ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
 class FixturePortalServer:
     def __init__(self, port: int = 8731):
         self.port = port
-        self._httpd = HTTPServer(("127.0.0.1", port), _Handler)
+        self._httpd = _ReusableHTTPServer(("127.0.0.1", port), _Handler)
         self._httpd.drift_mode = False
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
