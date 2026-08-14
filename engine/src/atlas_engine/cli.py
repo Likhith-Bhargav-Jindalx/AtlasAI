@@ -211,7 +211,7 @@ def author(recording_id: str) -> None:
 @click.option("--email", required=True)
 @click.option("--password", required=True)
 @click.option("--role", default="member", type=click.Choice(["owner", "admin", "member"]))
-@click.option("--job-function", default=None, type=click.Choice(["operations_agent", "developer"]))
+@click.option("--job-function", required=True, type=click.Choice(["operations_agent", "developer"]))
 def create_user(org_id: str, email: str, password: str, role: str, job_function: str | None) -> None:
     """Dev-only user creation — no signup flow exists yet."""
     with session_scope() as session:
