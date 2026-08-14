@@ -9,6 +9,7 @@ const RECORDING = {
   id: 'rec-1',
   status: 'captured',
   role: 'dev',
+  codegen_script: 'page.goto("https://portal.example")\npage.click("#go")\n',
   pages: [{ page_index: 0, has_video: false, video_asset_id: null, duration_seconds: 12, steps: [] }],
 }
 
@@ -65,7 +66,6 @@ beforeEach(() => {
       }
       if (path === '/recordings/rec-1/author') return startResponse.promise
       if (path === '/authoring-runs/run-1/stop') return Promise.resolve(jsonResponse({ ok: true }))
-      if (path === '/authoring-runs/run-1/resume') return Promise.resolve(jsonResponse({ ok: true }))
       if (path === '/authoring-runs/run-1') {
         pollCount += 1
         // The first poll stays in flight until the test releases it, so we can
@@ -133,12 +133,16 @@ describe('AuthoringPage primary button gating', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument())
     expect(primaryButton()).toBeNull()
 
-    // waiting_for_developer is still active: Resume appears, still no restart.
+    // waiting_for_developer is still active: a "resolve in the browser"
+    // hint replaces the old Resume button, still no restart.
     currentRun = runDetail('waiting_for_developer')
     await poll()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText(/Resolve this step in the browser/i)).toBeInTheDocument(),
+    )
     expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
     expect(primaryButton()).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull()
 
     // cancelled is terminal: the button comes back, enabled, as a regenerate.
     currentRun = runDetail('cancelled')
@@ -157,5 +161,13 @@ describe('AuthoringPage page extractions', () => {
     expect(await screen.findByText(/Could not load page extractions/i)).toHaveTextContent(
       'extractions boom',
     )
+  })
+})
+
+describe('AuthoringPage recorded script', () => {
+  it('shows the recorded Playwright script with the video', async () => {
+    renderPage()
+    expect(await screen.findByText(/Recorded Playwright script/i)).toBeInTheDocument()
+    expect(screen.getByText(/page\.goto\("https:\/\/portal\.example"\)/)).toBeInTheDocument()
   })
 })

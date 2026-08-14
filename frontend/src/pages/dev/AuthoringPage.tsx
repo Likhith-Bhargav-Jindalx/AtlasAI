@@ -5,16 +5,17 @@ import { useRecordingDetail } from '../../lib/recordings'
 import {
   isTerminalStatus,
   useAuthoringRun,
-  useResumeAuthoringRun,
   useStartAuthoringRun,
   useStopAuthoringRun,
 } from '../../lib/authoring'
 import { VideoStepPlayer } from '../../components/VideoStepPlayer'
 import { StatusPill } from '../../components/StatusPill'
-import { AuthoringPhaseTracker } from '../../components/AuthoringPhaseTracker'
 import { AuthoringEventLog } from '../../components/AuthoringEventLog'
 import { GoldenScriptViewer } from '../../components/GoldenScriptViewer'
 import { PageExtractionsList } from '../../components/PageExtractionsList'
+import { RecordingScriptViewer } from '../../components/RecordingScriptViewer'
+import { PipelineTimeline } from '../../components/PipelineTimeline'
+import { StepsViewer } from '../../components/StepsViewer'
 import { useRecordingExtractions } from '../../lib/extractions'
 import { formatDuration } from '../../lib/format'
 
@@ -26,7 +27,6 @@ export function AuthoringPage() {
   const [authoringRunId, setAuthoringRunId] = useState<string | undefined>(undefined)
   const startRun = useStartAuthoringRun(recordingId!)
   const authoringRun = useAuthoringRun(authoringRunId)
-  const resumeRun = useResumeAuthoringRun(authoringRunId)
   const stopRun = useStopAuthoringRun(authoringRunId)
   const extractions = useRecordingExtractions(recordingId)
 
@@ -79,13 +79,9 @@ export function AuthoringPage() {
         </div>
         <div className="flex items-center gap-2.5 flex-none">
           {run?.status === 'waiting_for_developer' && (
-            <button
-              onClick={() => resumeRun.mutate()}
-              disabled={resumeRun.isPending}
-              className="px-[18px] py-2.5 rounded-full border border-atlas-border hover:bg-atlas-bg text-[13px] font-medium disabled:opacity-60"
-            >
-              {resumeRun.isPending ? 'Resuming…' : 'Resume'}
-            </button>
+            <span className="text-[12.5px] text-atlas-muted">
+              Resolve this step in the browser — the run continues automatically.
+            </span>
           )}
           {isActive && (
             <button
@@ -117,15 +113,19 @@ export function AuthoringPage() {
 
         {run && (
           <div className="flex flex-col gap-4">
-            <AuthoringPhaseTracker
-              currentPhase={run.current_phase}
-              status={run.status}
-              repairAttempt={run.repair_attempt}
-            />
-            <AuthoringEventLog events={run.events} />
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_1fr]">
+              <PipelineTimeline run={run} />
+              <AuthoringEventLog events={run.events} />
+            </div>
             <GoldenScriptViewer goldenScript={run.golden_script} />
           </div>
         )}
+
+        {recording.codegen_script !== undefined && (
+          <RecordingScriptViewer script={recording.codegen_script} />
+        )}
+
+        <StepsViewer steps={recording.pages.flatMap((page) => page.steps)} />
 
         {recording.pages.map((page) => (
           <div key={page.page_index} className="flex flex-col gap-3">
@@ -156,11 +156,6 @@ export function AuthoringPage() {
 
         {startRun.isError && (
           <div className="text-[13px] text-atlas-diffOldText">{(startRun.error as Error).message}</div>
-        )}
-        {resumeRun.isError && (
-          <div className="text-[13px] text-atlas-diffOldText">
-            Resume failed: {(resumeRun.error as Error).message}
-          </div>
         )}
         {stopRun.isError && (
           <div className="text-[13px] text-atlas-diffOldText">Stop failed: {(stopRun.error as Error).message}</div>

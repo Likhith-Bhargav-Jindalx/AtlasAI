@@ -31,6 +31,7 @@ export interface RecordingDetail {
   id: string
   status: string
   role: string
+  codegen_script: string | null
   pages: RecordingPage[]
 }
 
