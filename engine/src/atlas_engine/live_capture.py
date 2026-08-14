@@ -1,11 +1,14 @@
 import logging
 import shutil
+import tempfile
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers
 from atlas_engine.capture.extraction import attach_extraction_button, collect_page_data
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
@@ -82,6 +85,7 @@ class _LiveCaptureSession:
 
     def _run(self) -> None:
         video_dir = None
+        codegen_dir = None
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=False)
@@ -89,6 +93,10 @@ class _LiveCaptureSession:
 
                 pending_grab_pages: list = []
                 attach_extraction_button(context, pending_grab_pages.append)
+
+                codegen_dir = Path(tempfile.mkdtemp(prefix="atlas-codegen-"))
+                codegen_path = codegen_dir / "codegen.py"
+                attach_codegen_recorder(context, codegen_path)
 
                 page.goto(self.start_url)
 
@@ -161,6 +169,15 @@ class _LiveCaptureSession:
                 except Exception:
                     pass
 
+            codegen_script = None
+            try:
+                if codegen_path.exists() and codegen_path.stat().st_size > 0:
+                    codegen_script = strip_extraction_markers(codegen_path.read_text())
+            except Exception:
+                # Best-effort side artifact: a failed read must never abort
+                # the recording that already happened.
+                logger.exception("Failed to read the native codegen script")
+
             self.recording_id = persist_recording(
                 self.org_id, self.start_url, actions,
                 request_id=self.request_id, role=self.role,
@@ -169,12 +186,15 @@ class _LiveCaptureSession:
                 video_ended_at_ms=video_ended_at_ms,
                 additional_pages=additional_pages,
                 page_extractions=pending_extractions,
+                codegen_script=codegen_script,
             )
         except Exception as exc:  # surfaced to the caller of stop()
             self.error = exc
         finally:
             if video_dir is not None:
                 shutil.rmtree(video_dir, ignore_errors=True)
+            if codegen_dir is not None:
+                shutil.rmtree(codegen_dir, ignore_errors=True)
             self.done_event.set()
 
     def start(self) -> None:

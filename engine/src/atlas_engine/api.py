@@ -374,6 +374,7 @@ class RecordingDetailResponse(BaseModel):
     id: str
     status: str
     role: str
+    codegen_script: str | None = None
     pages: list[RecordingPageResponse]
 
 

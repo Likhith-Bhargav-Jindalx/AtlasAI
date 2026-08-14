@@ -47,6 +47,7 @@ def persist_recording(
     video_ended_at_ms: int | None = None,
     additional_pages: list[PageCapture] | None = None,
     page_extractions: list[dict] | None = None,
+    codegen_script: str | None = None,
 ) -> uuid.UUID:
     """Persists a captured recording — actions.json, the extracted
     trajectory, one VideoAsset per page (main plus any tabs/popups opened
@@ -58,6 +59,9 @@ def persist_recording(
     store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="recordings")
     run_dir.write_json("actions.json", [vars(a) for a in actions])
+
+    if codegen_script is not None:
+        (run_dir.path / "codegen.py").write_text(codegen_script)
 
     trajectory = extract_trajectory(actions)
     trajectory_path = run_dir.path / "trajectory.json"
@@ -237,10 +241,16 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
                 "steps": steps,
             })
 
+        codegen_script = None
+        codegen_path = Path(settings.ensure_run_root()) / recording.capture_blob_prefix / "codegen.py"
+        if codegen_path.exists() and codegen_path.stat().st_size > 0:
+            codegen_script = codegen_path.read_text()
+
         return {
             "id": str(recording.id),
             "status": recording.status,
             "role": recording.role,
+            "codegen_script": codegen_script,
             "pages": pages,
         }
 
