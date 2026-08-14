@@ -197,6 +197,13 @@ def list_recordings(org_id: str, status: str | None = None) -> list[dict]:
             )
             request = session.get(RecordingRequest, recording.request_id) if recording.request_id else None
             profile = session.get(PortalProfile, recording.portal_profile_id)
+            run_root = Path(settings.ensure_run_root())
+            codegen_path = run_root / recording.capture_blob_prefix / "codegen.py"
+            has_codegen = codegen_path.exists() and codegen_path.stat().st_size > 0
+            if not has_codegen:
+                traj_path = run_root / recording.capture_blob_prefix / "trajectory.json"
+                has_codegen = traj_path.exists() and traj_path.stat().st_size > 0
+
             results.append({
                 "id": str(recording.id),
                 "status": recording.status,
@@ -206,6 +213,7 @@ def list_recordings(org_id: str, status: str | None = None) -> list[dict]:
                 "portal_domain": profile.domain if profile is not None else None,
                 "duration_seconds": recording.duration_seconds,
                 "has_video": video_asset is not None,
+                "has_codegen_script": has_codegen,
                 "created_at": recording.created_at.isoformat(),
             })
         return results

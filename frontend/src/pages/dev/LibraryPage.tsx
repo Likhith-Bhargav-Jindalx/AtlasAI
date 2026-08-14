@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { VideoOff } from 'lucide-react'
+import { FileCode, VideoOff } from 'lucide-react'
 import { useAuth } from '../../auth/AuthContext'
 import { useRecordings } from '../../lib/recordings'
 import { StatusPill } from '../../components/StatusPill'
@@ -25,22 +25,35 @@ export function LibraryPage() {
             <button
               key={r.id}
               onClick={() => navigate(`/dev/recordings/${r.id}`)}
-              className="text-left bg-atlas-card border border-atlas-border rounded-2xl overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all"
+              className="text-left bg-atlas-card border border-atlas-border rounded-2xl overflow-hidden hover:shadow-lg hover:-translate-y-0.5 transition-all group"
             >
               <div className="aspect-video bg-[#e8eae8] relative flex items-center justify-center">
                 {!r.has_video && <VideoOff size={24} className="text-atlas-muted" />}
+                {r.has_codegen_script && (
+                  <div className="absolute left-2.5 top-2.5 flex items-center gap-1 text-[11px] font-medium text-atlas-primary bg-white/95 backdrop-blur-xs border border-atlas-border px-2 py-0.5 rounded-full shadow-xs">
+                    <FileCode size={12} />
+                    <span>Playwright script</span>
+                  </div>
+                )}
                 <div className="absolute right-2.5 bottom-2.5 text-[11px] text-white bg-black/55 px-2 py-0.5 rounded-full tabular-nums">
                   {formatDuration(r.duration_seconds)}
                 </div>
               </div>
               <div className="p-4 flex flex-col gap-2.5">
                 <div className="flex items-start justify-between gap-2.5">
-                  <div className="text-[14.5px] font-medium tracking-tight">{r.request_title ?? r.portal_domain ?? 'Recording'}</div>
+                  <div className="text-[14.5px] font-medium tracking-tight group-hover:text-atlas-primary transition-colors">
+                    {r.request_title ?? r.portal_domain ?? 'Recording'}
+                  </div>
                   <StatusPill status={r.status} />
                 </div>
                 <div className="text-[12.5px] text-atlas-body">{r.portal_domain}</div>
-                <div className="text-[12px] text-atlas-muted pt-1.5 border-t border-atlas-rowBorder">
-                  {formatRelativeTime(r.created_at)}
+                <div className="flex items-center justify-between text-[12px] text-atlas-muted pt-1.5 border-t border-atlas-rowBorder">
+                  <span>{formatRelativeTime(r.created_at)}</span>
+                  {r.has_codegen_script && (
+                    <span className="flex items-center gap-1 text-atlas-primary font-medium text-[11.5px]">
+                      <FileCode size={12} /> Python ready
+                    </span>
+                  )}
                 </div>
               </div>
             </button>

@@ -10,6 +10,7 @@ export interface RecordingSummary {
   portal_domain: string | null
   duration_seconds: number | null
   has_video: boolean
+  has_codegen_script?: boolean
   created_at: string
 }
 

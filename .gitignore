@@ -12,3 +12,12 @@ node_modules/
 dist/
 build/
 .DS_Store
+
+# Agent & CodeGraph configurations
+.mcp.json
+AGENTS.md
+GEMINI.md
+opencode.jsonc
+.claude/
+.codegraph/
+.gemini/
