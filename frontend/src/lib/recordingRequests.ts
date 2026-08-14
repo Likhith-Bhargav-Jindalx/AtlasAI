@@ -28,3 +28,15 @@ export function useCreateRecordingRequest() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['recording-requests'] }),
   })
 }
+
+export function useClaimRecordingRequest() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ requestId, developerId }: { requestId: string; developerId: string }) =>
+      apiFetch<{ ok: boolean }>(`/recording-requests/${requestId}/claim`, {
+        method: 'POST',
+        body: JSON.stringify({ developer_id: developerId }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['recording-requests'] }),
+  })
+}

@@ -6,6 +6,7 @@ import { ReviewPage } from './pages/agent/ReviewPage'
 import { AgentLibraryPage } from './pages/agent/AgentLibraryPage'
 import { LibraryPage } from './pages/dev/LibraryPage'
 import { AuthoringPage } from './pages/dev/AuthoringPage'
+import { RequestQueuePage } from './pages/dev/RequestQueuePage'
 import { ApprovalsPage } from './pages/ApprovalsPage'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { AppLayout } from './layout/AppLayout'
@@ -38,6 +39,7 @@ export default function App() {
           <Route path="/agent/library" element={<AgentLibraryPage />} />
           <Route path="/agent/recordings/:recordingId" element={<ReviewPage />} />
           <Route path="/dev" element={<LibraryPage />} />
+          <Route path="/dev/requests" element={<RequestQueuePage />} />
           <Route path="/dev/recordings/:recordingId" element={<KeyedAuthoringPage />} />
           <Route path="/approvals" element={<ApprovalsPage />} />
         </Route>
