@@ -35,3 +35,22 @@ def test_list_heal_events_filters_by_status(fixture_portal_url):
     assert len(body) == 1
     assert body[0]["id"] == str(pending_id)
     assert body[0]["portal_domain"] is not None
+
+
+def test_get_heal_event_screenshot_404s_when_missing(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Heal Shot API Org", slug=f"heal-shot-api-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        profile = get_or_create_portal_profile(session, str(org.id), fixture_portal_url.split("//")[1])
+        script = GoldenScript(org_id=org.id, portal_profile_id=profile.id, version=1, script_blob_ref="unused", status="active")
+        session.add(script)
+        session.flush()
+        event = HealEvent(org_id=org.id, golden_script_id=script.id, trigger="on_demand", status="pending_approval", diff_summary={"changes": []})
+        session.add(event)
+        session.flush()
+        event_id = event.id
+
+    client = TestClient(app)
+    response = client.get(f"/heal-events/{event_id}/screenshots/0/before")
+    assert response.status_code == 404

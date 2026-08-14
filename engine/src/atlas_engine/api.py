@@ -14,7 +14,16 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import AuthoringRun, AuthoringRunEvent, CertificationRun, GoldenScript, Recording, User, VideoAsset
+from atlas_engine.db.models import (
+    AuthoringRun,
+    AuthoringRunEvent,
+    CertificationRun,
+    GoldenScript,
+    HealEvent,
+    Recording,
+    User,
+    VideoAsset,
+)
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.recording_service import (
@@ -108,6 +117,27 @@ def reject_endpoint(
 @app.get("/heal-events")
 def list_heal_events_endpoint(org_id: str, status: str | None = None) -> list[dict]:
     return list_heal_events(org_id, status=status)
+
+
+@app.get("/heal-events/{heal_event_id}/screenshots/{step_index}/{when}")
+def get_heal_event_screenshot_endpoint(heal_event_id: str, step_index: int, when: str):
+    if when not in ("before", "after"):
+        raise HTTPException(status_code=404, detail="'when' must be 'before' or 'after'")
+
+    with session_scope() as session:
+        heal_event = session.get(HealEvent, uuid.UUID(heal_event_id))
+        if heal_event is None:
+            raise HTTPException(status_code=404, detail=f"No such heal event: {heal_event_id}")
+        entry = next(
+            (c for c in heal_event.diff_summary.get("changes", []) if c["step_index"] == step_index), None,
+        )
+        if entry is None:
+            raise HTTPException(status_code=404, detail="No diff entry for this step index")
+        screenshot_path = entry.get(f"{when}_screenshot")
+
+    if not screenshot_path or not Path(screenshot_path).exists():
+        raise HTTPException(status_code=404, detail="Screenshot not available")
+    return FileResponse(screenshot_path, media_type="image/png")
 
 
 class CreateRecordingRequestBody(BaseModel):

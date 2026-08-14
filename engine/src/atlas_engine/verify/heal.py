@@ -25,15 +25,24 @@ def _primary_selector(trajectory: ReferenceTrajectory, index: int) -> str:
     return candidates[0]["selector"] if candidates else ""
 
 
-def compute_trajectory_diff(old: ReferenceTrajectory, new: ReferenceTrajectory) -> list[dict]:
+def compute_trajectory_diff(old: ReferenceTrajectory, new: ReferenceTrajectory, outcomes: list | None = None) -> list[dict]:
+    shot_after_by_index: dict[int, str | None] = {}
+    if outcomes is not None:
+        shot_after_by_index = {o.step_index: o.shot_after for o in outcomes}
+
     diff = []
     for i in range(min(len(old.steps), len(new.steps))):
         old_selector = _primary_selector(old, i)
         new_selector = _primary_selector(new, i)
         if old_selector != new_selector:
-            diff.append(
-                {"step_index": i, "field": "selector", "old_value": old_selector, "new_value": new_selector}
-            )
+            diff.append({
+                "step_index": i,
+                "field": "selector",
+                "old_value": old_selector,
+                "new_value": new_selector,
+                "before_screenshot": shot_after_by_index.get(i - 1) if outcomes is not None else None,
+                "after_screenshot": shot_after_by_index.get(i) if outcomes is not None else None,
+            })
     return diff
 
 
@@ -70,13 +79,17 @@ def heal_golden_script(
 
     old_trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
 
+    store = LocalRunStore(root=settings.ensure_run_root())
+    shot_run_dir = store.new_run_dir(prefix="heal-shots")
+    shot_dir = str(shot_run_dir.path)
+
     cache = ActionCacheStore()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
         result = BrainLoop(page, llm=llm, action_cache=cache, golden_script_id=golden_script_id).run(
-            old_trajectory
+            old_trajectory, shot_dir=shot_dir
         )
         browser.close()
 
@@ -86,7 +99,7 @@ def heal_golden_script(
     # a repair), which is what distinguishes "was already fine" from "needed
     # and got a repair".
     new_trajectory = result.trajectory
-    diff = compute_trajectory_diff(old_trajectory, new_trajectory)
+    diff = compute_trajectory_diff(old_trajectory, new_trajectory, outcomes=result)
     all_on_track = result.success
 
     if not diff and all_on_track:
