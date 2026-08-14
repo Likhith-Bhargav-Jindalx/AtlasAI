@@ -31,7 +31,10 @@ def run_replay_phase(
             continue  # page closes are teardown, not flow — never carried forward
 
         try:
-            outcome = run_step(page, step, shot_dir=str(ref_dir))
+            # Replay steps don't carry wait_ceiling_ms yet (it's derived from
+            # this run's elapsed), so default to the old runner's 60000ms
+            # ceiling — the 3000ms fast-fail default is for the brain phase.
+            outcome = run_step(page, step, shot_dir=str(ref_dir), timeout_ms=60000)
         except Exception as exc:  # keep the step — the brain repairs it
             log_event(
                 authoring_run_id, phase="replay", step_index=step.index, level="warning",

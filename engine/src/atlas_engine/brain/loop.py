@@ -369,9 +369,19 @@ def run_step(
     pages_before = len(page.context.pages)
     t0 = time.monotonic()
 
-    url_before = target.url
-    dom_before = target.content()
-    shot_before = _save_shot(target, shot_dir, f"step{step.index}") if shot_dir else None
+    url_before = ""
+    dom_before = ""
+    shot_before = None
+    try:
+        url_before = target.url
+    except Exception:
+        pass
+    try:
+        dom_before = target.content()
+    except Exception:
+        pass  # page mid-navigation — the old runner's state() never lets this abort a step
+    if shot_dir:
+        shot_before = _save_shot(target, shot_dir, f"step{step.index}")
 
     timeout = step.wait_ceiling_ms if step.wait_ceiling_ms is not None else timeout_ms
 
@@ -442,9 +452,19 @@ def run_step(
     except Exception:
         pass
 
-    url_after = obs_pg.url
-    dom_after = obs_pg.content()
-    shot_after = _save_shot(obs_pg, shot_dir, f"step{step.index}") if shot_dir else None
+    url_after = ""
+    dom_after = ""
+    shot_after = None
+    try:
+        url_after = obs_pg.url
+    except Exception:
+        pass
+    try:
+        dom_after = obs_pg.content()
+    except Exception:
+        pass  # page mid-navigation — same tolerance as the before-snapshot
+    if shot_dir:
+        shot_after = _save_shot(obs_pg, shot_dir, f"step{step.index}")
 
     if error is None and step.kind in ("fill", "type", "select_option"):
         try:
@@ -722,7 +742,11 @@ class BrainLoop:
         original_selector = step.selector_candidates[0]["selector"] if step.selector_candidates else ""
         instruction = f"{step.kind} {original_selector}"
         url_pattern = urlparse(self.page.url).path
-        dom_fingerprint = hashlib.sha256(sanitize_dom(self.page.content()).encode("utf-8")).hexdigest()
+        try:
+            dom = self.page.content()
+        except Exception:
+            dom = ""
+        dom_fingerprint = hashlib.sha256(sanitize_dom(dom).encode("utf-8")).hexdigest()
         return compute_cache_key(instruction=instruction, url_pattern=url_pattern, dom_fingerprint=dom_fingerprint)
 
     def _put_cache(self, step: TrajectoryStep, cache_key: str, outcome: StepOutcome) -> None:

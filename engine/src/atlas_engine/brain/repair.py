@@ -123,7 +123,10 @@ def think(
         proposed selector and re-feeds a REJECTED proposal to the next round
         (exactly like the old app).
     """
-    dom_html = page.content()
+    try:
+        dom_html = page.content()
+    except Exception:
+        dom_html = ""  # page mid-navigation — never crash the think call
     blocker = detect_blockers(dom_html)
     if blocker:
         return RepairAction(action="declare_blocker", kind=blocker.kind, evidence=blocker.detail)
