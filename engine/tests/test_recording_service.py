@@ -2,6 +2,8 @@ import json
 import uuid
 from pathlib import Path
 
+import pytest
+
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
@@ -10,12 +12,19 @@ from atlas_engine.db.models import (
     PageExtraction,
     PortalProfile,
     Recording,
+    RecordingRequest,
     ReferenceTrajectory,
     User,
     VideoAsset,
     VideoStep,
 )
-from atlas_engine.recording_service import list_page_extractions, persist_recording
+from atlas_engine.recording_service import (
+    create_recording_request,
+    list_page_extractions,
+    persist_recording,
+    submit_recording_for_authoring,
+    update_recording_details,
+)
 
 
 def test_persist_recording_creates_recording_and_trajectory(fixture_portal_url):
@@ -398,3 +407,62 @@ def test_list_recordings_filters_by_user_id(fixture_portal_url):
     results = list_recordings(org_id, user_id=agent_a_id)
     assert [r["id"] for r in results] == [str(recording_a)]
 
+
+
+def test_update_recording_details_persists_title_and_description(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Update Details Org", slug=f"update-details-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+    update_recording_details(recording_id, title="Check eligibility", description="Walks the eligibility flow")
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        assert recording.title == "Check eligibility"
+        assert recording.description == "Walks the eligibility flow"
+
+
+def test_submit_recording_for_authoring_creates_a_linked_request(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Submit Org", slug=f"submit-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="submitter@example.com", password_hash="x", job_function="operations_agent")
+        session.add(agent)
+        session.flush()
+        agent_id = agent.id
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+    update_recording_details(recording_id, title="Check eligibility")
+
+    request_id = submit_recording_for_authoring(recording_id, agent_id)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        assert recording.request_id == request_id
+        request = session.get(RecordingRequest, request_id)
+        assert request.status == "submitted"
+        assert request.title == "Check eligibility"
+
+
+def test_submit_recording_for_authoring_rejects_already_linked_recording(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Submit Twice Org", slug=f"submit-twice-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="submitter2@example.com", password_hash="x", job_function="operations_agent")
+        session.add(agent)
+        session.flush()
+        agent_id = agent.id
+
+    start_url = f"{fixture_portal_url}/login.html"
+    request_id = create_recording_request(org_id, str(agent_id), start_url, "Existing request")
+    recording_id = persist_recording(org_id, start_url, [], request_id=request_id)
+
+    with pytest.raises(ValueError, match="already linked"):
+        submit_recording_for_authoring(recording_id, agent_id)

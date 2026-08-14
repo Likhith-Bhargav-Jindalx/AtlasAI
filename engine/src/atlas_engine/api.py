@@ -23,6 +23,8 @@ from atlas_engine.recording_service import (
     list_page_extractions,
     list_recording_requests,
     list_recordings,
+    submit_recording_for_authoring,
+    update_recording_details,
 )
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, list_heal_events, reject_heal_event
 
@@ -375,6 +377,8 @@ class RecordingDetailResponse(BaseModel):
     id: str
     status: str
     role: str
+    title: str | None = None
+    description: str | None = None
     latest_authoring_run_id: str | None = None
     codegen_script: str | None = None
     pages: list[RecordingPageResponse]
@@ -395,6 +399,37 @@ def get_recording_endpoint(recording_id: str) -> RecordingDetailResponse:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return RecordingDetailResponse(**detail)
+
+
+class UpdateRecordingDetailsBody(BaseModel):
+    title: str | None = None
+    description: str | None = None
+
+
+@app.patch("/recordings/{recording_id}")
+def update_recording_details_endpoint(recording_id: str, body: UpdateRecordingDetailsBody) -> dict:
+    try:
+        update_recording_details(uuid.UUID(recording_id), title=body.title, description=body.description)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"ok": True}
+
+
+class SubmitRecordingBody(BaseModel):
+    submitted_by: str
+
+
+class SubmitRecordingResponse(BaseModel):
+    request_id: str
+
+
+@app.post("/recordings/{recording_id}/submit", response_model=SubmitRecordingResponse)
+def submit_recording_endpoint(recording_id: str, body: SubmitRecordingBody) -> SubmitRecordingResponse:
+    try:
+        request_id = submit_recording_for_authoring(uuid.UUID(recording_id), uuid.UUID(body.submitted_by))
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return SubmitRecordingResponse(request_id=str(request_id))
 
 
 @app.get("/recordings/{recording_id}/video/{page_index}")

@@ -236,3 +236,42 @@ def test_list_recordings_endpoint_filters_by_user_id(fixture_portal_url):
     assert response.status_code == 200
     assert [r["id"] for r in response.json()] == [str(mine)]
 
+
+def test_patch_recording_updates_title_and_description(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Patch Org", slug=f"patch-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    client = TestClient(app)
+    response = client.patch(f"/recordings/{recording_id}", json={"title": "My flow", "description": "desc"})
+    assert response.status_code == 200
+
+    detail = client.get(f"/recordings/{recording_id}").json()
+    assert detail["title"] == "My flow"
+    assert detail["description"] == "desc"
+
+
+def test_submit_recording_endpoint_creates_a_request(fixture_portal_url):
+    from atlas_engine.db.models import User
+
+    with session_scope() as session:
+        org = Organization(name="Submit API Org", slug=f"submit-api-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="submit-api@example.com", password_hash="x", job_function="operations_agent")
+        session.add(agent)
+        session.flush()
+        agent_id = str(agent.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    client = TestClient(app)
+    response = client.post(f"/recordings/{recording_id}/submit", json={"submitted_by": agent_id})
+    assert response.status_code == 200
+    assert "request_id" in response.json()
+

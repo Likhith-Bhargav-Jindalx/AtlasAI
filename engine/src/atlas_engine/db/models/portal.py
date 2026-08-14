@@ -59,6 +59,8 @@ class Recording(Base):
         ForeignKey("recording_requests.id", ondelete="SET NULL"), default=None
     )
     role: Mapped[str] = mapped_column(Enum(*RECORDING_ROLES, name="recording_role"), default="demo")
+    title: Mapped[str | None] = mapped_column(default=None)
+    description: Mapped[str | None] = mapped_column(default=None)
     status: Mapped[str] = mapped_column(Enum(*RECORDING_STATUSES, name="recording_status"), default="capturing")
     capture_blob_prefix: Mapped[str]
     has_audio: Mapped[bool] = mapped_column(default=False)

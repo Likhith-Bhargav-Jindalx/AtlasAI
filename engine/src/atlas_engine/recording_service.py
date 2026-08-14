@@ -296,10 +296,50 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
             "id": str(recording.id),
             "status": recording.status,
             "role": recording.role,
+            "title": recording.title,
+            "description": recording.description,
             "latest_authoring_run_id": latest_authoring_run_id,
             "codegen_script": codegen_script,
             "pages": pages,
         }
+
+
+def update_recording_details(recording_id: uuid.UUID, *, title: str | None = None, description: str | None = None) -> None:
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        if recording is None:
+            raise ValueError(f"No such recording: {recording_id}")
+        if title is not None:
+            recording.title = title
+        if description is not None:
+            recording.description = description
+
+
+def submit_recording_for_authoring(recording_id: uuid.UUID, submitted_by: uuid.UUID) -> uuid.UUID:
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        if recording is None:
+            raise ValueError(f"No such recording: {recording_id}")
+        if recording.request_id is not None:
+            raise ValueError(f"Recording {recording_id} is already linked to a request")
+
+        profile = session.get(PortalProfile, recording.portal_profile_id)
+        target_url = profile.inferred_login_url or f"https://{profile.domain}"
+
+        request = RecordingRequest(
+            org_id=recording.org_id,
+            requested_by=submitted_by,
+            portal_profile_id=recording.portal_profile_id,
+            target_url=target_url,
+            title=recording.title or "Untitled recording",
+            description=recording.description,
+            status="submitted",
+        )
+        session.add(request)
+        session.flush()
+
+        recording.request_id = request.id
+        return request.id
 
 
 def list_page_extractions(recording_id: uuid.UUID) -> list[dict]:
