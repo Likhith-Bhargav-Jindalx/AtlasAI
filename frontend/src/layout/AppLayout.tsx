@@ -10,6 +10,7 @@ const NAV: Record<ViewRole, { to: string; label: string }[]> = {
   dev: [
     { to: '/dev', label: 'Recording library' },
     { to: '/dev/requests', label: 'Request queue' },
+    { to: '/dev/costs', label: 'Cost dashboard' },
     { to: '/approvals', label: 'Heal approvals' },
   ],
   approver: [
