@@ -4,6 +4,7 @@ import uuid
 from fastapi.testclient import TestClient
 
 from atlas_engine.api import app
+from atlas_engine.auth.passwords import hash_password
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import (
@@ -14,8 +15,26 @@ from atlas_engine.db.models import (
     Organization,
     PortalProfile,
     Recording,
+    User,
 )
 from atlas_engine.recording_service import persist_recording
+
+_PASSWORD = "test-password"
+
+
+def _login_as_developer(client: TestClient, org_id: uuid.UUID | str) -> None:
+    """Creates a developer user in the org identified by `org_id` and logs `client` in as them."""
+    with session_scope() as session:
+        user = User(
+            org_id=uuid.UUID(str(org_id)), email=f"dev-{uuid.uuid4()}@example.com",
+            password_hash=hash_password(_PASSWORD), role="member", job_function="developer",
+        )
+        session.add(user)
+        session.flush()
+        email = user.email
+
+    login_response = client.post("/auth/login", json={"email": email, "password": _PASSWORD})
+    assert login_response.status_code == 200
 
 
 def _record_against_fixture(org_id: str, fixture_portal_url: str) -> uuid.UUID:
@@ -121,7 +140,14 @@ def test_get_authoring_run_404_for_malformed_id():
 
 
 def test_resume_authoring_run_endpoint_404_for_unknown_run():
+    with session_scope() as session:
+        org = Organization(name="Resume 404 Org", slug=f"resume-404-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = org.id
+
     client = TestClient(app)
+    _login_as_developer(client, org_id)
     response = client.post(f"/authoring-runs/{uuid.uuid4()}/resume")
     assert response.status_code == 404
 
@@ -139,14 +165,23 @@ def test_resume_authoring_run_endpoint_409_when_not_waiting_for_developer():
         session.add(run)
         session.flush()
         authoring_run_id = run.id
+        org_id = org.id
 
     client = TestClient(app)
+    _login_as_developer(client, org_id)
     response = client.post(f"/authoring-runs/{authoring_run_id}/resume")
     assert response.status_code == 409
 
 
 def test_stop_authoring_run_endpoint_404_for_unknown_run():
+    with session_scope() as session:
+        org = Organization(name="Stop 404 Org", slug=f"stop-404-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = org.id
+
     client = TestClient(app)
+    _login_as_developer(client, org_id)
     response = client.post(f"/authoring-runs/{uuid.uuid4()}/stop")
     assert response.status_code == 404
 
@@ -161,6 +196,7 @@ def test_full_authoring_run_via_http_reaches_certified(fixture_portal_url):
     recording_id = _record_against_fixture(org_id, fixture_portal_url)
 
     client = TestClient(app)
+    _login_as_developer(client, org_id)
     start_response = client.post(f"/recordings/{recording_id}/author")
     assert start_response.status_code == 200
     authoring_run_id = start_response.json()["authoring_run_id"]
@@ -199,6 +235,7 @@ def test_stop_authoring_run_via_http_stops_an_active_run(fixture_portal_url, fix
     fixture_portal_server.set_drift_mode(True)
     try:
         client = TestClient(app)
+        _login_as_developer(client, org_id)
         start_response = client.post(f"/recordings/{recording_id}/author")
         authoring_run_id = start_response.json()["authoring_run_id"]
 
@@ -228,6 +265,7 @@ def test_drifted_authoring_run_fails_autonomously_without_waiting_for_developer(
     fixture_portal_server.set_drift_mode(True)
     try:
         client = TestClient(app)
+        _login_as_developer(client, org_id)
         start_response = client.post(f"/recordings/{recording_id}/author")
         authoring_run_id = start_response.json()["authoring_run_id"]
 

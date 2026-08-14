@@ -3,9 +3,24 @@ import uuid
 from fastapi.testclient import TestClient
 
 from atlas_engine.api import app
+from atlas_engine.auth.passwords import hash_password
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import GoldenScript, HealEvent, Organization
+from atlas_engine.db.models import GoldenScript, HealEvent, Organization, User
 from atlas_engine.db.repo import get_or_create_portal_profile
+
+
+def _login_as_developer(client: TestClient, org_id) -> None:
+    with session_scope() as session:
+        user = User(
+            org_id=org_id, email=f"dev-{uuid.uuid4()}@example.com", password_hash=hash_password("pw"),
+            role="member", job_function="developer",
+        )
+        session.add(user)
+        session.flush()
+        email = user.email
+
+    login_response = client.post("/auth/login", json={"email": email, "password": "pw"})
+    assert login_response.status_code == 200
 
 
 def test_approve_and_reject_endpoints():
@@ -25,8 +40,10 @@ def test_approve_and_reject_endpoints():
         session.add(heal_event)
         session.flush()
         heal_event_id = str(heal_event.id)
+        org_id = org.id
 
     client = TestClient(app)
+    _login_as_developer(client, org_id)
     response = client.post(f"/heal-events/{heal_event_id}/approve")
 
     assert response.status_code == 200
@@ -52,8 +69,10 @@ def test_reject_endpoint():
         session.add(heal_event)
         session.flush()
         heal_event_id = str(heal_event.id)
+        org_id = org.id
 
     client = TestClient(app)
+    _login_as_developer(client, org_id)
     response = client.post(f"/heal-events/{heal_event_id}/reject")
 
     assert response.status_code == 200

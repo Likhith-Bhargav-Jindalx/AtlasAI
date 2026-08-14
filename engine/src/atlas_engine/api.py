@@ -1,11 +1,12 @@
 import uuid
 from pathlib import Path
 
-from fastapi import Cookie, FastAPI, HTTPException, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from atlas_engine.auth.deps import CurrentUser, get_current_user, require_job_function
 from atlas_engine.auth.passwords import verify_password
 from atlas_engine.auth.session import create_session_token, verify_session_token
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
@@ -89,13 +90,17 @@ def heal_endpoint(golden_script_id: str) -> HealResponse:
 
 
 @app.post("/heal-events/{heal_event_id}/approve", response_model=ApprovalResponse)
-def approve_endpoint(heal_event_id: str) -> ApprovalResponse:
+def approve_endpoint(
+    heal_event_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> ApprovalResponse:
     result = approve_heal_event(uuid.UUID(heal_event_id))
     return ApprovalResponse(**result)
 
 
 @app.post("/heal-events/{heal_event_id}/reject", response_model=ApprovalResponse)
-def reject_endpoint(heal_event_id: str) -> ApprovalResponse:
+def reject_endpoint(
+    heal_event_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> ApprovalResponse:
     result = reject_heal_event(uuid.UUID(heal_event_id))
     return ApprovalResponse(**result)
 
@@ -135,7 +140,9 @@ def list_recording_requests_endpoint(org_id: str, status: str | None = None) -> 
 
 
 @app.post("/recording-requests/{request_id}/claim")
-def claim_recording_request_endpoint(request_id: str, body: ClaimRequestBody) -> dict:
+def claim_recording_request_endpoint(
+    request_id: str, body: ClaimRequestBody, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> dict:
     claim_recording_request(uuid.UUID(request_id), uuid.UUID(body.developer_id))
     return {"ok": True}
 
@@ -145,7 +152,9 @@ class StartAuthoringRunResponse(BaseModel):
 
 
 @app.post("/recordings/{recording_id}/author", response_model=StartAuthoringRunResponse)
-def author_from_recording_endpoint(recording_id: str) -> StartAuthoringRunResponse:
+def author_from_recording_endpoint(
+    recording_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> StartAuthoringRunResponse:
     llm = create_llm_client()
     try:
         authoring_run_id = start_authoring_run(uuid.UUID(recording_id), llm=llm)
@@ -243,7 +252,9 @@ def get_authoring_run_endpoint(authoring_run_id: str) -> AuthoringRunDetailRespo
 
 
 @app.post("/authoring-runs/{authoring_run_id}/resume")
-def resume_authoring_run_endpoint(authoring_run_id: str) -> dict:
+def resume_authoring_run_endpoint(
+    authoring_run_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> dict:
     with session_scope() as session:
         run = session.get(AuthoringRun, uuid.UUID(authoring_run_id))
         if run is None:
@@ -260,7 +271,9 @@ def resume_authoring_run_endpoint(authoring_run_id: str) -> dict:
 
 
 @app.post("/authoring-runs/{authoring_run_id}/stop")
-def stop_authoring_run_endpoint(authoring_run_id: str) -> dict:
+def stop_authoring_run_endpoint(
+    authoring_run_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> dict:
     try:
         stop_authoring_run(uuid.UUID(authoring_run_id))
     except ValueError as exc:
@@ -424,7 +437,10 @@ class SubmitRecordingResponse(BaseModel):
 
 
 @app.post("/recordings/{recording_id}/submit", response_model=SubmitRecordingResponse)
-def submit_recording_endpoint(recording_id: str, body: SubmitRecordingBody) -> SubmitRecordingResponse:
+def submit_recording_endpoint(
+    recording_id: str, body: SubmitRecordingBody,
+    _user: CurrentUser = Depends(require_job_function("operations_agent")),
+) -> SubmitRecordingResponse:
     try:
         request_id = submit_recording_for_authoring(uuid.UUID(recording_id), uuid.UUID(body.submitted_by))
     except ValueError as exc:
