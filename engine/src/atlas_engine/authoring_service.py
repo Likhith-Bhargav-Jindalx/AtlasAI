@@ -45,10 +45,14 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
-        outcomes = BrainLoop(page, llm=llm).run(trajectory)
+        result = BrainLoop(page, llm=llm).run(trajectory)
         browser.close()
 
-    all_on_track = all(outcome.on_track for outcome in outcomes)
+    # The golden must freeze the VERIFIED trajectory — a repaired selector
+    # (LLM/cached) is folded into result.trajectory, so emitting the original
+    # would silently ship the stale one that just failed.
+    trajectory = result.trajectory
+    all_on_track = result.success
 
     store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="goldens")

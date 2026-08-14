@@ -2,7 +2,6 @@ import uuid
 from pathlib import Path
 
 from atlas_engine.authoring.events import log_event
-from atlas_engine.brain.evaluate import StepOutcome
 from atlas_engine.brain.loop import BrainLoop
 from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.codegen.emit import emit_golden_script
@@ -26,28 +25,34 @@ def run_extract_phase(trajectory: ReferenceTrajectory) -> ReferenceTrajectory:
 
 def run_brain_phase(
     page, trajectory: ReferenceTrajectory, authoring_run_id: uuid.UUID, *, llm: LlmClient | None = None,
-) -> list[StepOutcome]:
+    shot_dir: str | None = None,
+):
     """Headed, LLM-driven supervised replay — BrainLoop already does
-    perceive/act/evaluate/repair internally; this just runs it and turns
-    its returned per-step outcomes into the run's event log. No developer
-    fallback here: a step that's still off-track after BrainLoop's own
-    repair attempt stays off-track, and the caller (the orchestrator)
-    hard-fails the run."""
-    outcomes = BrainLoop(page, llm=llm).run(trajectory)
+    perceive/act/evaluate/think/validate/repair internally (multimodal, using
+    the reference screenshots the replay phase captured); this just runs it
+    and turns its per-step outcomes into the run's event log. No developer
+    fallback here: a step that's still off-track after BrainLoop's bounded
+    repair attempts fails the run (BrainLoop stops, exactly like the old app),
+    and the caller (the orchestrator) hard-fails it. Returns the
+    BrainLoopResult — use `result.success` and `result.trajectory` (the
+    verified trajectory, repairs folded in), not a zip of the input steps."""
+    if shot_dir is None:
+        shot_dir = str(Path(settings.ensure_run_root()) / "authoring" / str(authoring_run_id) / "brain")
+    result = BrainLoop(page, llm=llm).run(trajectory, shot_dir=shot_dir)
 
-    for step, outcome in zip(trajectory.steps, outcomes):
+    for outcome in result:
         if outcome.on_track:
             log_event(
-                authoring_run_id, phase="brain", step_index=step.index,
-                message=f"Step {step.index}: {step.kind} - OK",
+                authoring_run_id, phase="brain", step_index=outcome.step_index,
+                message=f"Step {outcome.step_index}: OK",
             )
         else:
             log_event(
-                authoring_run_id, phase="brain", step_index=step.index, level="warning",
-                message=f"Step {step.index}: {step.kind} - still off-track after repair",
+                authoring_run_id, phase="brain", step_index=outcome.step_index, level="warning",
+                message=f"Step {outcome.step_index}: still off-track after repair",
             )
 
-    return outcomes
+    return result
 
 
 def run_golden_phase(

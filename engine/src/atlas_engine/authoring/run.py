@@ -10,8 +10,10 @@ from atlas_engine.authoring.events import log_event
 from atlas_engine.authoring.phases import run_brain_phase, run_certify_phase, run_extract_phase, run_golden_phase
 from atlas_engine.authoring.replay import run_replay_phase
 from atlas_engine.authoring.state import update_run
-from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.brain.serialize import trajectory_from_dict
+from atlas_engine.capture.codegen import build_codegen_trajectory, parse_codegen_actions
+from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import AuthoringRun, GoldenScript, PortalProfile, Recording, RecordingRequest
 from atlas_engine.db.models import ReferenceTrajectory as ReferenceTrajectoryModel
@@ -26,6 +28,25 @@ _registry_lock = threading.Lock()
 
 def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def apply_stored_codegen_selectors(
+    trajectory: ReferenceTrajectory, capture_blob_prefix: str,
+) -> tuple[ReferenceTrajectory, bool]:
+    """Loads the recording's native codegen script (if any) and rebuilds the
+    replay trajectory from it — the script is the ground truth of what the
+    user did (it covers navigations, popups and iframes that the raw
+    recorder's CSS candidates often lack). Returns the rebuilt trajectory and
+    whether it was replaced (False for old recordings with no script, or a
+    script with no replayable action lines)."""
+    codegen_path = Path(settings.ensure_run_root()) / capture_blob_prefix / "codegen.py"
+    if not (codegen_path.exists() and codegen_path.stat().st_size > 0):
+        return trajectory, False
+    codegen_actions = parse_codegen_actions(codegen_path.read_text())
+    rebuilt = build_codegen_trajectory(codegen_actions)
+    if rebuilt is None:
+        return trajectory, False
+    return rebuilt, True
 
 
 class _AuthoringRunSession:
@@ -73,8 +94,18 @@ class _AuthoringRunSession:
                 start_url = profile.inferred_login_url or f"https://{profile.domain}"
                 trajectory_blob_ref = trajectory_row.trajectory_blob_ref
                 request_id = recording.request_id
+                capture_blob_prefix = recording.capture_blob_prefix
 
             trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
+
+            # When the recording captured a native codegen script, drive the
+            # initial run with its selectors (rank-0 candidates).
+            trajectory, script_applied = apply_stored_codegen_selectors(trajectory, capture_blob_prefix)
+            if script_applied:
+                log_event(
+                    self.authoring_run_id, phase="replay",
+                    message="Replaying with the recorded script's selectors",
+                )
 
             update_run(self.authoring_run_id, current_phase="replay")
             with sync_playwright() as playwright:
@@ -109,7 +140,7 @@ class _AuthoringRunSession:
                     browser = playwright.chromium.launch(headless=False)
                     page = browser.new_page()
                     page.goto(start_url)
-                    outcomes = run_brain_phase(page, trajectory, self.authoring_run_id, llm=self.llm)
+                    result = run_brain_phase(page, trajectory, self.authoring_run_id, llm=self.llm)
                     browser.close()
 
                 if self.stop_event.is_set():
@@ -117,25 +148,20 @@ class _AuthoringRunSession:
                     update_run(self.authoring_run_id, status="cancelled", ended_at=_now())
                     return
 
-                if not all(outcome.on_track for outcome in outcomes):
+                if not result.success:
+                    log_event(
+                        self.authoring_run_id, phase="brain", level="warning",
+                        message=f"Step {result.failed_step.index if result.failed_step else '?'} failed: {result.failure_reason}",
+                    )
                     update_run(self.authoring_run_id, status="failed", ended_at=_now())
                     return
 
                 # BrainLoop already applies any successful repair internally
-                # (retrying with a cached/LLM-resolved selector) — fold that
-                # back into the trajectory so golden/certify freeze the
-                # selector that actually worked, not the stale recorded one.
-                # Mirrors verify/heal.py's heal_golden_script.
-                trajectory = ReferenceTrajectory(
-                    steps=tuple(
-                        TrajectoryStep(
-                            index=step.index, kind=step.kind,
-                            selector_candidates=[{"selector": outcome.resolved_selector, "rank": 0}],
-                            value=step.value, expected_effect=step.expected_effect,
-                        )
-                        for step, outcome in zip(trajectory.steps, outcomes)
-                    )
-                )
+                # (retrying with a cached/LLM-resolved selector) and returns
+                # the VERIFIED trajectory — golden/certify freeze the selector
+                # that actually worked, not the stale recorded one. Mirrors
+                # verify/heal.py's heal_golden_script.
+                trajectory = result.trajectory
 
                 update_run(self.authoring_run_id, current_phase="golden")
                 golden_script_id, script_path = run_golden_phase(

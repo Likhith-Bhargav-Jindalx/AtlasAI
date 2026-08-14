@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 
 from atlas_engine.brain.cache import ActionCacheStore
 from atlas_engine.brain.loop import BrainLoop
-from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.brain.serialize import trajectory_from_dict
 from atlas_engine.codegen.emit import emit_golden_script
 from atlas_engine.config import settings
@@ -27,7 +27,7 @@ def _primary_selector(trajectory: ReferenceTrajectory, index: int) -> str:
 
 def compute_trajectory_diff(old: ReferenceTrajectory, new: ReferenceTrajectory) -> list[dict]:
     diff = []
-    for i in range(len(old.steps)):
+    for i in range(min(len(old.steps), len(new.steps))):
         old_selector = _primary_selector(old, i)
         new_selector = _primary_selector(new, i)
         if old_selector != new_selector:
@@ -75,30 +75,19 @@ def heal_golden_script(
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
-        outcomes = BrainLoop(page, llm=llm, action_cache=cache, golden_script_id=golden_script_id).run(
+        result = BrainLoop(page, llm=llm, action_cache=cache, golden_script_id=golden_script_id).run(
             old_trajectory
         )
         browser.close()
 
-    # BrainLoop.run() already applies any successful repair internally, so
-    # outcome.on_track alone can't distinguish "was already fine" from
-    # "needed and got a repair" — both look on-track afterwards. Whether
-    # anything actually changed is what the diff (built from each step's
-    # resolved_selector) tells us.
-    new_trajectory = ReferenceTrajectory(
-        steps=tuple(
-            TrajectoryStep(
-                index=step.index,
-                kind=step.kind,
-                selector_candidates=[{"selector": outcome.resolved_selector, "rank": 0}],
-                value=step.value,
-                expected_effect=step.expected_effect,
-            )
-            for step, outcome in zip(old_trajectory.steps, outcomes)
-        )
-    )
+    # BrainLoop.run() applies any successful repair internally and returns the
+    # VERIFIED trajectory — so the diff below is built from what actually
+    # worked live (original selector on a clean run, corrected selector after
+    # a repair), which is what distinguishes "was already fine" from "needed
+    # and got a repair".
+    new_trajectory = result.trajectory
     diff = compute_trajectory_diff(old_trajectory, new_trajectory)
-    all_on_track = all(outcome.on_track for outcome in outcomes)
+    all_on_track = result.success
 
     if not diff and all_on_track:
         return {"status": "already_certified", "heal_event_id": None, "golden_script_id": str(golden_script_id)}

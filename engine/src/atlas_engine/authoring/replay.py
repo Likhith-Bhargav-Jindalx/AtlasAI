@@ -1,118 +1,82 @@
 import dataclasses
-import threading
 import uuid
+from pathlib import Path
 
 from atlas_engine.authoring.events import log_event
-from atlas_engine.authoring.state import update_run
 from atlas_engine.brain.loop import run_step
-from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
-from atlas_engine.capture.events import RecordedAction
-from atlas_engine.capture.recorder import CaptureSession
-from atlas_engine.trajectory.extract import expected_effect_for_action
-
-
-def _wait_for_resume_or_stop(
-    resume_event: threading.Event, stop_event: threading.Event, *, poll_interval: float = 0.5,
-) -> str:
-    """Blocks until either the developer clicks Resume or the run is
-    stopped, whichever happens first. Polling (rather than a composite
-    wait) because Python's threading has no built-in "wait for any of
-    several events" primitive — poll_interval bounds how quickly a stop
-    takes effect while paused."""
-    while True:
-        if stop_event.wait(timeout=poll_interval):
-            return "stopped"
-        if resume_event.is_set():
-            resume_event.clear()
-            return "resumed"
-
-
-def _splice_developer_actions(
-    steps: list[TrajectoryStep], failed_index: int, developer_actions: list[RecordedAction],
-) -> list[TrajectoryStep]:
-    """Replaces the step at failed_index with whatever the developer did
-    instead — one action or several — and re-indexes every step in the
-    result sequentially from 0, since the original per-step indices no
-    longer describe a contiguous position once a step has been replaced
-    by a different number of actions."""
-    before = steps[:failed_index]
-    after = steps[failed_index + 1:]
-    converted = [
-        TrajectoryStep(
-            index=0,
-            kind=action.kind,
-            selector_candidates=action.selector_candidates,
-            value=action.value,
-            expected_effect=expected_effect_for_action(action),
-        )
-        for action in developer_actions
-    ]
-    combined = list(before) + converted + list(after)
-    return [dataclasses.replace(step, index=i) for i, step in enumerate(combined)]
+from atlas_engine.brain.models import ReferenceTrajectory
+from atlas_engine.config import settings
 
 
 def run_replay_phase(
     page, trajectory: ReferenceTrajectory, authoring_run_id: uuid.UUID,
-    resume_event: threading.Event, stop_event: threading.Event,
+    resume_event, stop_event,
 ) -> ReferenceTrajectory | None:
-    """Deterministic, non-LLM re-run of the recorded trajectory, headed so
-    a developer can watch and — on a step failure — intervene directly in
-    the live browser. Returns the (possibly developer-corrected)
-    trajectory, or None if stopped mid-replay or while paused."""
-    steps = list(trajectory.steps)
-    i = 0
-    while i < len(steps):
+    """INSTRUMENTED reference replay — the engine's equivalent of the old
+    app's transformForReplay. Re-runs the recorded trajectory headed so the
+    operator can watch, capturing per-step reference evidence — pre/post
+    screenshots and the resolved element's identity — that the brain later
+    thinks over. A failed step does NOT pause for the developer: it is logged,
+    its evidence is still captured, and the replay CONTINUES — the brain phase
+    repairs off-track steps automatically, exactly like the previous app.
+    Returns the enriched trajectory, or None if the run was stopped
+    mid-replay."""
+    ref_dir = Path(settings.ensure_run_root()) / "authoring" / str(authoring_run_id) / "ref"
+    enriched: list = []
+    for step in trajectory.steps:
         if stop_event.is_set():
             return None
 
-        step = steps[i]
-        exc: Exception | None = None
-        try:
-            outcome = run_step(page, step)
-        except Exception as caught_exc:
-            outcome = None
-            exc = caught_exc
+        if step.kind == "close":
+            continue  # page closes are teardown, not flow — never carried forward
 
-        if outcome is not None and outcome.on_track:
+        try:
+            outcome = run_step(page, step, shot_dir=str(ref_dir))
+        except Exception as exc:  # keep the step — the brain repairs it
+            log_event(
+                authoring_run_id, phase="replay", step_index=step.index, level="warning",
+                message=f"Step {step.index}: {step.kind} failed ({str(exc)[:200]}) — will be repaired by the brain",
+            )
+            enriched.append(step)
+            continue
+
+        if outcome.on_track:
             log_event(
                 authoring_run_id, phase="replay", step_index=step.index,
                 message=f"Step {step.index}: {step.kind} - OK",
             )
-            i += 1
-            continue
+        else:
+            log_event(
+                authoring_run_id, phase="replay", step_index=step.index, level="warning",
+                message=f"Step {step.index}: {step.kind} off-track — will be repaired by the brain",
+            )
 
-        failure_reason = str(exc) if exc is not None else "effect did not match"
-        log_event(
-            authoring_run_id, phase="replay", step_index=step.index, level="warning",
-            message=f"Step {step.index}: {step.kind} failed ({failure_reason}), waiting for developer",
+        enriched.append(
+            dataclasses.replace(
+                step,
+                ref_shot_before=outcome.shot_before or step.ref_shot_before,
+                ref_shot_after=outcome.shot_after or step.ref_shot_after,
+                identity=outcome.resolved_identity or step.identity,
+                expected_effect=_reference_effect(step, outcome),
+                wait_ceiling_ms=max(30000, (outcome.elapsed_ms or 0) * 10),
+            )
         )
-        update_run(authoring_run_id, status="waiting_for_developer")
 
-        # KNOWN LIMITATION: a fresh CaptureSession is created per pause, but
-        # CaptureSession.__enter__ calls page.expose_binding("__atlas_record", ...),
-        # and Playwright raises if that name is already registered on the page —
-        # it is, from any *earlier* pause in this same run_replay_phase call.
-        # A second developer-intervention pause within one run will therefore
-        # raise here instead of pausing cleanly. Fixing this needs either a
-        # way to reset/reuse one CaptureSession's recording window across
-        # pauses, or a public unbind/reset hook on CaptureSession itself
-        # (recorder.py) — out of scope for this task, which only exercises
-        # zero-pause and single-pause-then-stop trajectories.
-        capture = CaptureSession(page)
-        capture.__enter__()
-        wait_result = _wait_for_resume_or_stop(resume_event, stop_event)
-        capture.__exit__(None, None, None)
+    return ReferenceTrajectory(steps=tuple(enriched))
 
-        if wait_result == "stopped":
-            return None
 
-        developer_actions: list[RecordedAction] = list(capture.actions)
-        steps = _splice_developer_actions(steps, i, developer_actions)
-        update_run(authoring_run_id, status="running")
-        log_event(
-            authoring_run_id, phase="replay", step_index=i,
-            message=f"Developer resolved step {step.index} with {len(developer_actions)} action(s)",
-        )
-        i += len(developer_actions)
+# Change-intent gestures whose PURPOSE is to change the page — for these the
+# reference's observed DOM change becomes the brain's silent-no-op gate signal
+# (`expected_effect == "dom_changed"`). Mirrors the recorded effects.domChanged.
+_CHANGE_INTENT_KINDS = {"click", "dblclick", "hover_click", "dispatch_click", "goto"}
 
-    return ReferenceTrajectory(steps=tuple(steps))
+
+def _reference_effect(step, outcome) -> str:
+    """What the REFERENCE run actually did — the recorded-effects proxy the
+    brain's silent-no-op gate reads. A change-intent step (click/nav) that
+    changed the live DOM is `dom_changed` (the faithful port of
+    effects.domChanged); everything else keeps the recorded expected_effect
+    (`url_changed`/`none` — url-only changes never gate)."""
+    if step.kind in _CHANGE_INTENT_KINDS and bool(outcome.dom_before) and outcome.dom_before != outcome.dom_after:
+        return "dom_changed"
+    return step.expected_effect
