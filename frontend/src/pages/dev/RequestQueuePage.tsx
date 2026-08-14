@@ -30,6 +30,11 @@ export function RequestQueuePage() {
 
       <div className="flex flex-col gap-3">
         <div className="text-[11px] tracking-wider uppercase text-atlas-muted">Open · {unclaimed.length}</div>
+        {claim.isError && (
+          <div className="text-[13px] text-atlas-diffOldText">
+            {(claim.error as Error).message}
+          </div>
+        )}
         {unclaimed.map((r) => (
           <div key={r.id} className="bg-atlas-card border border-atlas-border rounded-2xl px-[22px] py-[18px] flex items-center justify-between gap-5">
             <div className="flex flex-col gap-1">

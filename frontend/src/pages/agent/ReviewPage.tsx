@@ -30,6 +30,21 @@ export function ReviewPage() {
   const totalActions = recording.pages.reduce((sum, page) => sum + page.steps.length, 0)
   const mainPage = recording.pages[0]
 
+  async function handleSubmit() {
+    if (!recording) return
+    const titleDirty = title !== (recording.title ?? '')
+    const descriptionDirty = description !== (recording.description ?? '')
+    if (titleDirty || descriptionDirty) {
+      try {
+        await patchRecording.mutateAsync({ title, description })
+      } catch {
+        // Surfaced via patchRecording.isError below; don't submit a stale title.
+        return
+      }
+    }
+    submitRecording.mutate({ submittedBy: user!.user_id }, { onSuccess: () => setSubmitted(true) })
+  }
+
   return (
     <div className="p-9 pb-16 flex flex-col gap-6 max-w-[1280px]">
       <div className="flex items-start justify-between gap-6">
@@ -70,15 +85,21 @@ export function ReviewPage() {
             onBlur={() => patchRecording.mutate({ description })}
             className="px-3.5 py-2.5 rounded-[10px] border border-atlas-border outline-none focus:border-atlas-accent text-sm"
           />
+          {(patchRecording.isError || submitRecording.isError) && (
+            <div className="text-[13px] text-atlas-diffOldText">
+              {((patchRecording.error ?? submitRecording.error) as Error).message}
+            </div>
+          )}
+
           {submitted ? (
             <div className="text-[13px] text-atlas-primary font-medium">Submitted to the developer queue.</div>
           ) : (
             <button
-              onClick={() => submitRecording.mutate({ submittedBy: user!.user_id }, { onSuccess: () => setSubmitted(true) })}
-              disabled={submitRecording.isPending}
+              onClick={handleSubmit}
+              disabled={submitRecording.isPending || patchRecording.isPending}
               className="bg-atlas-primary hover:bg-atlas-primaryHover text-white rounded-full py-2.5 text-[13.5px] font-medium disabled:opacity-60"
             >
-              {submitRecording.isPending ? 'Submitting…' : 'Submit to developer'}
+              {submitRecording.isPending || patchRecording.isPending ? 'Submitting…' : 'Submit to developer'}
             </button>
           )}
         </div>

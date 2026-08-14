@@ -3,7 +3,15 @@ import { useLlmUsageSummary } from '../../lib/llmUsage'
 
 export function CostDashboardPage() {
   const { user } = useAuth()
-  const { data, isLoading } = useLlmUsageSummary(user!.org_id)
+  const { data, isLoading, isError, error } = useLlmUsageSummary(user!.org_id)
+
+  if (isError) {
+    return (
+      <div className="p-9 text-[13px] text-atlas-diffOldText">
+        {(error as Error).message}
+      </div>
+    )
+  }
 
   if (isLoading || !data) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 

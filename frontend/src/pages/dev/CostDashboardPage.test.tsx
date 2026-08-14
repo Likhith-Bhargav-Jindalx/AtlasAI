@@ -10,11 +10,19 @@ function jsonResponse(data: unknown) {
   return { ok: true, status: 200, json: async () => data }
 }
 
+function errorResponse(status: number, detail: string) {
+  return { ok: false, status, json: async () => ({ detail }) }
+}
+
+let usageForbidden = false
+
 beforeEach(() => {
+  usageForbidden = false
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     const path = String(url).replace('http://localhost:8000', '')
     if (path === '/auth/me') return Promise.resolve(jsonResponse({ user_id: 'dev-1', org_id: 'org-1', email: 'd@x.com', role: 'member', job_function: 'developer' }))
     if (path === '/llm-usage/summary?org_id=org-1') {
+      if (usageForbidden) return Promise.resolve(errorResponse(403, 'Requires job function: developer'))
       return Promise.resolve(jsonResponse({ total_calls: 3, total_input_tokens: 100, total_output_tokens: 50, total_cost_usd: 0.20, by_day: [{ date: '2026-08-14', calls: 2, cost_usd: 0.12 }, { date: '2026-08-13', calls: 1, cost_usd: 0.08 }] }))
     }
     return Promise.reject(new Error(`unexpected fetch: ${path}`))
@@ -44,5 +52,12 @@ describe('CostDashboardPage', () => {
     expect(await screen.findByText('3')).toBeInTheDocument()
     expect(screen.getByText('$0.12')).toBeInTheDocument()
     expect(screen.getByText('2026-08-14')).toBeInTheDocument()
+  })
+
+  it('shows an error message instead of a permanent spinner when the request is forbidden', async () => {
+    usageForbidden = true
+    renderPage()
+    expect(await screen.findByText('Requires job function: developer')).toBeInTheDocument()
+    expect(screen.queryByText('Loading…')).toBeNull()
   })
 })
