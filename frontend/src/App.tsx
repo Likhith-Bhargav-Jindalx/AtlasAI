@@ -3,6 +3,7 @@ import { LoginPage } from './pages/LoginPage'
 import { InboxPage } from './pages/agent/InboxPage'
 import { LiveRecordingPage } from './pages/agent/LiveRecordingPage'
 import { ReviewPage } from './pages/agent/ReviewPage'
+import { AgentLibraryPage } from './pages/agent/AgentLibraryPage'
 import { LibraryPage } from './pages/dev/LibraryPage'
 import { AuthoringPage } from './pages/dev/AuthoringPage'
 import { ApprovalsPage } from './pages/ApprovalsPage'
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/" element={<div className="p-8">Pick a screen from the sidebar.</div>} />
           <Route path="/agent" element={<InboxPage />} />
           <Route path="/agent/record" element={<LiveRecordingPage />} />
+          <Route path="/agent/library" element={<AgentLibraryPage />} />
           <Route path="/agent/recordings/:recordingId" element={<ReviewPage />} />
           <Route path="/dev" element={<LibraryPage />} />
           <Route path="/dev/recordings/:recordingId" element={<KeyedAuthoringPage />} />

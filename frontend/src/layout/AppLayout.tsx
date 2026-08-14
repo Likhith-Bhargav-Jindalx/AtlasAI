@@ -5,6 +5,7 @@ import { useRole, type ViewRole } from './RoleContext'
 const NAV: Record<ViewRole, { to: string; label: string }[]> = {
   agent: [
     { to: '/agent', label: 'Request inbox' },
+    { to: '/agent/library', label: 'Recording library' },
   ],
   dev: [
     { to: '/dev', label: 'Recording library' },
