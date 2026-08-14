@@ -213,3 +213,26 @@ def test_get_recording_detail_includes_latest_authoring_run_id(fixture_portal_ur
     detail_after = client.get(f"/recordings/{recording_id}").json()
     assert detail_after["latest_authoring_run_id"] == run_id
 
+
+def test_list_recordings_endpoint_filters_by_user_id(fixture_portal_url):
+    from atlas_engine.db.models import User
+
+    with session_scope() as session:
+        org = Organization(name="API User Filter Org", slug=f"api-user-filter-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        user = User(org_id=org.id, email="c@example.com", password_hash="x", job_function="operations_agent")
+        session.add(user)
+        session.flush()
+        user_id = str(user.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    mine = persist_recording(org_id, start_url, [], user_id=user_id)
+    persist_recording(org_id, start_url, [])  # someone else's / unattributed
+
+    client = TestClient(app)
+    response = client.get(f"/recordings?org_id={org_id}&user_id={user_id}")
+    assert response.status_code == 200
+    assert [r["id"] for r in response.json()] == [str(mine)]
+

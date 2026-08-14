@@ -11,6 +11,7 @@ from atlas_engine.db.models import (
     PortalProfile,
     Recording,
     ReferenceTrajectory,
+    User,
     VideoAsset,
     VideoStep,
 )
@@ -356,4 +357,44 @@ def test_get_recording_detail_synthesizes_codegen_script_when_missing(fixture_po
     assert detail["codegen_script"] is not None
     assert "#username" in detail["codegen_script"]
     assert "#login-btn" in detail["codegen_script"]
+
+
+def test_persist_recording_stores_user_id(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="User Id Org", slug=f"user-id-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        user = User(org_id=org.id, email="agent@example.com", password_hash="x", job_function="operations_agent")
+        session.add(user)
+        session.flush()
+        user_id = str(user.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [], user_id=user_id)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        assert str(recording.user_id) == user_id
+
+
+def test_list_recordings_filters_by_user_id(fixture_portal_url):
+    from atlas_engine.recording_service import list_recordings
+
+    with session_scope() as session:
+        org = Organization(name="Filter User Org", slug=f"filter-user-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent_a = User(org_id=org.id, email="a@example.com", password_hash="x", job_function="operations_agent")
+        agent_b = User(org_id=org.id, email="b@example.com", password_hash="x", job_function="operations_agent")
+        session.add_all([agent_a, agent_b])
+        session.flush()
+        agent_a_id, agent_b_id = str(agent_a.id), str(agent_b.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    recording_a = persist_recording(org_id, start_url, [], user_id=agent_a_id)
+    persist_recording(org_id, start_url, [], user_id=agent_b_id)
+
+    results = list_recordings(org_id, user_id=agent_a_id)
+    assert [r["id"] for r in results] == [str(recording_a)]
 

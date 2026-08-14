@@ -72,11 +72,12 @@ class _LiveCaptureSession:
     through stop_event/done_event — never by touching Playwright objects
     from another thread, which is what makes this safe."""
 
-    def __init__(self, org_id: str, start_url: str, request_id: uuid.UUID | None, role: str):
+    def __init__(self, org_id: str, start_url: str, request_id: uuid.UUID | None, role: str, user_id: str | None = None):
         self.org_id = org_id
         self.start_url = start_url
         self.request_id = request_id
         self.role = role
+        self.user_id = user_id
         self.stop_event = threading.Event()
         self.done_event = threading.Event()
         self.recording_id: uuid.UUID | None = None
@@ -180,7 +181,7 @@ class _LiveCaptureSession:
 
             self.recording_id = persist_recording(
                 self.org_id, self.start_url, actions,
-                request_id=self.request_id, role=self.role,
+                request_id=self.request_id, role=self.role, user_id=self.user_id,
                 video_path=video_path,
                 video_started_at_ms=video_started_at_ms,
                 video_ended_at_ms=video_ended_at_ms,
@@ -211,10 +212,11 @@ class _LiveCaptureSession:
 
 
 def start_live_capture(
-    org_id: str, start_url: str, *, request_id: uuid.UUID | None = None, role: str = "demo"
+    org_id: str, start_url: str, *, request_id: uuid.UUID | None = None, role: str = "demo",
+    user_id: str | None = None,
 ) -> uuid.UUID:
     session_id = uuid.uuid4()
-    session = _LiveCaptureSession(org_id, start_url, request_id, role)
+    session = _LiveCaptureSession(org_id, start_url, request_id, role, user_id)
     with _registry_lock:
         _sessions[session_id] = session
     session.start()

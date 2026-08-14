@@ -37,12 +37,13 @@ export interface RecordingDetail {
   pages: RecordingPage[]
 }
 
-export function useRecordings(orgId: string, status?: string) {
+export function useRecordings(orgId: string, status?: string, userId?: string) {
   return useQuery({
-    queryKey: ['recordings', orgId, status],
+    queryKey: ['recordings', orgId, status, userId],
     queryFn: () => {
       const params = new URLSearchParams({ org_id: orgId })
       if (status) params.set('status', status)
+      if (userId) params.set('user_id', userId)
       return apiFetch<RecordingSummary[]>(`/recordings?${params}`)
     },
   })
@@ -58,7 +59,7 @@ export function useRecordingDetail(recordingId: string | undefined) {
 
 export function useStartRecording() {
   return useMutation({
-    mutationFn: (body: { org_id: string; start_url: string; request_id?: string; role?: string }) =>
+    mutationFn: (body: { org_id: string; start_url: string; request_id?: string; role?: string; user_id?: string }) =>
       apiFetch<{ capture_session_id: string }>('/recordings/start', { method: 'POST', body: JSON.stringify(body) }),
   })
 }

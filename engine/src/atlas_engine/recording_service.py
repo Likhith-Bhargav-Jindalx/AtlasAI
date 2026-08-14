@@ -43,6 +43,7 @@ def persist_recording(
     *,
     request_id: uuid.UUID | None = None,
     role: str = "demo",
+    user_id: str | None = None,
     video_path: Path | None = None,
     video_started_at_ms: int | None = None,
     video_ended_at_ms: int | None = None,
@@ -86,6 +87,7 @@ def persist_recording(
             capture_blob_prefix=run_dir.blob_ref,
             request_id=request_id,
             role=role,
+            user_id=uuid.UUID(user_id) if user_id else None,
         )
         session.add(recording)
         session.flush()
@@ -182,11 +184,13 @@ def _persist_video_asset(
     return duration_seconds
 
 
-def list_recordings(org_id: str, status: str | None = None) -> list[dict]:
+def list_recordings(org_id: str, status: str | None = None, user_id: str | None = None) -> list[dict]:
     with session_scope() as session:
         query = session.query(Recording).filter_by(org_id=uuid.UUID(org_id))
         if status is not None:
             query = query.filter_by(status=status)
+        if user_id is not None:
+            query = query.filter_by(user_id=uuid.UUID(user_id))
 
         results = []
         for recording in query.order_by(Recording.created_at.desc()).all():

@@ -7,7 +7,7 @@ import pytest
 
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import Organization, Recording, VideoAsset
+from atlas_engine.db.models import Organization, Recording, User, VideoAsset
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 
 
@@ -116,3 +116,22 @@ def test_resolve_page_index_identifies_main_and_extra_pages():
     assert _resolve_page_index(extra_page_1, main_page, extra_captures) == 1
     assert _resolve_page_index(extra_page_2, main_page, extra_captures) == 2
     assert _resolve_page_index(object(), main_page, extra_captures) is None
+
+
+def test_start_live_capture_stores_user_id(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Live Capture User Org", slug=f"live-capture-user-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        user = User(org_id=org.id, email="live@example.com", password_hash="x", job_function="operations_agent")
+        session.add(user)
+        session.flush()
+        user_id = str(user.id)
+
+    capture_session_id = start_live_capture(org_id, f"{fixture_portal_url}/login.html", user_id=user_id)
+    recording_id = stop_live_capture(capture_session_id)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        assert str(recording.user_id) == user_id

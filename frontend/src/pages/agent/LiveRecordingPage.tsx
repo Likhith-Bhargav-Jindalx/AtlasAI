@@ -23,7 +23,7 @@ export function LiveRecordingPage() {
     if (startedRef.current || !startUrl) return
     startedRef.current = true
     startRecording
-      .mutateAsync({ org_id: user!.org_id, start_url: startUrl, request_id: requestId, role: 'demo' })
+      .mutateAsync({ org_id: user!.org_id, start_url: startUrl, request_id: requestId, role: 'demo', user_id: user!.user_id })
       .then((result) => setCaptureSessionId(result.capture_session_id))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [startUrl])

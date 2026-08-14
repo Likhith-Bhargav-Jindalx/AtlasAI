@@ -325,6 +325,7 @@ class StartRecordingBody(BaseModel):
     start_url: str
     request_id: str | None = None
     role: str = "demo"
+    user_id: str | None = None
 
 
 class StartRecordingResponse(BaseModel):
@@ -336,8 +337,8 @@ class StopRecordingResponse(BaseModel):
 
 
 @app.get("/recordings")
-def list_recordings_endpoint(org_id: str, status: str | None = None) -> list[dict]:
-    return list_recordings(org_id, status=status)
+def list_recordings_endpoint(org_id: str, status: str | None = None, user_id: str | None = None) -> list[dict]:
+    return list_recordings(org_id, status=status, user_id=user_id)
 
 
 @app.post("/recordings/start", response_model=StartRecordingResponse)
@@ -345,7 +346,7 @@ def start_recording_endpoint(body: StartRecordingBody) -> StartRecordingResponse
     capture_session_id = start_live_capture(
         body.org_id, body.start_url,
         request_id=uuid.UUID(body.request_id) if body.request_id else None,
-        role=body.role,
+        role=body.role, user_id=body.user_id,
     )
     return StartRecordingResponse(capture_session_id=str(capture_session_id))
 
