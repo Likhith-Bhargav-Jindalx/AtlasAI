@@ -1,5 +1,6 @@
 import threading
 import uuid
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -30,6 +31,29 @@ def test_start_and_stop_live_capture_persists_a_recording(fixture_portal_url):
         video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one()
         assert video_asset.status == "ready"
         assert (settings.run_root / video_asset.storage_ref).stat().st_size > 0
+
+
+def test_stop_live_capture_stores_a_native_codegen_script(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Codegen Capture Org", slug=f"codegen-capture-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+
+    capture_session_id = start_live_capture(org_id, start_url)
+    recording_id = stop_live_capture(capture_session_id)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        codegen_path = Path(settings.run_root) / recording.capture_blob_prefix / "codegen.py"
+
+    assert codegen_path.exists()
+    text = codegen_path.read_text()
+    assert text.strip()  # the recorder emitted the recorded navigation at least
+    assert "__atlasGrabBtn" not in text
+    assert "Extract this page" not in text
 
 
 def test_stop_live_capture_raises_for_an_unknown_session():

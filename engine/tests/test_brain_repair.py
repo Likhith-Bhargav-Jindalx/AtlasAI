@@ -31,7 +31,10 @@ def test_think_validates_and_returns_a_selector_that_exists_on_the_live_page(fix
     assert len(fake_llm.calls) == 1
 
 
-def test_think_coerces_a_selector_that_does_not_exist_on_the_page_to_give_up(fixture_portal_url):
+def test_think_returns_the_proposal_unchanged_even_when_the_selector_matches_nothing(fixture_portal_url):
+    """think() proposes; the LOOP validates. A proposal whose selector matches
+    nothing on the live page is returned as-is and rejected by the loop (re-fed
+    as REJECTED feedback), exactly like the old app — not coerced to give_up."""
     step = TrajectoryStep(
         index=0, kind="click", selector_candidates=[{"selector": "#does-not-exist", "rank": 0}],
         value=None, expected_effect="dom_changed",
@@ -52,7 +55,41 @@ def test_think_coerces_a_selector_that_does_not_exist_on_the_page_to_give_up(fix
 
         browser.close()
 
-    assert result.action == "give_up"
+    assert result == RepairAction(action="replace_selector", selector="#also-does-not-exist")
+
+
+def test_brain_loop_rejects_a_selector_that_does_not_match_then_repairs_with_the_next(fixture_portal_url):
+    """The loop resolve-counts each proposed selector before applying it — a
+    proposal that matches nothing is re-fed as REJECTED feedback and the next
+    proposal is tried."""
+    from atlas_engine.brain.loop import BrainLoop
+    from atlas_engine.brain.models import ReferenceTrajectory
+
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(0, "click", [{"selector": "#stale-selector", "rank": 0}], None, "dom_changed"),
+        )
+    )
+    fake_llm = FakeLlmClient(
+        responses=[
+            {"action": "replace_selector", "selector": "#also-does-not-exist"},
+            {"action": "replace_selector", "selector": "#generate-report-btn"},
+        ]
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/dashboard.html")
+
+        outcomes = BrainLoop(page, llm=fake_llm).run(trajectory)
+
+        browser.close()
+
+    assert outcomes[0].on_track is True
+    assert len(fake_llm.calls) == 2
+    # The verified trajectory carries the selector that actually worked.
+    assert outcomes.trajectory.steps[0].selector_candidates[0]["selector"] == "#generate-report-btn"
 
 
 def test_brain_loop_repairs_a_broken_selector_and_the_retry_succeeds(fixture_portal_url):

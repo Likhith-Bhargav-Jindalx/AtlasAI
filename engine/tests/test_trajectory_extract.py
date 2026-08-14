@@ -38,7 +38,7 @@ def test_extract_trajectory_infers_expected_effect_per_step():
     trajectory = extract_trajectory(actions)
 
     assert trajectory.steps[0].expected_effect == "none"  # fill with no navigation/DOM change
-    assert trajectory.steps[1].expected_effect == "url_changed"
+    assert trajectory.steps[1].expected_effect == "dom_changed"  # a navigation changes the DOM too
     assert trajectory.steps[2].expected_effect == "dom_changed"
 
 

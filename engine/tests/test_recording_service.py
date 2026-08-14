@@ -222,6 +222,42 @@ def test_persist_recording_creates_a_video_asset_per_additional_page(tmp_path, f
         assert popup_step.caption_text == "Click #report-link"
 
 
+def test_persist_recording_stores_codegen_script(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Codegen Org", slug=f"codegen-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    recording_id = persist_recording(
+        org_id, start_url, [],
+        codegen_script='    page.goto("https://portal.example/login")\n    page.fill("#u", "demo")\n',
+    )
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        codegen_path = Path(settings.run_root) / recording.capture_blob_prefix / "codegen.py"
+        assert codegen_path.read_text() == (
+            '    page.goto("https://portal.example/login")\n    page.fill("#u", "demo")\n'
+        )
+
+
+def test_persist_recording_without_codegen_writes_no_file(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="No Codegen Org", slug=f"no-codegen-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        codegen_path = Path(settings.run_root) / recording.capture_blob_prefix / "codegen.py"
+        assert not codegen_path.exists()
+
+
 def test_create_list_and_claim_recording_request(fixture_portal_url):
     from atlas_engine.db.models import RecordingRequest, User
     from atlas_engine.recording_service import (

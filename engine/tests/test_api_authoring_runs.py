@@ -185,7 +185,9 @@ def test_full_authoring_run_via_http_reaches_certified(fixture_portal_url):
     assert any("OK" in e["message"] for e in body["events"])
 
 
-def test_stop_authoring_run_via_http_while_waiting_for_developer(fixture_portal_url, fixture_portal_server):
+def test_stop_authoring_run_via_http_stops_an_active_run(fixture_portal_url, fixture_portal_server):
+    """The replay no longer pauses for a developer on a drifted step, so
+    stopping an active run (during replay) must cancel it cleanly."""
     with session_scope() as session:
         org = Organization(name="HTTP Stop Org", slug=f"http-stop-org-{uuid.uuid4()}")
         session.add(org)
@@ -200,16 +202,7 @@ def test_stop_authoring_run_via_http_while_waiting_for_developer(fixture_portal_
         start_response = client.post(f"/recordings/{recording_id}/author")
         authoring_run_id = start_response.json()["authoring_run_id"]
 
-        deadline = time.time() + 30
-        paused = False
-        while time.time() < deadline:
-            poll = client.get(f"/authoring-runs/{authoring_run_id}")
-            if poll.json()["status"] == "waiting_for_developer":
-                paused = True
-                break
-            time.sleep(0.3)
-        assert paused, "authoring run never reached waiting_for_developer via HTTP polling"
-
+        # Stop immediately, while the run is still in its replay phase.
         stop_response = client.post(f"/authoring-runs/{authoring_run_id}/stop")
         assert stop_response.status_code == 200
         assert stop_response.json() == {"ok": True}
@@ -220,9 +213,12 @@ def test_stop_authoring_run_via_http_while_waiting_for_developer(fixture_portal_
         fixture_portal_server.set_drift_mode(False)
 
 
-def test_resume_authoring_run_via_http_unpauses_and_the_run_completes(fixture_portal_url, fixture_portal_server):
+def test_drifted_authoring_run_fails_autonomously_without_waiting_for_developer(fixture_portal_url, fixture_portal_server):
+    """The brain self-heals with an LLM; with no LLM configured (tests), a
+    drifted selector that can't be repaired fails the run — it NEVER waits
+    for the developer, unlike the previous engine."""
     with session_scope() as session:
-        org = Organization(name="HTTP Resume Org", slug=f"http-resume-org-{uuid.uuid4()}")
+        org = Organization(name="HTTP Drift Org", slug=f"http-drift-org-{uuid.uuid4()}")
         session.add(org)
         session.flush()
         org_id = str(org.id)
@@ -235,28 +231,20 @@ def test_resume_authoring_run_via_http_unpauses_and_the_run_completes(fixture_po
         start_response = client.post(f"/recordings/{recording_id}/author")
         authoring_run_id = start_response.json()["authoring_run_id"]
 
-        deadline = time.time() + 30
-        paused = False
+        deadline = time.time() + 90
+        final_status = None
+        saw_waiting = False
         while time.time() < deadline:
             poll = client.get(f"/authoring-runs/{authoring_run_id}")
-            if poll.json()["status"] == "waiting_for_developer":
-                paused = True
+            status = poll.json()["status"]
+            if status == "waiting_for_developer":
+                saw_waiting = True
+            if status in ("completed", "failed", "cancelled"):
+                final_status = status
                 break
             time.sleep(0.3)
-        assert paused, "authoring run never reached waiting_for_developer via HTTP polling"
 
-        resume_response = client.post(f"/authoring-runs/{authoring_run_id}/resume")
-        assert resume_response.status_code == 200
-        assert resume_response.json() == {"ok": True}
-
-        deadline = time.time() + 90
-        while time.time() < deadline:
-            poll = client.get(f"/authoring-runs/{authoring_run_id}")
-            if poll.json()["status"] in ("completed", "failed", "cancelled"):
-                break
-            time.sleep(0.5)
-
-        final = client.get(f"/authoring-runs/{authoring_run_id}")
-        assert final.json()["status"] == "completed"
+        assert final_status == "failed"
+        assert not saw_waiting
     finally:
         fixture_portal_server.set_drift_mode(False)

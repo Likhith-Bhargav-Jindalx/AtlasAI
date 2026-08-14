@@ -64,7 +64,10 @@ def test_start_authoring_run_completes_and_certifies(fixture_portal_url):
         assert all(c.status == "pass" for c in cert_runs)
 
 
-def test_stop_authoring_run_cancels_while_waiting_for_developer(fixture_portal_url, fixture_portal_server):
+def test_stop_authoring_run_cancels_an_active_run(fixture_portal_url, fixture_portal_server):
+    """The replay no longer pauses for a developer on a drifted step — but an
+    active run can still be stopped, and a stop during replay cancels it
+    cleanly (no golden is ever emitted)."""
     with session_scope() as session:
         org = Organization(name="Stop Run Org", slug=f"stop-run-org-{uuid.uuid4()}")
         session.add(org)
@@ -76,9 +79,6 @@ def test_stop_authoring_run_cancels_while_waiting_for_developer(fixture_portal_u
     fixture_portal_server.set_drift_mode(True)
     try:
         authoring_run_id = start_authoring_run(recording_id)
-        status = _wait_for_status(authoring_run_id, {"waiting_for_developer", "failed", "completed"})
-        assert status == "waiting_for_developer"
-
         stop_authoring_run(authoring_run_id)
 
         with session_scope() as session:

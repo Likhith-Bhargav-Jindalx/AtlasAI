@@ -41,6 +41,47 @@ def test_get_recording_detail_includes_video_steps(tmp_path, fixture_portal_url)
     assert body["pages"][0]["steps"][0]["offset_ms"] == 500
 
 
+def test_get_recording_detail_includes_codegen_script(fixture_portal_url):
+    from pathlib import Path
+
+    from atlas_engine.config import settings
+    from atlas_engine.db.models import Recording
+
+    with session_scope() as session:
+        org = Organization(name="Codegen Detail Org", slug=f"codegen-detail-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    recording_id = persist_recording(org_id, start_url, [], codegen_script='page.goto("https://x")\n')
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        codegen_path = Path(settings.run_root) / recording.capture_blob_prefix / "codegen.py"
+        assert codegen_path.exists()
+
+    client = TestClient(app)
+    response = client.get(f"/recordings/{recording_id}")
+    assert response.status_code == 200
+    assert response.json()["codegen_script"] == 'page.goto("https://x")\n'
+
+
+def test_get_recording_detail_codegen_script_is_null_when_absent(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="No Codegen Detail Org", slug=f"no-codegen-detail-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    client = TestClient(app)
+    response = client.get(f"/recordings/{recording_id}")
+    assert response.status_code == 200
+    assert response.json()["codegen_script"] is None
+
+
 def test_get_recording_detail_404_for_unknown_id():
     client = TestClient(app)
     response = client.get(f"/recordings/{uuid.uuid4()}")
