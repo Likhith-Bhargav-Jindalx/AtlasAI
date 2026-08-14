@@ -1,18 +1,18 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { ShieldCheck } from 'lucide-react'
 import { useAuth } from '../auth/AuthContext'
-import { useApproveHealEvent, useHealEvents, useRejectHealEvent } from '../lib/healEvents'
+import { useApproveHealEvent, useHealEvents, useRejectHealEvent, healEventScreenshotUrl } from '../lib/healEvents'
 import { StatusPill } from '../components/StatusPill'
 import { formatRelativeTime } from '../lib/format'
 
 export function ApprovalsPage() {
-  const { user } = useAuth()
-  const { data: heals, isLoading } = useHealEvents(user!.org_id, 'pending_approval')
+  const { user, isLoading: authLoading } = useAuth()
+  const { data: heals, isLoading } = useHealEvents(user?.org_id || '', 'pending_approval')
   const approve = useApproveHealEvent()
   const reject = useRejectHealEvent()
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
-  if (isLoading) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
+  if (authLoading || isLoading) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
   const selected = heals?.find((h) => h.id === selectedId) ?? heals?.[0]
 
@@ -82,20 +82,38 @@ export function ApprovalsPage() {
 
             <div className="flex flex-col gap-3">
               {(selected.diff_summary ?? []).map((entry) => (
-                <div key={entry.step_index} className="grid grid-cols-2 gap-[18px]">
-                  <div className="flex flex-col gap-1.5">
-                    <div className="text-[11px] tracking-wider uppercase text-atlas-muted">Step {entry.step_index + 1} — current</div>
-                    <div className="p-3 rounded-xl font-mono text-[11.5px] break-all bg-atlas-diffOldBg text-atlas-diffOldText">
-                      {entry.old_value}
+                <Fragment key={entry.step_index}>
+                  <div key={`${entry.step_index}-shots`} className="grid grid-cols-2 gap-[18px]">
+                    {entry.before_screenshot && (
+                      <img
+                        src={healEventScreenshotUrl(selected.id, entry.step_index, 'before')}
+                        alt={`Step ${entry.step_index + 1} before`}
+                        className="rounded-xl border border-atlas-border w-full"
+                      />
+                    )}
+                    {entry.after_screenshot && (
+                      <img
+                        src={healEventScreenshotUrl(selected.id, entry.step_index, 'after')}
+                        alt={`Step ${entry.step_index + 1} after`}
+                        className="rounded-xl border border-atlas-border w-full"
+                      />
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-[18px]">
+                    <div className="flex flex-col gap-1.5">
+                      <div className="text-[11px] tracking-wider uppercase text-atlas-muted">Step {entry.step_index + 1} — current</div>
+                      <div className="p-3 rounded-xl font-mono text-[11.5px] break-all bg-atlas-diffOldBg text-atlas-diffOldText">
+                        {entry.old_value}
+                      </div>
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <div className="text-[11px] tracking-wider uppercase text-atlas-primary">Step {entry.step_index + 1} — proposed</div>
+                      <div className="p-3 rounded-xl font-mono text-[11.5px] break-all bg-atlas-diffNewBg text-atlas-diffNewText">
+                        {entry.new_value}
+                      </div>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-1.5">
-                    <div className="text-[11px] tracking-wider uppercase text-atlas-primary">Step {entry.step_index + 1} — proposed</div>
-                    <div className="p-3 rounded-xl font-mono text-[11.5px] break-all bg-atlas-diffNewBg text-atlas-diffNewText">
-                      {entry.new_value}
-                    </div>
-                  </div>
-                </div>
+                </Fragment>
               ))}
               {(!selected.diff_summary || selected.diff_summary.length === 0) && (
                 <div className="text-[13px] text-atlas-body">No selector changes recorded for this heal event.</div>

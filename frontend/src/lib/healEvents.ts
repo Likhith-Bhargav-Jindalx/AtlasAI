@@ -6,6 +6,8 @@ export interface HealDiffEntry {
   field: string
   old_value: string
   new_value: string
+  before_screenshot: string | null
+  after_screenshot: string | null
 }
 
 export interface HealEventSummary {
@@ -43,4 +45,9 @@ export function useRejectHealEvent() {
     mutationFn: (id: string) => apiFetch(`/heal-events/${id}/reject`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['heal-events'] }),
   })
+}
+
+export function healEventScreenshotUrl(healEventId: string, stepIndex: number, when: 'before' | 'after'): string {
+  const base = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+  return `${base}/heal-events/${healEventId}/screenshots/${stepIndex}/${when}`
 }
