@@ -256,7 +256,7 @@ def test_patch_recording_updates_title_and_description(fixture_portal_url):
 
 
 def test_submit_recording_endpoint_creates_a_request(fixture_portal_url):
-    from atlas_engine.db.models import User
+    from atlas_engine.db.models import RecordingRequest, User
 
     with session_scope() as session:
         org = Organization(name="Submit API Org", slug=f"submit-api-org-{uuid.uuid4()}")
@@ -274,4 +274,8 @@ def test_submit_recording_endpoint_creates_a_request(fixture_portal_url):
     response = client.post(f"/recordings/{recording_id}/submit", json={"submitted_by": agent_id})
     assert response.status_code == 200
     assert "request_id" in response.json()
+
+    with session_scope() as session:
+        request = session.get(RecordingRequest, uuid.UUID(response.json()["request_id"]))
+        assert request.title == "Untitled recording"
 
