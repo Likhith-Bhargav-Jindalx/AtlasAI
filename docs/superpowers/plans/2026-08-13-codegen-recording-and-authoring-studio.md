@@ -368,6 +368,16 @@ New user request: port the previous app's author-golden logic *exactly* ("no log
 
 ---
 
+## Ledger (post-implementation fix round 5: mid-navigation snapshot tolerance)
+
+Reported from the live run log on the user's real eCW recording — the replay phase showed `Step 4: goto failed (Page.content: Unable to retrieve content because the page is navigating and changing the content.)`, and every subsequent step cascaded off-track incl. `Popup page 1 never opened`. Root cause and fix:
+
+- **Root cause:** `brain/loop.py::run_step` read the before-snapshot `target.content()` OUTSIDE any try/except. When the previous step's click had just triggered a redirect, the page was mid-navigation and `page.content()` throws that exact error — so step 4's `goto` was aborted BEFORE it executed, the page never navigated, and steps 5–15 all went off-track (the popup never opened because the flow never reached the eBO Reports trigger). The old runner's `state()` wraps `pg.content()` in try/except and returns `""` — a navigating page never aborts a step.
+- **Fix:** port `state()`'s tolerance for the before/after `url`+`content()` snapshots in `run_step`, the `think` DOM read in `brain/repair.py`, and the repair-cache fingerprint in `brain/loop.py::_cache_key_for`. The replay phase keeps the 3000ms fast-fail resolve ceiling (an off-track step is still captured and the brain repairs it with the ceiling it needs) — a temporary 60000ms replay ceiling was tried and reverted because it broke the 90s drifted-run test budget without changing behavior.
+- Verified: full suite `tests/` → **197 passed** (unchanged count, replay/brain/heal suites green); real recording still parses to 20 steps and emits a compilable golden.
+
+---
+
 ## Non-goals / follow-ons (ledgered, not built here)
 
 - Replaying codegen action kinds beyond `click`/`fill` (`press`, `select_option`, `check`/`uncheck`, `hover`, and `goto` as an explicit step) — requires widening `run_step`'s `_act` and `evaluate`; a follow-on plan.
