@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiFetch } from './api'
 
 export interface RecordingSummary {
@@ -32,6 +32,9 @@ export interface RecordingDetail {
   id: string
   status: string
   role: string
+  request_id: string | null
+  title: string | null
+  description: string | null
   latest_authoring_run_id: string | null
   codegen_script: string | null
   pages: RecordingPage[]
@@ -68,6 +71,25 @@ export function useStopRecording() {
   return useMutation({
     mutationFn: (captureSessionId: string) =>
       apiFetch<{ recording_id: string }>(`/recordings/${captureSessionId}/stop`, { method: 'POST' }),
+  })
+}
+
+export function usePatchRecording(recordingId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { title?: string; description?: string }) =>
+      apiFetch<{ ok: boolean }>(`/recordings/${recordingId}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['recording', recordingId] }),
+  })
+}
+
+export function useSubmitRecording(recordingId: string | undefined) {
+  return useMutation({
+    mutationFn: (body: { submittedBy: string }) =>
+      apiFetch<{ request_id: string }>(`/recordings/${recordingId}/submit`, {
+        method: 'POST',
+        body: JSON.stringify({ submitted_by: body.submittedBy }),
+      }),
   })
 }
 
