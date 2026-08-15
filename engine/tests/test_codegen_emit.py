@@ -646,6 +646,58 @@ def test_uses_static_iframe_reference_detects_session_random_iframe_name_chains(
     ) is False
 
 
+def test_dynamic_frame_step_reindents_hover_click_steps_without_indentation_errors():
+    """Mirrors test_login_block_reindents_hover_click_steps_without_indentation_errors:
+    hover/hover_click steps bake an extra literal 8-space indent into one of
+    their emitted lines (_emit_locator_gesture's "hover"/"hover_click"
+    branches hardcode "        page.wait_for_timeout(900)") on top of
+    _emit_step's own uniform 8-space wrap. _emit_dynamic_frame_step must
+    strip that baked-in indent the same way _emit_step_with_fallback and
+    _reindent_for_login_body already do, or a hover/hover_click step routed
+    through the dynamic-frame path produces an IndentationError at
+    compile() time."""
+    for kind in ("hover", "hover_click"):
+        trajectory = ReferenceTrajectory(steps=(
+            TrajectoryStep(
+                0, kind,
+                [{"selector": 'codegen_expr:page.locator("iframe[name=\\"i1F008FA3F9314C30BF326A2A49A5D68B\\"]").content_frame.get_by_role("textbox").first', "rank": 0}],
+                None, "none",
+            ),
+        ))
+        script = emit_golden_script(trajectory, start_url="https://x.com")
+        assert "i1F008FA3F9314C30BF326A2A49A5D68B" not in script
+        assert "find_frame_with_element(" in script
+        compile(script, "<golden>", "exec")
+
+
+def test_emit_dynamic_frame_step_direct():
+    """Direct unit test for the standalone emission helper, independent of
+    the full emit_golden_script integration tests above (per the plan's
+    global constraint: every new emission helper needs its own direct unit
+    test asserting on generated text)."""
+    from atlas_engine.codegen.emit import _emit_dynamic_frame_step
+
+    step = TrajectoryStep(
+        0, "click",
+        [{"selector": "unused-by-this-helper", "rank": 0}],
+        None, "none",
+    )
+    expr = 'page1.locator("iframe[name=\\"i1F008FA3F9314C30BF326A2A49A5D68B\\"]").content_frame.get_by_role("textbox").first'
+    lines = _emit_dynamic_frame_step(expr, step)
+    text = "\n".join(lines)
+
+    assert "find_frame_with_element(" in text
+    assert "i1F008FA3F9314C30BF326A2A49A5D68B" not in text
+    assert "_page(page, 1)" in text
+    assert '_frame.get_by_role("textbox").first.click()' in text
+
+    # Wrapped at the depth _emit_step actually uses (uniform 8-space prefix
+    # on every returned line), the result must compile cleanly.
+    body = "\n".join(f"        {line}" for line in lines)
+    script = "def run():\n" + body + "\n"
+    compile(script, "<golden>", "exec")
+
+
 @pytest.mark.skip(reason="wired up in Task 11")
 def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
     """End-to-end: a step that fails must produce step_N_failure.png and

@@ -145,7 +145,14 @@ def _emit_dynamic_frame_step(expr: str, step: TrajectoryStep) -> list[str]:
     # caller could pass a real content probe instead; the parameter is kept
     # generic for that.
     lines = [f"_frame = find_frame_with_element({page_expr}, '*')"]
-    lines.extend(_emit_locator_gesture(f"_frame.{rest}", step))
+    # Strip any baked-in leading whitespace from gesture lines before adding
+    # them: hover/hover_click's wait_for_timeout line hardcodes a literal
+    # 8-space indent (_emit_locator_gesture's "hover"/"hover_click" branches),
+    # which would double up with _emit_step's own uniform 8-space wrap and
+    # produce an IndentationError — the same pre-existing quirk already
+    # handled the same way at _emit_step_with_fallback and
+    # _reindent_for_login_body.
+    lines.extend(g.lstrip() for g in _emit_locator_gesture(f"_frame.{rest}", step))
     return lines
 
 
