@@ -85,6 +85,69 @@ _CODEGEN_EXPR_PREFIX = "codegen_expr:"
 
 _PAGE_ROOT_RE = re.compile(r"^(page\d*)\.(.*)$", re.DOTALL)
 
+# Embedded once, in the header, only for scripts that actually need it (see
+# emit_golden_script's conditional include below).
+_FIND_FRAME_WITH_ELEMENT_HELPER = '''
+
+def find_frame_with_element(pg, selector, timeout_ms=30000):
+    def matches(fr):
+        # Exclude the main frame: the whole reason this helper is called is
+        # that the recorded target lives inside a NESTED iframe (the codegen
+        # chain went through .content_frame) — never the top-level page.
+        # Without this check, `selector` is always the literal probe '*'
+        # (see _emit_dynamic_frame_step), which matches ANY element in ANY
+        # frame, including the main frame itself. `pg.frames[0]` is always
+        # the main frame, so an unguarded `query_selector(selector) is not
+        # None` check would return True on the very first frame examined —
+        # returning the main page and never actually searching for the
+        # nested iframe. Checking `fr != pg.main_frame` is what makes this
+        # search real: it forces the loop to keep looking past the main
+        # frame for a genuine child frame.
+        if fr == pg.main_frame:
+            return False
+        try:
+            return fr.query_selector(selector) is not None
+        except Exception:
+            return False
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        for frame in pg.frames:
+            if matches(frame):
+                return frame
+        pg.wait_for_timeout(1000)
+    raise Exception(f"No frame found containing: {selector} (waited {timeout_ms // 1000}s)")
+'''
+
+_IFRAME_CHAIN_RE = re.compile(r'^(.*?)\.locator\("iframe\[name=\\?"[^"]+\\?"\]"\)\.content_frame\.(.*)$')
+
+
+def _uses_static_iframe_reference(expr: str) -> bool:
+    """True when a codegen locator chain traverses into an iframe via a
+    baked-in iframe[name="..."] selector — that name is almost always
+    session-random (regenerated per BI-viewer session) and will not exist
+    in a future run."""
+    return bool(_IFRAME_CHAIN_RE.search(expr))
+
+
+def _emit_dynamic_frame_step(expr: str, step: TrajectoryStep) -> list[str]:
+    """Replaces a static iframe[name=...].content_frame reference with a
+    runtime search over every live frame for one containing the step's OWN
+    target locator — resolved fresh for this step (never cached/hoisted;
+    a later step's element can live in a different iframe than an earlier
+    one's)."""
+    m = _IFRAME_CHAIN_RE.match(expr)
+    root_expr, rest = m.group(1), m.group(2)
+    m_root = _PAGE_ROOT_RE.match(root_expr + ".")
+    page_expr = f"_page(page, {int(m_root.group(1)[4:])})" if m_root and m_root.group(1) != "page" else "page"
+    # The probe selector is always '*' (any element) — find_frame_with_element
+    # narrows to a genuine child frame via its own main-frame exclusion, not
+    # via this selector (see the helper's docstring/comment above). A future
+    # caller could pass a real content probe instead; the parameter is kept
+    # generic for that.
+    lines = [f"_frame = find_frame_with_element({page_expr}, '*')"]
+    lines.extend(_emit_locator_gesture(f"_frame.{rest}", step))
+    return lines
+
 
 def _build_review_header(
     trajectory: ReferenceTrajectory, *, portal_name: str, confidence: float | None,
@@ -210,6 +273,8 @@ def _emit_locator_gesture(call: str, step: TrajectoryStep) -> list[str]:
 def _emit_locator_call(expr: str, step: TrajectoryStep) -> list[str]:
     """Emits the codegen locator chain as real Playwright calls, resolving
     the page root (`page` or `page1`, ...) to the right object."""
+    if _uses_static_iframe_reference(expr):
+        return _emit_dynamic_frame_step(expr, step)
     m = _PAGE_ROOT_RE.match(expr)
     if not m:
         root, rest = "page", expr
@@ -536,6 +601,8 @@ def emit_golden_script(
         for step in trajectory.steps
     )
     header = _HEADER_TOP
+    if "find_frame_with_element(" in body:
+        header += _FIND_FRAME_WITH_ELEMENT_HELPER
     if pre_action_ms > 0:
         header += _PACE_HELPER_TEMPLATE.format(pre_action_ms=pre_action_ms)
     header += _HEADER_RUN

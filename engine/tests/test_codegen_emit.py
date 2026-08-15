@@ -591,6 +591,61 @@ def test_emit_step_with_fallback_is_a_single_call_with_only_one_candidate():
     assert "#only" in text
 
 
+def test_iframe_steps_resolve_dynamically_instead_of_a_baked_in_frame_name():
+    """A codegen-recorded iframe[name="..."] reference is almost always a
+    session-random BI-viewer-generated name (the exact bug this session
+    found live against eCW) — must never be baked into the emitted script
+    verbatim. Emission falls back to find_frame_with_element, matching by
+    the step's OWN target locator (role=textbox etc.), never by frame name."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(
+            0, "click",
+            [{"selector": 'codegen_expr:page1.locator("iframe[name=\\"i1F008FA3F9314C30BF326A2A49A5D68B\\"]").content_frame.get_by_role("textbox").first', "rank": 0}],
+            None, "none",
+        ),
+    ))
+    script = emit_golden_script(trajectory, start_url="https://x.com")
+    assert "i1F008FA3F9314C30BF326A2A49A5D68B" not in script
+    assert "find_frame_with_element(" in script
+    # Regression guard for the bug found (and fixed) during this task: the
+    # helper's `matches` predicate MUST exclude the main frame. The call
+    # site always probes with the literal selector '*' (any element in any
+    # frame matches), so if `matches` only checked
+    # `query_selector(selector) is not None` it would return True for
+    # pg.frames[0] (the main page) immediately — defeating the entire
+    # point of searching for the nested iframe. Assert the actual fixed
+    # predicate text is present so this can't silently regress back to the
+    # brief's original (buggy) one-liner.
+    assert "fr == pg.main_frame" in script or "fr is pg.main_frame" in script
+    assert "_frame.get_by_role(\"textbox\").first.click()" in script
+    compile(script, "<golden>", "exec")
+
+
+def test_uses_static_iframe_reference_detects_session_random_iframe_name_chains():
+    """Direct unit test for the standalone regex-matching helper, independent
+    of the full emit_golden_script integration test above."""
+    from atlas_engine.codegen.emit import _uses_static_iframe_reference
+
+    # Matches: a codegen locator chain that dives into an iframe via a
+    # baked-in iframe[name="..."] selector.
+    assert _uses_static_iframe_reference(
+        'page1.locator("iframe[name=\\"i1F008FA3F9314C30BF326A2A49A5D68B\\"]").content_frame.get_by_role("textbox").first'
+    ) is True
+
+    # Does NOT match: a plain page-root chain with no frame traversal at all.
+    assert _uses_static_iframe_reference(
+        'page.get_by_role("button", name="Log in")'
+    ) is False
+
+    # Does NOT match: a content_frame traversal via a stable, non-iframe-name
+    # selector (e.g. "#q") — this is a legitimate static reference that
+    # should keep being emitted literally, not routed through dynamic
+    # frame resolution.
+    assert _uses_static_iframe_reference(
+        'page1.locator("#q").content_frame.get_by_role("searchbox", name="S")'
+    ) is False
+
+
 @pytest.mark.skip(reason="wired up in Task 11")
 def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
     """End-to-end: a step that fails must produce step_N_failure.png and
