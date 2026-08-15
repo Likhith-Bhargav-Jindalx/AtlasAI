@@ -62,14 +62,17 @@ def attach_codegen_recorder(context: BrowserContext, output_path: Path) -> None:
 
 
 def strip_extraction_markers(codegen: str) -> str:
-    """Removes grab-button lines from the generated script. A grab click is
-    an extraction MARKER, not a flow step, and the button never exists
-    outside the record session."""
-    kept = [
-        line
-        for line in codegen.splitlines()
-        if "__atlasGrabBtn" not in line and "Extract this page" not in line
-    ]
+    """Replaces the extraction button's click line with a positional
+    marker comment (the button itself never exists outside the record
+    session, so its own click can't be replayed) — kept in place, not
+    deleted, so parse_codegen_actions can turn it into a real "extract"
+    step at the same point in the flow."""
+    kept = []
+    for line in codegen.splitlines():
+        if "__atlasGrabBtn" in line or "Extract this page" in line:
+            kept.append("# __ATLAS_EXTRACT__")
+        else:
+            kept.append(line)
     return "\n".join(kept)
 
 
@@ -168,6 +171,9 @@ def parse_codegen_actions(codegen: str) -> list[CodegenAction]:
     for raw in codegen.splitlines():
         indent = len(raw) - len(raw.lstrip())
         line = raw.strip()
+        if line == "# __ATLAS_EXTRACT__":
+            actions.append(CodegenAction(kind="extract", selector=""))
+            continue
         if not line or line.startswith("#"):
             continue
 
@@ -238,6 +244,7 @@ _TRAJECTORY_KINDS = {
     "type",
     "check",
     "uncheck",
+    "extract",
 }
 
 
@@ -266,11 +273,12 @@ def build_codegen_trajectory(codegen_actions: list[CodegenAction]) -> ReferenceT
         if action.kind not in _TRAJECTORY_KINDS:
             continue
         effect = "none"
+        candidates = [] if action.kind == "extract" else [{"selector": action.selector, "rank": 0}]
         steps.append(
             TrajectoryStep(
                 index=len(steps),
                 kind=action.kind,
-                selector_candidates=[{"selector": action.selector, "rank": 0}],
+                selector_candidates=candidates,
                 value=action.value,
                 expected_effect=effect,
                 expects_popup=action.expects_popup,

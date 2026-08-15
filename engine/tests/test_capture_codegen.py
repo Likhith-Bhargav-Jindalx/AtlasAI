@@ -286,3 +286,32 @@ def test_mixed_chain_locator_is_executed_as_a_playwright_locator(fixture_portal_
 
     assert outcome.on_track
     assert status == "Report ready"
+
+
+def test_strip_extraction_markers_preserves_position_as_a_marker_comment():
+    codegen = (
+        'page.get_by_role("button", name="📸 Extract this page → JSON").click()\n'
+        'page.click("#next")\n'
+    )
+    stripped = strip_extraction_markers(codegen)
+    lines = stripped.splitlines()
+    assert lines[0] == "# __ATLAS_EXTRACT__"
+    assert lines[1] == 'page.click("#next")'
+
+
+def test_parse_codegen_actions_recognizes_the_extract_marker():
+    codegen = "# __ATLAS_EXTRACT__\npage.click(\"#next\")\n"
+    actions = parse_codegen_actions(codegen)
+    assert [a.kind for a in actions] == ["extract", "click"]
+    assert actions[0].selector == ""
+
+
+def test_build_codegen_trajectory_includes_extract_steps():
+    actions = [
+        CodegenAction(kind="extract", selector=""),
+        CodegenAction(kind="click", selector='codegen_expr:page.get_by_role("button", name="Next")'),
+    ]
+    trajectory = build_codegen_trajectory(actions)
+    assert [s.kind for s in trajectory.steps] == ["extract", "click"]
+    assert trajectory.steps[0].expected_effect == "none"
+    assert trajectory.steps[0].selector_candidates == []
