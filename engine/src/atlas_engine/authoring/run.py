@@ -293,6 +293,28 @@ def resume_authoring_run(authoring_run_id: uuid.UUID) -> None:
 def stop_authoring_run(authoring_run_id: uuid.UUID, *, timeout: float = 30.0) -> None:
     with _registry_lock:
         session_obj = _sessions.get(authoring_run_id)
-    if session_obj is None:
-        raise ValueError(f"No active authoring run: {authoring_run_id}")
-    session_obj.stop(timeout=timeout)
+    if session_obj is not None:
+        session_obj.stop(timeout=timeout)
+        return
+
+    # No in-process session for this id — most commonly the server restarted
+    # (e.g. uvicorn --reload picking up a code change) since this run
+    # started, wiping the in-memory registry that owned it. Its DB row is
+    # then stuck at whatever non-terminal status it had, with nothing left
+    # able to ever advance or stop it the normal way — reconcile it here
+    # instead of leaving the caller to retry a stop that can never succeed.
+    with session_scope() as session:
+        run = session.get(AuthoringRun, authoring_run_id)
+        if run is None:
+            raise ValueError(f"No active authoring run: {authoring_run_id}")
+        status = run.status
+        current_phase = run.current_phase
+
+    if status not in ("running", "waiting_for_developer"):
+        return  # already terminal — stop is idempotent, nothing to reconcile
+
+    update_run(authoring_run_id, status="failed", ended_at=_now())
+    log_event(
+        authoring_run_id, phase=current_phase, level="warning",
+        message="Run orphaned (no active session, likely a server restart) — marked failed by stop.",
+    )

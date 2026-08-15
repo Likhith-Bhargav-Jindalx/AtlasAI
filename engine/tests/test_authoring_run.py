@@ -89,6 +89,64 @@ def test_stop_authoring_run_cancels_an_active_run(fixture_portal_url, fixture_po
         fixture_portal_server.set_drift_mode(False)
 
 
+def test_stop_authoring_run_reconciles_an_orphaned_run(fixture_portal_url):
+    """No in-process session exists for this run — e.g. the server restarted
+    (uvicorn --reload picking up a code change) since the run started,
+    wiping the in-memory _sessions registry that owns it. Its DB row is
+    stuck at a non-terminal status with nothing left able to ever advance
+    or stop it normally. stop_authoring_run must reconcile the row to
+    "failed" instead of raising ValueError forever with the UI stuck
+    showing "Running"."""
+    with session_scope() as session:
+        org = Organization(name="Orphaned Run Org", slug=f"orphaned-run-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    with session_scope() as session:
+        run = AuthoringRun(
+            org_id=uuid.UUID(org_id), recording_id=recording_id, status="running", current_phase="replay",
+        )
+        session.add(run)
+        session.flush()
+        authoring_run_id = run.id
+
+    stop_authoring_run(authoring_run_id)  # no _sessions entry for this id — must not raise
+
+    with session_scope() as session:
+        run = session.get(AuthoringRun, authoring_run_id)
+        assert run.status == "failed"
+        assert run.ended_at is not None
+
+
+def test_stop_authoring_run_on_an_already_terminal_orphaned_run_is_a_noop(fixture_portal_url):
+    """Calling stop twice (or after the run already finished) on a run with
+    no in-process session must not clobber an already-terminal status."""
+    with session_scope() as session:
+        org = Organization(name="Terminal Orphan Org", slug=f"terminal-orphan-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    with session_scope() as session:
+        run = AuthoringRun(
+            org_id=uuid.UUID(org_id), recording_id=recording_id, status="completed", current_phase="done",
+        )
+        session.add(run)
+        session.flush()
+        authoring_run_id = run.id
+
+    stop_authoring_run(authoring_run_id)
+
+    with session_scope() as session:
+        run = session.get(AuthoringRun, authoring_run_id)
+        assert run.status == "completed"
+
+
 def test_start_authoring_run_repairs_and_reaches_partially_certified(fixture_portal_url, fixture_portal_server):
     """Drives the repair loop through the REAL golden/certify pipeline
     (not a standalone certify call) by keeping the fixture portal drifted
