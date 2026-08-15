@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 from atlas_engine.auth.deps import CurrentUser, get_current_user, require_job_function
@@ -12,7 +12,6 @@ from atlas_engine.auth.session import create_session_token, verify_session_token
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
-from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import (
     AuthoringRun,
@@ -37,6 +36,7 @@ from atlas_engine.recording_service import (
     submit_recording_for_authoring,
     update_recording_details,
 )
+from atlas_engine.storage import get_store
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, list_heal_events, reject_heal_event
 
 app = FastAPI(title="Atlas Engine Local API")
@@ -267,9 +267,9 @@ def get_authoring_run_endpoint(authoring_run_id: str) -> AuthoringRunDetailRespo
             golden = session.get(GoldenScript, run.golden_script_id)
             if golden is not None:
                 script_text = None
-                script_path = Path(golden.script_blob_ref)
-                if script_path.exists():
-                    script_text = script_path.read_text()
+                store = get_store()
+                if store.exists(golden.script_blob_ref):
+                    script_text = store.read_text(golden.script_blob_ref)
                 golden_script = GoldenScriptSummaryResponse(
                     id=str(golden.id), version=golden.version, status=golden.status, script_text=script_text,
                 )
@@ -511,8 +511,14 @@ def get_recording_video_endpoint(recording_id: str, page_index: int):
             raise HTTPException(status_code=404, detail="No video for this recording page")
         storage_ref = video_asset.storage_ref
 
-    video_path = settings.run_root / storage_ref
-    if not video_path.exists():
+    store = get_store()
+    url = store.url_for(storage_ref)
+    if url is not None:
+        return RedirectResponse(url)
+
+    try:
+        video_path = store.local_path_for(storage_ref)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Video file missing on disk")
 
     return FileResponse(video_path, media_type="video/webm")

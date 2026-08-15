@@ -1,11 +1,10 @@
-import json
 import uuid
-from pathlib import Path
 
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, Organization, Recording, ReferenceTrajectory
+from atlas_engine.storage import get_store
 
 
 def test_author_from_recorded_actions_persists_recording_and_trajectory(fixture_portal_url):
@@ -37,6 +36,6 @@ def test_author_from_recorded_actions_persists_recording_and_trajectory(fixture_
         )
         assert trajectory_row.step_count == 4
 
-        data = json.loads(Path(trajectory_row.trajectory_blob_ref).read_text())
+        data = get_store().read_json(trajectory_row.trajectory_blob_ref)
         assert len(data["steps"]) == 4
         assert data["steps"][3]["selector_candidates"][0]["selector"] == "#generate-report-btn"

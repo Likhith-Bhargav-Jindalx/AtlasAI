@@ -1,12 +1,12 @@
 import json
 import uuid
-from pathlib import Path
 
 from click.testing import CliRunner
 
 from atlas_engine.cli import main
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, Organization
+from atlas_engine.storage import get_store
 
 
 def test_author_from_actions_command_produces_a_certified_golden_script(tmp_path, fixture_portal_url):
@@ -46,6 +46,5 @@ def test_author_from_actions_command_produces_a_certified_golden_script(tmp_path
         scripts = session.query(GoldenScript).filter_by(org_id=uuid.UUID(org_id)).all()
         assert len(scripts) == 1
         assert scripts[0].status == "certified"
-        script_path = Path(scripts[0].script_blob_ref)
-        assert script_path.exists()
-        assert "atlas_engine" not in script_path.read_text()
+        script_text = get_store().read_text(scripts[0].script_blob_ref)
+        assert "atlas_engine" not in script_text

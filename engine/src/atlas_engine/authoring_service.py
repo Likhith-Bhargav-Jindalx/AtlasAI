@@ -1,19 +1,16 @@
-import json
 import uuid
-from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 from atlas_engine.brain.loop import BrainLoop
 from atlas_engine.brain.serialize import trajectory_from_dict
 from atlas_engine.codegen.emit import emit_golden_script
-from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, PortalProfile, Recording, RecordingRequest
 from atlas_engine.db.models import ReferenceTrajectory as ReferenceTrajectoryModel
 from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.llm.client import LlmClient
-from atlas_engine.storage import LocalRunStore
+from atlas_engine.storage import get_store
 from atlas_engine.verify.certify import certify_golden_script
 
 
@@ -41,7 +38,7 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
         pre_action_ms = profile.pacing_pre_action_ms or 0
         settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
 
-    trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
+    trajectory = trajectory_from_dict(get_store().read_json(trajectory_blob_ref))
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -58,13 +55,13 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
     trajectory = result.trajectory
     all_on_track = result.success
 
-    store = LocalRunStore(root=settings.ensure_run_root())
+    store = get_store()
     run_dir = store.new_run_dir(prefix="goldens")
     script_text = emit_golden_script(
         trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
     )
+    script_blob_ref = run_dir.write_text("golden.py", script_text)
     script_path = run_dir.path / "golden.py"
-    script_path.write_text(script_text)
 
     if not all_on_track:
         status = "draft"
@@ -77,7 +74,7 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
             org_id=org_id,
             portal_profile_id=portal_profile_id,
             version=next_golden_script_version(session, portal_profile_id),
-            script_blob_ref=str(script_path),
+            script_blob_ref=script_blob_ref,
             status=status,
             created_from_recording_id=recording_id,
         )

@@ -7,6 +7,7 @@ from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, Organization, PortalProfile
 from atlas_engine.portal_profile.infer import infer_portal_profile
+from atlas_engine.storage import get_store
 
 
 def test_full_pipeline_record_to_certified_golden_script(fixture_portal_url):
@@ -59,4 +60,4 @@ def test_full_pipeline_record_to_certified_golden_script(fixture_portal_url):
     with session_scope() as session:
         golden = session.get(GoldenScript, uuid.UUID(result["golden_script_id"]))
         assert golden.status == "certified"
-        assert "atlas_engine" not in open(golden.script_blob_ref).read()
+        assert "atlas_engine" not in get_store().read_text(golden.script_blob_ref)

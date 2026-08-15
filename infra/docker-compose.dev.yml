@@ -15,5 +15,16 @@ services:
       timeout: 5s
       retries: 5
 
+  # Local, free emulator for Azure Blob Storage — lets AzureBlobRunStore be
+  # exercised in dev/tests with zero real Azure account or cost. Its
+  # connection string below is Microsoft's own published well-known test
+  # key (not a secret — see Azurite's docs), valid only against this local
+  # emulator.
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command: "azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck"
+    ports:
+      - "10000:10000"
+
 volumes:
   atlas_pg_data:

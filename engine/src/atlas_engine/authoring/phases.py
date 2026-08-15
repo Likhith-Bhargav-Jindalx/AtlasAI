@@ -10,7 +10,7 @@ from atlas_engine.db import session_scope
 from atlas_engine.db.models import CertificationRun, GoldenScript
 from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.llm.client import LlmClient
-from atlas_engine.storage import LocalRunStore
+from atlas_engine.storage import get_store
 from atlas_engine.verify.certify import certify_golden_script_once
 
 
@@ -65,20 +65,20 @@ def run_golden_phase(
     """Freezes the brain-verified trajectory into a deterministic .py
     script and records it as a draft GoldenScript — certifying (next
     phase) decides whether it becomes certified or partially_certified."""
-    store = LocalRunStore(root=settings.ensure_run_root())
+    store = get_store()
     run_dir = store.new_run_dir(prefix="goldens")
     script_text = emit_golden_script(
         trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
     )
+    script_blob_ref = run_dir.write_text("golden.py", script_text)
     script_path = run_dir.path / "golden.py"
-    script_path.write_text(script_text)
 
     with session_scope() as session:
         golden = GoldenScript(
             org_id=org_id,
             portal_profile_id=portal_profile_id,
             version=next_golden_script_version(session, portal_profile_id),
-            script_blob_ref=str(script_path),
+            script_blob_ref=script_blob_ref,
             status="draft",
             created_from_recording_id=recording_id,
         )

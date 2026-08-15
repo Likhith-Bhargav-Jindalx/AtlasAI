@@ -49,7 +49,7 @@ def test_persist_recording_creates_recording_and_trajectory(fixture_portal_url):
         assert recording.request_id is None
 
         trajectory_row = session.query(ReferenceTrajectory).filter_by(recording_id=recording_id).one()
-        data = json.loads(Path(trajectory_row.trajectory_blob_ref).read_text())
+        data = json.loads((settings.run_root / trajectory_row.trajectory_blob_ref).read_text())
         assert len(data["steps"]) == 3
 
         profile = session.get(PortalProfile, recording.portal_profile_id)

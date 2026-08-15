@@ -1,8 +1,6 @@
-import json
 import threading
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -13,11 +11,11 @@ from atlas_engine.authoring.state import update_run
 from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.brain.serialize import trajectory_from_dict
 from atlas_engine.capture.codegen import build_codegen_trajectory, parse_codegen_actions
-from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import AuthoringRun, GoldenScript, PortalProfile, Recording, RecordingRequest
 from atlas_engine.db.models import ReferenceTrajectory as ReferenceTrajectoryModel
 from atlas_engine.llm.client import LlmClient
+from atlas_engine.storage import get_store
 
 _MAX_REPAIR_ATTEMPTS = 2
 _CERTIFY_RUNS = 3
@@ -39,10 +37,11 @@ def apply_stored_codegen_selectors(
     recorder's CSS candidates often lack). Returns the rebuilt trajectory and
     whether it was replaced (False for old recordings with no script, or a
     script with no replayable action lines)."""
-    codegen_path = Path(settings.ensure_run_root()) / capture_blob_prefix / "codegen.py"
-    if not (codegen_path.exists() and codegen_path.stat().st_size > 0):
+    store = get_store()
+    codegen_blob_ref = f"{capture_blob_prefix}/codegen.py"
+    if not store.exists(codegen_blob_ref):
         return trajectory, False
-    codegen_actions = parse_codegen_actions(codegen_path.read_text())
+    codegen_actions = parse_codegen_actions(store.read_text(codegen_blob_ref))
     rebuilt = build_codegen_trajectory(codegen_actions)
     if rebuilt is None:
         return trajectory, False
@@ -98,7 +97,7 @@ class _AuthoringRunSession:
                 pre_action_ms = profile.pacing_pre_action_ms or 0
                 settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
 
-            trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
+            trajectory = trajectory_from_dict(get_store().read_json(trajectory_blob_ref))
 
             # When the recording captured a native codegen script, drive the
             # initial run with its selectors (rank-0 candidates).

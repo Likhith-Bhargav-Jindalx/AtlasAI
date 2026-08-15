@@ -1,4 +1,3 @@
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -6,7 +5,6 @@ from pathlib import Path
 
 from atlas_engine.brain.serialize import trajectory_to_dict
 from atlas_engine.capture.events import RecordedAction
-from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import (
     AuthoringRun,
@@ -20,7 +18,7 @@ from atlas_engine.db.models import (
 )
 from atlas_engine.db.repo import get_or_create_portal_profile
 from atlas_engine.portal_profile.infer import infer_portal_profile
-from atlas_engine.storage import LocalRunStore
+from atlas_engine.storage import get_store
 from atlas_engine.trajectory.extract import extract_trajectory
 
 
@@ -58,16 +56,15 @@ def persist_recording(
     authoring_service.author_from_recording is the only thing that
     consumes what this produces.
     """
-    store = LocalRunStore(root=settings.ensure_run_root())
+    store = get_store()
     run_dir = store.new_run_dir(prefix="recordings")
     run_dir.write_json("actions.json", [vars(a) for a in actions])
 
     trajectory = extract_trajectory(actions)
-    trajectory_path = run_dir.path / "trajectory.json"
-    trajectory_path.write_text(json.dumps(trajectory_to_dict(trajectory), indent=2))
+    trajectory_blob_ref = run_dir.write_json("trajectory.json", trajectory_to_dict(trajectory))
 
     if codegen_script is not None:
-        (run_dir.path / "codegen.py").write_text(codegen_script)
+        run_dir.write_text("codegen.py", codegen_script)
 
     profile_data = infer_portal_profile(start_url, actions)
 
@@ -95,7 +92,7 @@ def persist_recording(
         session.add(
             ReferenceTrajectory(
                 recording_id=recording.id,
-                trajectory_blob_ref=str(trajectory_path),
+                trajectory_blob_ref=trajectory_blob_ref,
                 step_count=len(trajectory.steps),
             )
         )
@@ -192,6 +189,7 @@ def list_recordings(org_id: str, status: str | None = None, user_id: str | None 
         if user_id is not None:
             query = query.filter_by(user_id=uuid.UUID(user_id))
 
+        store = get_store()
         results = []
         for recording in query.order_by(Recording.created_at.desc()).all():
             video_asset = (
@@ -201,12 +199,9 @@ def list_recordings(org_id: str, status: str | None = None, user_id: str | None 
             )
             request = session.get(RecordingRequest, recording.request_id) if recording.request_id else None
             profile = session.get(PortalProfile, recording.portal_profile_id)
-            run_root = Path(settings.ensure_run_root())
-            codegen_path = run_root / recording.capture_blob_prefix / "codegen.py"
-            has_codegen = codegen_path.exists() and codegen_path.stat().st_size > 0
+            has_codegen = store.exists(f"{recording.capture_blob_prefix}/codegen.py")
             if not has_codegen:
-                traj_path = run_root / recording.capture_blob_prefix / "trajectory.json"
-                has_codegen = traj_path.exists() and traj_path.stat().st_size > 0
+                has_codegen = store.exists(f"{recording.capture_blob_prefix}/trajectory.json")
 
             results.append({
                 "id": str(recording.id),
@@ -255,38 +250,33 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
             })
 
         codegen_script = None
-        run_root = Path(settings.ensure_run_root())
-        codegen_path = run_root / recording.capture_blob_prefix / "codegen.py"
-        if not codegen_path.exists():
-            codegen_path = Path(recording.capture_blob_prefix) / "codegen.py"
+        store = get_store()
+        codegen_blob_ref = f"{recording.capture_blob_prefix}/codegen.py"
+        trajectory_blob_ref = f"{recording.capture_blob_prefix}/trajectory.json"
 
-        if codegen_path.exists() and codegen_path.stat().st_size > 0:
-            codegen_script = codegen_path.read_text()
-        else:
-            traj_path = run_root / recording.capture_blob_prefix / "trajectory.json"
-            if not traj_path.exists():
-                traj_path = Path(recording.capture_blob_prefix) / "trajectory.json"
-            if traj_path.exists() and traj_path.stat().st_size > 0:
-                try:
-                    from atlas_engine.brain.serialize import trajectory_from_dict
-                    from atlas_engine.codegen.emit import emit_golden_script
-                    traj_dict = json.loads(traj_path.read_text())
-                    traj = trajectory_from_dict(traj_dict)
-                    if traj.steps:
-                        profile = session.get(PortalProfile, recording.portal_profile_id)
-                        inferred_url = profile.inferred_login_url if profile else "http://localhost/"
-                        start_url = inferred_url or "http://localhost/"
-                        codegen_script = emit_golden_script(
-                            traj, start_url=start_url,
-                            pre_action_ms=(profile.pacing_pre_action_ms or 0) if profile else 0,
-                            settle_after_nav_ms=(profile.pacing_settle_after_nav_ms or 0) if profile else 0,
-                        )
-                        try:
-                            codegen_path.write_text(codegen_script)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+        if store.exists(codegen_blob_ref):
+            codegen_script = store.read_text(codegen_blob_ref)
+        elif store.exists(trajectory_blob_ref):
+            try:
+                from atlas_engine.brain.serialize import trajectory_from_dict
+                from atlas_engine.codegen.emit import emit_golden_script
+                traj_dict = store.read_json(trajectory_blob_ref)
+                traj = trajectory_from_dict(traj_dict)
+                if traj.steps:
+                    profile = session.get(PortalProfile, recording.portal_profile_id)
+                    inferred_url = profile.inferred_login_url if profile else "http://localhost/"
+                    start_url = inferred_url or "http://localhost/"
+                    codegen_script = emit_golden_script(
+                        traj, start_url=start_url,
+                        pre_action_ms=(profile.pacing_pre_action_ms or 0) if profile else 0,
+                        settle_after_nav_ms=(profile.pacing_settle_after_nav_ms or 0) if profile else 0,
+                    )
+                    try:
+                        store.write_text(codegen_blob_ref, codegen_script)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         latest_run = (
             session.query(AuthoringRun)

@@ -19,6 +19,7 @@ from atlas_engine.db.models import (
     User,
 )
 from atlas_engine.recording_service import create_recording_request, persist_recording
+from atlas_engine.storage import get_store
 
 
 def _record_against_fixture(
@@ -301,6 +302,6 @@ def test_start_authoring_run_threads_portal_pacing_end_to_end(fixture_portal_url
     with session_scope() as session:
         run = session.get(AuthoringRun, authoring_run_id)
         golden = session.get(GoldenScript, run.golden_script_id)
-        script_text = open(golden.script_blob_ref).read()
+        script_text = get_store().read_text(golden.script_blob_ref)
         assert "PACING_MS = 50" in script_text
         assert "def _pace(pg):" in script_text

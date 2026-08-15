@@ -1,7 +1,5 @@
-import json
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
@@ -10,13 +8,12 @@ from atlas_engine.brain.loop import BrainLoop
 from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.brain.serialize import trajectory_from_dict
 from atlas_engine.codegen.emit import emit_golden_script
-from atlas_engine.config import settings
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, HealEvent, PortalProfile
 from atlas_engine.db.models import ReferenceTrajectory as ReferenceTrajectoryModel
 from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.llm.client import LlmClient
-from atlas_engine.storage import LocalRunStore
+from atlas_engine.storage import get_store
 from atlas_engine.verify.certify import certify_golden_script
 
 
@@ -79,9 +76,9 @@ def heal_golden_script(
         pre_action_ms = profile.pacing_pre_action_ms or 0
         settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
 
-    old_trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
+    store = get_store()
+    old_trajectory = trajectory_from_dict(store.read_json(trajectory_blob_ref))
 
-    store = LocalRunStore(root=settings.ensure_run_root())
     shot_run_dir = store.new_run_dir(prefix="heal-shots")
     shot_dir = str(shot_run_dir.path)
 
@@ -110,13 +107,12 @@ def heal_golden_script(
     if not diff and all_on_track:
         return {"status": "already_certified", "heal_event_id": None, "golden_script_id": str(golden_script_id)}
 
-    store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="goldens")
     script_text = emit_golden_script(
         new_trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
     )
+    script_blob_ref = run_dir.write_text("golden.py", script_text)
     script_path = run_dir.path / "golden.py"
-    script_path.write_text(script_text)
 
     if all_on_track:
         certification = certify_golden_script(script_path, runs=2)
@@ -130,7 +126,7 @@ def heal_golden_script(
             portal_profile_id=portal_profile_id,
             version=next_golden_script_version(session, portal_profile_id),
             parent_version_id=golden_script_id,
-            script_blob_ref=str(script_path),
+            script_blob_ref=script_blob_ref,
             status=new_status,
             created_from_recording_id=created_from_recording_id,
         )
