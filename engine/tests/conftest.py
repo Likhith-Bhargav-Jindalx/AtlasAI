@@ -19,6 +19,29 @@ import pytest  # noqa: E402
 
 from tests.fixtures.fixture_portal.server import FixturePortalServer  # noqa: E402
 
+_LLM_ENV_VARS = (
+    "ATLAS_AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_ENDPOINT",
+    "ATLAS_AZURE_OPENAI_API_KEY", "AZURE_OPENAI_API_KEY",
+    "ATLAS_AZURE_OPENAI_MODEL", "AZURE_OPENAI_MODEL",
+    "AZURE_OPENAI_DEPLOYMENT", "AZURE_OPENAI_DEPLOYMENT_NAME",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_llm_credentials(monkeypatch):
+    """create_llm_client() loads a local .env via find_dotenv(usecwd=True),
+    and python-dotenv writes straight into the real os.environ (unlike
+    monkeypatch.setenv, that mutation is NOT auto-reverted). So the first
+    test in the session that runs with CWD still at the repo root — where a
+    developer's real engine/.env with real Azure credentials may live —
+    permanently leaks those credentials into every test that runs after it,
+    silently turning "no LLM configured" into "a real LLM is configured" for
+    the rest of the suite. Clearing these before each test, via monkeypatch,
+    guarantees any such leak from a prior test is undone before this one
+    starts, and is itself cleanly undone after this test for the next one."""
+    for var in _LLM_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+
 
 @pytest.fixture(scope="session")
 def fixture_portal_server():

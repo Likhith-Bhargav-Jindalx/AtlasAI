@@ -280,10 +280,16 @@ def test_stop_authoring_run_during_brain_phase_does_not_500(monkeypatch):
     assert body["status"] == "stopping"
 
 
-def test_drifted_authoring_run_fails_autonomously_without_waiting_for_developer(fixture_portal_url, fixture_portal_server):
+def test_drifted_authoring_run_fails_autonomously_without_waiting_for_developer(
+    fixture_portal_url, fixture_portal_server, monkeypatch, tmp_path,
+):
     """The brain self-heals with an LLM; with no LLM configured (tests), a
     drifted selector that can't be repaired fails the run — it NEVER waits
-    for the developer, unlike the previous engine."""
+    for the developer, unlike the previous engine. This test's premise
+    requires no LLM to be reachable, so it must not pick up a real
+    engine/.env on the developer's machine (create_llm_client loads one via
+    find_dotenv(usecwd=True)) — chdir to an isolated tmp_path first."""
+    monkeypatch.chdir(tmp_path)
     with session_scope() as session:
         org = Organization(name="HTTP Drift Org", slug=f"http-drift-org-{uuid.uuid4()}")
         session.add(org)

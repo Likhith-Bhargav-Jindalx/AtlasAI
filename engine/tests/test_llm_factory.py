@@ -30,10 +30,13 @@ def test_create_llm_client_reads_a_dotenv_file_when_no_real_env_vars_are_set(mon
     assert client.deployment == "gpt-4o-mini"
 
 
-def test_create_llm_client_returns_none_when_unconfigured(monkeypatch):
-    monkeypatch.delenv("ATLAS_AZURE_OPENAI_ENDPOINT", raising=False)
-    monkeypatch.delenv("ATLAS_AZURE_OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("ATLAS_AZURE_OPENAI_MODEL", raising=False)
+def test_create_llm_client_returns_none_when_unconfigured(monkeypatch, tmp_path):
+    for var in _ALL_LLM_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    # Also isolate from any real engine/.env on this machine (create_llm_client
+    # loads one via find_dotenv(usecwd=True)) — this test's "unconfigured"
+    # premise must hold regardless of the developer's own local .env file.
+    monkeypatch.chdir(tmp_path)
 
     assert create_llm_client() is None
 
