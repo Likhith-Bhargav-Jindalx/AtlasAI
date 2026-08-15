@@ -738,6 +738,29 @@ def test_print_capture_context_setup_snippet_is_valid_python():
     assert "window.print = fire" in _PRINT_CAPTURE_INIT_SCRIPT
 
 
+def test_extract_step_emission_runs_serializer_across_frames_and_accumulates_result():
+    from atlas_engine.codegen.emit import _emit_extract_step
+    lines = _emit_extract_step()
+    text = "\n".join(lines)
+    assert "_fr.evaluate(" in text
+    assert 'result["extractions"][f"click_{_extract_n}"]' in text
+    body = "\n".join(f"    {l}" for l in lines)
+    script = "def run():\n" + body + "\n"
+    compile(script, "<extract>", "exec")
+
+
+def test_download_step_emission_uses_context_scoped_event_not_page_scoped():
+    from atlas_engine.codegen.emit import _emit_download_step
+    lines = _emit_download_step(["page1.get_by_role(\"link\", name=\"Excel data\").click()"])
+    text = "\n".join(lines)
+    assert 'context.expect_event("download"' in text
+    assert "page.expect_download(" not in text
+    assert 'result["downloaded_files"].append(' in text
+    body = "\n".join(f"    {l}" for l in lines)
+    script = "def run():\n" + body + "\n"
+    compile(script, "<download>", "exec")
+
+
 @pytest.mark.skip(reason="wired up in Task 11")
 def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
     """End-to-end: a step that fails must produce step_N_failure.png and

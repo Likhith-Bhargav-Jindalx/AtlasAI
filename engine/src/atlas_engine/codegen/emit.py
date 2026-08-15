@@ -1,6 +1,7 @@
 import re
 
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+from atlas_engine.capture.extraction import SERIALIZER as _SERIALIZER_JS
 from atlas_engine.codegen.params import ClassifiedParams
 
 _DUMP_FAILURE_CONTEXT_HELPER = '''
@@ -664,6 +665,49 @@ def _build_login_block(
     body.append("")
 
     return "\n".join(body) + "\n", consumed
+
+
+def _emit_extract_step() -> list[str]:
+    """Runs the DOM-walking heuristic serializer (capture/extraction.py's
+    SERIALIZER — the same one the live "Extract this page" button uses)
+    across every frame of the current page, merges fields/tables, and
+    accumulates into result["extractions"], keyed by encounter order.
+    Deliberately NOT the previous app's frozen-selector-spec approach — a
+    live re-walk self-adapts to minor DOM drift instead of freezing a
+    selector that can go stale (a decision confirmed with the user)."""
+    return [
+        "_extract_n += 1",
+        "_merged = {'fields': {}, 'tables': []}",
+        "for _fr in page.frames:",
+        "    try:",
+        f"        _res = _fr.evaluate({_SERIALIZER_JS!r})",
+        "    except Exception:",
+        "        continue",
+        "    _data = (_res or {}).get('data') or {}",
+        "    _merged['fields'].update(_data.get('fields') or {})",
+        "    _merged['tables'].extend(_data.get('tables') or [])",
+        'result["extractions"][f"click_{_extract_n}"] = {"url": page.url, "data": _merged}',
+    ]
+
+
+def _emit_download_step(action_lines: list[str]) -> list[str]:
+    """Wraps a download-triggering step's action lines in a CONTEXT-scoped
+    (not page-scoped) download wait — some real portals (confirmed live
+    against eCW's BI report export) fire the download on a different page
+    than the one clicked; context.expect_event catches it regardless of
+    which page in the context fired it. Deliberately diverges from the
+    previous app's page-scoped page.expect_download() (a decision
+    confirmed with the user, matching this session's already-fixed
+    authoring-time bug in brain/loop.py::run_step)."""
+    lines = ['with context.expect_event("download", timeout=300000) as _dl_info:']
+    lines.extend(f"    {line}" for line in action_lines)
+    lines.append("_download = _dl_info.value")
+    lines.append('_dl_dir = os.path.join(diagnostics_dir, "..", "results")')
+    lines.append("os.makedirs(_dl_dir, exist_ok=True)")
+    lines.append("_dl_path = os.path.join(_dl_dir, _download.suggested_filename)")
+    lines.append("_download.save_as(_dl_path)")
+    lines.append('result["downloaded_files"].append({"filename": _download.suggested_filename, "path": _dl_path})')
+    return lines
 
 
 def emit_golden_script(
