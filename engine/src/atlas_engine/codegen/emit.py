@@ -334,9 +334,18 @@ def _emit_step_with_fallback(step: TrajectoryStep, *, pre_action_ms: int = 0, se
 
     call = "page.locator(_sel).first"
     gesture_lines = _emit_locator_gesture(call, step)
-    lines = ["_last_err = None", f"for _sel in {usable!r}:"]
+
+    # Apply pre_action_ms pacing before the loop if configured
+    lines = []
+    if pre_action_ms > 0:
+        lines.append("_pace(page)")
+
+    lines.append("_last_err = None")
+    lines.append(f"for _sel in {usable!r}:")
     lines.append("    try:")
-    lines.extend(f"        {g}" for g in gesture_lines)
+    # Strip any baked-in leading whitespace from gesture lines before prefixing uniformly
+    # (e.g., hover's wait_for_timeout has literal 8 spaces, which would double-indent if not stripped)
+    lines.extend(f"        {g.lstrip()}" for g in gesture_lines)
     lines.append("        _last_err = None")
     lines.append("        break")
     lines.append("    except Exception as _fe:")
