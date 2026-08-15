@@ -1,5 +1,5 @@
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
-from atlas_engine.codegen.params import classify_step_values
+from atlas_engine.codegen.params import classify_step_values, _env_var, _cli_name
 
 
 def test_password_step_becomes_a_secret_with_a_domain_derived_env_var():
@@ -73,3 +73,35 @@ def test_cli_name_derivation_strips_non_alphanumerics_and_camel_case():
     result = classify_step_values(trajectory, "portal.example.com")
 
     assert result.params[0].cli_name == "report-start-date2"
+
+
+# Direct unit tests for helper functions
+
+def test_env_var_sanitizes_domain_with_dots():
+    """Verify _env_var converts dots to underscores and uppercases the label."""
+    assert _env_var("portal.example.com", "password") == "SECRET_PORTAL_EXAMPLE_COM_PASSWORD"
+    assert _env_var("portal.example.com", "username") == "SECRET_PORTAL_EXAMPLE_COM_USERNAME"
+
+
+def test_env_var_sanitizes_domain_with_hyphens_and_other_special_chars():
+    """Verify _env_var converts non-alphanumeric characters to underscores."""
+    assert _env_var("my-portal.site-name.org", "password") == "SECRET_MY_PORTAL_SITE_NAME_ORG_PASSWORD"
+    assert _env_var("portal@example_site.com", "username") == "SECRET_PORTAL_EXAMPLE_SITE_COM_USERNAME"
+
+
+def test_cli_name_plain_lowercase_selector():
+    """Verify _cli_name handles plain lowercase selectors."""
+    step = TrajectoryStep(0, "fill", [{"selector": "#search", "rank": 0}], "x", "none")
+    assert _cli_name(step) == "search"
+
+
+def test_cli_name_camel_case_selector():
+    """Verify _cli_name splits camelCase into kebab-case."""
+    step = TrajectoryStep(0, "fill", [{"selector": "#startDate", "rank": 0}], "x", "none")
+    assert _cli_name(step) == "start-date"
+
+
+def test_cli_name_selector_with_digits():
+    """Verify _cli_name preserves digits and splits correctly."""
+    step = TrajectoryStep(0, "fill", [{"selector": "#reportStartDate2", "rank": 0}], "x", "none")
+    assert _cli_name(step) == "report-start-date2"
