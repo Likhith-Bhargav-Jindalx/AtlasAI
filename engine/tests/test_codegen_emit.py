@@ -1,6 +1,8 @@
 import subprocess
 import sys
 
+import pytest
+
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 from atlas_engine.codegen.emit import emit_golden_script, _looks_session_random, _prefer_visible
 
@@ -532,4 +534,83 @@ def test_login_block_reindents_hover_click_steps_without_indentation_errors():
     block, consumed = _build_login_block(trajectory, classified, success_signal=None)
     assert consumed == {0, 1, 2}
     compile(block, "<login>", "exec")
+
+
+# ── Per-step try/except + dump_failure_context + selector fallback chains ────
+
+
+def test_wrap_step_with_diagnostics_adds_try_except():
+    from atlas_engine.codegen.emit import _wrap_step_with_diagnostics
+    wrapped = _wrap_step_with_diagnostics(["        page.click('#btn')"], 3, "click #btn")
+    text = "\n".join(wrapped)
+    assert "try:" in text
+    assert "except Exception as e:" in text
+    assert "dump_failure_context(page, page, 3," in text
+    assert "raise" in text
+
+
+def test_dump_failure_context_helper_is_embedded_in_header():
+    from atlas_engine.codegen.emit import _DUMP_FAILURE_CONTEXT_HELPER
+    assert "def dump_failure_context(" in _DUMP_FAILURE_CONTEXT_HELPER
+    assert "page.screenshot(path=" in _DUMP_FAILURE_CONTEXT_HELPER
+    assert "json.dump(" in _DUMP_FAILURE_CONTEXT_HELPER
+    compile(_DUMP_FAILURE_CONTEXT_HELPER, "<helper>", "exec")
+
+
+def test_emit_step_with_fallback_tries_every_ranked_candidate_in_turn():
+    """Global Constraint / spec §3: a step with N ranked selector candidates
+    must try each in turn at runtime (not just _best_selector's single
+    pick) — a candidate that breaks between authoring and a later run
+    shouldn't fail the whole step if an earlier-recorded alternate still
+    resolves."""
+    from atlas_engine.codegen.emit import _emit_step_with_fallback
+    step = TrajectoryStep(
+        0, "click",
+        [{"selector": "#primary", "rank": 0}, {"selector": "#fallback", "rank": 1}],
+        None, "none",
+    )
+    lines = _emit_step_with_fallback(step, pre_action_ms=0, settle_after_nav_ms=0)
+    text = "\n".join(lines)
+    assert "'#primary'" in text
+    assert "'#fallback'" in text
+    assert "for _sel in [" in text
+    assert "_last_err" in text
+    compile("\n".join(f"    {l}" for l in lines), "<step>", "exec")
+
+
+def test_emit_step_with_fallback_is_a_single_call_with_only_one_candidate():
+    """No fallback machinery at all when there's nothing to fall back to —
+    keeps output unchanged for the (overwhelmingly common) single-candidate
+    case."""
+    from atlas_engine.codegen.emit import _emit_step_with_fallback
+    step = TrajectoryStep(0, "click", [{"selector": "#only", "rank": 0}], None, "none")
+    lines = _emit_step_with_fallback(step, pre_action_ms=0, settle_after_nav_ms=0)
+    text = "\n".join(lines)
+    assert "for _sel in [" not in text
+    assert "'#only'" in text
+
+
+@pytest.mark.skip(reason="wired up in Task 11")
+def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
+    """End-to-end: a step that fails must produce step_N_failure.png and
+    step_N_failure.json in the diagnostics dir, and the script must exit
+    non-zero (raise propagates) rather than silently continuing."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#does-not-exist", "rank": 0}], None, "none"),
+    ))
+    script = emit_golden_script(
+        trajectory, start_url=f"{fixture_portal_url}/login.html",
+        portal_domain="x.com", portal_name="X", confidence=1.0, success_signal=None,
+    )
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--diagnostics-dir", str(tmp_path / "diag")],
+        capture_output=True, text=True, timeout=30,
+    )
+
+    assert result.returncode != 0
+    assert (tmp_path / "diag" / "step_0_failure.png").exists()
+    assert (tmp_path / "diag" / "step_0_failure.json").exists()
 
