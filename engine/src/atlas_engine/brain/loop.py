@@ -36,7 +36,10 @@ def _rematerialize(val: str | None) -> str:
 def _settle_frames(pg, timeout_ms: int = 3000) -> None:
     """Bounded wait for the page's iframe tree to stop changing — i.e. nested frames
     finished (re)loading. Portals like eCW / Cognos / Epic reload nested frames on
-    navigation, and resolving before they load fails."""
+    navigation, and resolving before they load fails. Signal = the set of frame
+    URLs unchanged for 3 consecutive 500ms polls (~1.5s) — matches the previous
+    app's runnerEmit.ts::_settle_frames exactly; settling on fewer/faster polls
+    declares a still-reloading frame tree stable too early."""
     deadline = time.monotonic() + timeout_ms / 1000.0
     prev = None
     stable = 0
@@ -47,13 +50,13 @@ def _settle_frames(pg, timeout_ms: int = 3000) -> None:
             return
         if sig == prev:
             stable += 1
-            if stable >= 2:
+            if stable >= 3:
                 return
         else:
             stable = 0
         prev = sig
         try:
-            pg.wait_for_timeout(300)
+            pg.wait_for_timeout(500)
         except Exception:
             return
 
@@ -360,7 +363,10 @@ def _act(
 ) -> None:
     if step.kind == "goto":
         nav_timeout = max(timeout_ms or 0, 60000)
-        page.goto(selector, wait_until="domcontentloaded", timeout=nav_timeout)
+        # "load" (not "domcontentloaded") matches the previous app's runner —
+        # it never overrides Playwright's own default, which waits for the
+        # load event (subresources/scripts settled), not just the DOM parse.
+        page.goto(selector, wait_until="load", timeout=nav_timeout)
         return
     if step.kind == "close":
         page.close()
@@ -437,8 +443,10 @@ def run_step(
 
     loc = None
     if step.kind not in ("goto", "close", "click_xy"):
-        if hasattr(target, "frames") and len(target.frames) > 1:
-            _settle_frames(target, 3000)
+        # Unconditional, like the previous app's runner — a reloading iframe
+        # may not even be counted in target.frames yet, so gating this on
+        # frame count can skip the exact race it exists to catch.
+        _settle_frames(target, min(timeout or 20000, 20000))
         # An explicit `selector` overrides resolution entirely — it is the ONE
         # candidate to try (used by the repair cache's re-verify).
         candidates = [{"selector": selector, "rank": 0}] if selector else step.selector_candidates
