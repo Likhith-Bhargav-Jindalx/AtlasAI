@@ -257,9 +257,9 @@ def _emit_locator_gesture(call: str, step: TrajectoryStep) -> list[str]:
     if step.kind == "dblclick":
         return [f"{call}.dblclick()"]
     if step.kind == "hover":
-        return [f"{call}.hover()", "        page.wait_for_timeout(900)"]
+        return [f"{call}.hover()", "page.wait_for_timeout(900)"]
     if step.kind == "hover_click":
-        return [f"{call}.hover()", "        page.wait_for_timeout(900)", f"{call}.click()"]
+        return [f"{call}.hover()", "page.wait_for_timeout(900)", f"{call}.click()"]
     if step.kind == "dispatch_click":
         return [f'{call}.dispatch_event("click")']
     if step.kind == "fill":
@@ -306,9 +306,9 @@ def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
     if step.kind == "dblclick":
         return [f"page.dblclick({selector!r})"]
     if step.kind == "hover":
-        return [f"page.hover({selector!r})", "        page.wait_for_timeout(900)"]
+        return [f"page.hover({selector!r})", "page.wait_for_timeout(900)"]
     if step.kind == "hover_click":
-        return [f"page.hover({selector!r})", "        page.wait_for_timeout(900)", f"page.click({selector!r})"]
+        return [f"page.hover({selector!r})", "page.wait_for_timeout(900)", f"page.click({selector!r})"]
     if step.kind == "dispatch_click":
         return [f'page.locator({selector!r}).dispatch_event("click")']
     if step.kind == "fill":

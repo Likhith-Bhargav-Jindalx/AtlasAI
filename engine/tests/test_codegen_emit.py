@@ -698,6 +698,40 @@ def test_emit_dynamic_frame_step_direct():
     compile(script, "<golden>", "exec")
 
 
+def test_plain_hover_step_through_default_emission_path_compiles():
+    """Root-cause regression test: _emit_step (the DEFAULT emission path used
+    for ordinary steps that don't go through login/fallback/dynamic-frame
+    wrapping) must produce compilable output for hover/hover_click, matching
+    every other step kind. Prior to this fix, _emit_locator_gesture and
+    _emit_css_step both hardcode "        page.wait_for_timeout(900)") on top of
+    each caller's own uniform prefix -- always producing an IndentationError.
+    """
+    from atlas_engine.codegen.emit import _emit_step
+    for kind in ("hover", "hover_click"):
+        step = TrajectoryStep(0, kind, [{"selector": "#target", "rank": 0}], None, "none")
+        body = _emit_step(step)
+        # Wrap in a function to test compilability (body is indented for use in run())
+        script = "def run(page):\n" + body + "\n"
+        compile(script, f"<step-{kind}>", "exec")
+
+
+def test_plain_hover_step_via_codegen_expr_through_default_emission_path_compiles():
+    """Same root cause, the codegen_expr / _emit_locator_gesture path (used
+    when a step's selector is a get_by_role(...)-style chain rather than a
+    plain CSS string)."""
+    from atlas_engine.codegen.emit import _emit_step
+    for kind in ("hover", "hover_click"):
+        step = TrajectoryStep(
+            0, kind,
+            [{"selector": 'codegen_expr:page.get_by_role("button", name="Menu")', "rank": 0}],
+            None, "none",
+        )
+        body = _emit_step(step)
+        # Wrap in a function to test compilability (body is indented for use in run())
+        script = "def run(page):\n" + body + "\n"
+        compile(script, f"<step-{kind}-expr>", "exec")
+
+
 @pytest.mark.skip(reason="wired up in Task 11")
 def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
     """End-to-end: a step that fails must produce step_N_failure.png and
