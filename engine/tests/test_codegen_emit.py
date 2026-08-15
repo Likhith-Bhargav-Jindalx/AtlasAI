@@ -299,3 +299,53 @@ def test_emitted_golden_script_with_pacing_actually_runs_against_the_fixture_por
 
     assert result.returncode == 0, result.stderr
 
+
+def test_review_header_includes_portal_name_and_confidence():
+    from atlas_engine.codegen.emit import _build_review_header
+    from atlas_engine.codegen.params import ClassifiedParams
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),
+    ))
+    header = _build_review_header(
+        trajectory, portal_name="TxbsirECW", confidence=0.9,
+        classified=ClassifiedParams(secrets=(), params=()),
+    )
+    assert "portal: TxbsirECW" in header
+    assert "confidence: 0.9" in header
+
+
+def test_review_header_warns_about_phi_free_params_with_no_default():
+    from atlas_engine.codegen.emit import _build_review_header
+    from atlas_engine.codegen.params import ClassifiedParams, CliParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#dob", "rank": 0}], "", "none"),
+    ))
+    classified = ClassifiedParams(secrets=(), params=(CliParam(0, "dob", ""),))
+    header = _build_review_header(trajectory, portal_name="X", confidence=1.0, classified=classified)
+    assert "fill step(s) have no captured/parameterized value" in header
+    assert "0" in header
+
+
+def test_review_header_warns_about_popup_steps():
+    from atlas_engine.codegen.emit import _build_review_header
+    from atlas_engine.codegen.params import ClassifiedParams
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#open", "rank": 0}], None, "none", expects_popup=True),
+    ))
+    header = _build_review_header(
+        trajectory, portal_name="X", confidence=1.0, classified=ClassifiedParams(secrets=(), params=()),
+    )
+    assert "opens at least one new page/popup" in header
+
+
+def test_review_header_omits_warning_lines_when_nothing_to_warn_about():
+    from atlas_engine.codegen.emit import _build_review_header
+    from atlas_engine.codegen.params import ClassifiedParams, CliParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#x", "rank": 0}], "has-a-value", "none"),
+    ))
+    classified = ClassifiedParams(secrets=(), params=(CliParam(0, "x", "has-a-value"),))
+    header = _build_review_header(trajectory, portal_name="X", confidence=1.0, classified=classified)
+    assert "no captured/parameterized value" not in header
+    assert "opens at least one new page/popup" not in header
+
