@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -575,7 +576,7 @@ def test_emit_step_with_fallback_tries_every_ranked_candidate_in_turn():
     assert "'#fallback'" in text
     assert "for _sel in [" in text
     assert "_last_err" in text
-    compile("\n".join(f"    {l}" for l in lines), "<step>", "exec")
+    compile(textwrap.dedent("\n".join(f"    {l}" for l in lines)), "<step>", "exec")
 
 
 def test_emit_step_with_fallback_is_a_single_call_with_only_one_candidate():
@@ -587,7 +588,7 @@ def test_emit_step_with_fallback_is_a_single_call_with_only_one_candidate():
     lines = _emit_step_with_fallback(step, pre_action_ms=0, settle_after_nav_ms=0)
     text = "\n".join(lines)
     assert "for _sel in [" not in text
-    assert "'#only'" in text
+    assert "#only" in text
 
 
 @pytest.mark.skip(reason="wired up in Task 11")

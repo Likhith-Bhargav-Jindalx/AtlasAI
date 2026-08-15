@@ -330,29 +330,7 @@ def _emit_step_with_fallback(step: TrajectoryStep, *, pre_action_ms: int = 0, se
         and not c["selector"].startswith(_CODEGEN_EXPR_PREFIX)
     ]
     if len(usable) < 2:
-        # Single usable candidate: emit directly without fallback loop. Use the
-        # original selector from usable (not _best_selector) to avoid skipping
-        # session-random again, and emit without visible=true modification for CSS.
-        if step.kind == "goto":
-            lines = [f"page.goto({usable[0]!r})"]
-        elif step.kind == "click_xy":
-            lines = [f"page.mouse.click({step.x or 0}, {step.y or 0})"]
-        elif usable[0].startswith(_CODEGEN_EXPR_PREFIX):
-            lines = _emit_locator_call(usable[0][len(_CODEGEN_EXPR_PREFIX):], step)
-        else:
-            # For CSS selectors, emit directly without _prefer_visible to keep original selector
-            call = f"page.locator({usable[0]!r}).first"
-            lines = _emit_locator_gesture(call, step)
-
-        if step.expected_effect == "url_changed":
-            lines.append('page.wait_for_load_state("domcontentloaded")')
-
-        # Apply pacing if configured
-        if pre_action_ms > 0:
-            lines.insert(0, "_pace(page)")
-
-        # Return with 8-space indentation for consistency with _emit_step output
-        return [f"        {line}" for line in lines]
+        return _emit_step(step, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms).split("\n")
 
     call = "page.locator(_sel).first"
     gesture_lines = _emit_locator_gesture(call, step)
