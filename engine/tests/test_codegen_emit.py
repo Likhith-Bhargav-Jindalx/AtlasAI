@@ -411,3 +411,99 @@ def test_argparse_block_escapes_special_characters_in_defaults():
     dedented = textwrap.dedent(block)
     compile(dedented, "<generated>", "exec")
 
+
+def test_login_block_is_empty_when_there_is_no_password_step():
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),
+    ))
+    block, consumed = _build_login_block(trajectory, ClassifiedParams(secrets=(), params=()), success_signal=None)
+    assert block == ""
+    assert consumed == set()
+
+
+def test_login_block_emits_retry_wrapper_and_success_signal_wait():
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block, consumed = _build_login_block(
+        trajectory, classified, success_signal={"url_contains": "/dashboard"},
+    )
+    assert "def login(page, params):" in block
+    assert "for attempt in range(1, 4):" in block
+    assert 'params["username"]' in block
+    assert 'params["password"]' in block
+    assert '"/dashboard"' in block
+    assert "def dismiss_post_login_continue(page):" in block
+    assert consumed == {0, 1, 2}
+    compile(block, "<login>", "exec")
+
+
+def test_login_block_verifies_via_url_contains_when_no_locator_signal_given():
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(1, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(secrets=(SecretParam(0, "password", "SECRET_X_PASSWORD"),), params=())
+    block, _consumed = _build_login_block(
+        trajectory, classified, success_signal={"url_contains": "/dashboard"},
+    )
+    assert '"/dashboard" in page.url' in block
+    compile(block, "<login>", "exec")
+
+
+def test_login_block_never_embeds_the_recorded_secret_literal():
+    """The generated login block must read params[...] at runtime, never bake
+    in the actual recorded credential text — that's the whole point of this
+    feature (a real recording previously hardcoded a real username/password)."""
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo_user_123", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "s3cr3t-hunter2", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block, _consumed = _build_login_block(trajectory, classified, success_signal=None)
+    assert "demo_user_123" not in block
+    assert "s3cr3t-hunter2" not in block
+    assert "atlas_engine" not in block
+
+
+def test_login_block_replays_a_next_click_between_username_and_password():
+    """A username -> 'Next' click -> password flow (common on portals that
+    split login into two screens): the intervening click must be replayed
+    as-is, and a step with expected_effect='url_changed' (which _emit_step
+    renders as two lines) must stay correctly indented inside the login
+    helper's function body."""
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "click", [{"selector": "#next-btn", "rank": 0}], None, "url_changed"),
+        TrajectoryStep(2, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(3, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(2, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block, consumed = _build_login_block(trajectory, classified, success_signal=None)
+    assert "#next-btn" in block
+    assert consumed == {0, 1, 2, 3}
+    compile(block, "<login>", "exec")
+

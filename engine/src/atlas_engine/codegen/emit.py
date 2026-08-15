@@ -306,6 +306,140 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams") -> str:
     return "\n".join(lines)
 
 
+def _reindent_for_login_body(emitted: str) -> str:
+    """`_emit_step()` indents every line with 8 spaces (its normal call site
+    is nested two levels deep, under `with sync_playwright(): / def run():`).
+    The login block's helper functions only nest one level deep, so each
+    line needs re-indenting to 4 spaces. A step can emit MULTIPLE lines (a
+    hover_click, or any step with expected_effect == "url_changed", which
+    appends a trailing `wait_for_load_state` line) — a plain `.strip()`
+    only trims the whole string's leading/trailing whitespace, leaving
+    interior lines at their original 8-space depth and producing an
+    `IndentationError` once spliced into a 4-space function body. Re-indent
+    every line explicitly instead."""
+    return "\n".join(
+        f"    {line[8:] if line.startswith(' ' * 8) else line.strip()}"
+        for line in emitted.split("\n")
+    )
+
+
+def _build_login_block(
+    trajectory: ReferenceTrajectory, classified: "ClassifiedParams", *, success_signal: dict | None,
+) -> tuple[str, set[int]]:
+    """Emits login()/attempt_login_once()/dismiss_post_login_continue(),
+    driven by the trajectory's OWN recorded username/password/submit steps
+    (identified via classify_step_values) plus the portal's inferred
+    successSignal — not a separate portal-level selector-hint config (this
+    codebase doesn't have one; PortalProfile.inferred_success_signal already
+    serves the same purpose). Returns ("", set()) when there's no password
+    step: nothing to wrap, byte-for-byte unchanged output.
+
+    NOTE: `login()` calls `log_step(...)` on retry — that helper is added to
+    the emitted script's header by a later task (it isn't defined yet since
+    this function isn't wired into emit_golden_script's output yet either).
+    """
+    password_entries = [s for s in classified.secrets if s.label == "password"]
+    if not password_entries:
+        return "", set()
+    password_secret = password_entries[0]
+    username_entries = [s for s in classified.secrets if s.label == "username"]
+
+    steps_by_index = {s.index: s for s in trajectory.steps}
+    password_step = steps_by_index[password_secret.step_index]
+    consumed = {password_step.index}
+
+    # Emit username/password fills directly against params[...] (not the
+    # recorded literal value) — reuses the same selector-resolution helpers
+    # the main step loop uses, just substituting the value source. Mirrors
+    # _emit_locator_call/_emit_css_step's own root-resolution and >>-filter
+    # handling exactly, since page.fill()/page.click() etc. do not support
+    # the `>> visible=true` filter (only page.locator() does — see
+    # _emit_css_step's use_locator branch above).
+    def _fill_from_params(step: TrajectoryStep, params_key: str) -> str:
+        selector = _best_selector(step)
+        if selector.startswith(_CODEGEN_EXPR_PREFIX):
+            expr = selector[len(_CODEGEN_EXPR_PREFIX):]
+            m = _PAGE_ROOT_RE.match(expr)
+            if not m:
+                root, rest = "page", expr
+            else:
+                root, rest = m.group(1), m.group(2)
+            receiver = f"_page(page, {int(root[4:])})" if root != "page" else "page"
+            return f'    {receiver}.{rest}.fill(params["{params_key}"])'
+        selector = _prefer_visible(selector, step.force_click)
+        if ">>" in selector:
+            return f'    page.locator({selector!r}).first.fill(params["{params_key}"])'
+        return f'    page.fill({selector!r}, params["{params_key}"])'
+
+    body: list[str] = []
+    body.append("def attempt_login_once(page, params):")
+    if username_entries:
+        username_step = steps_by_index[username_entries[0].step_index]
+        consumed.add(username_step.index)
+        body.append(_fill_from_params(username_step, "username"))
+    # Any click steps between username and password (e.g. a "Next" button)
+    # replay as-is via the normal step emission, using their recorded selector.
+    between_indices = sorted(
+        i for i in steps_by_index
+        if (username_entries and username_entries[0].step_index < i < password_step.index)
+    )
+    for i in between_indices:
+        body.append(_reindent_for_login_body(_emit_step(steps_by_index[i])))
+        consumed.add(i)
+    body.append(_fill_from_params(password_step, "password"))
+    # The submit click (the step immediately after the password fill, if any)
+    submit_index = password_step.index + 1
+    if submit_index in steps_by_index:
+        body.append(_reindent_for_login_body(_emit_step(steps_by_index[submit_index])))
+        consumed.add(submit_index)
+    body.append("    page.wait_for_timeout(3000)")
+    body.append("")
+    body.append("")
+
+    body.append("def dismiss_post_login_continue(page):")
+    body.append("    for _ in range(10):")
+    body.append('        candidates = ["role=button[name=\\"\\u00d7\\"]", "role=button[name=\\"Cancel\\"]"]')
+    body.append("        clicked = False")
+    body.append("        for sel in candidates:")
+    body.append("            loc = page.locator(sel).first")
+    body.append("            try:")
+    body.append("                if loc.count() > 0 and loc.is_visible():")
+    body.append("                    loc.click(timeout=5000)")
+    body.append("                    page.wait_for_timeout(1000)")
+    body.append("                    clicked = True")
+    body.append("                    break")
+    body.append("            except Exception:")
+    body.append("                pass")
+    body.append("        if not clicked:")
+    body.append("            break")
+    body.append("")
+    body.append("")
+
+    signal_check = "True"
+    if success_signal and success_signal.get("url_contains"):
+        signal_check = f'"{success_signal["url_contains"]}" in page.url'
+    body.append("def login(page, params):")
+    body.append('    last_error = None')
+    body.append("    for attempt in range(1, 4):")
+    body.append("        if attempt > 1:")
+    body.append('            log_step("Retrying login (attempt " + str(attempt) + "/3) — previous: " + str(last_error))')
+    body.append("        try:")
+    body.append("            attempt_login_once(page, params)")
+    body.append("            dismiss_post_login_continue(page)")
+    body.append("            deadline = time.time() + 60")
+    body.append(f"            while time.time() < deadline and not ({signal_check}):")
+    body.append("                page.wait_for_timeout(500)")
+    body.append(f"            if not ({signal_check}):")
+    body.append('                raise Exception("login success signal never appeared")')
+    body.append("            return")
+    body.append("        except Exception as e:")
+    body.append("            last_error = e")
+    body.append('    raise Exception("Login failed after 3 attempt(s). Last error: " + str(last_error))')
+    body.append("")
+
+    return "\n".join(body) + "\n", consumed
+
+
 def emit_golden_script(
     trajectory: ReferenceTrajectory, *, start_url: str,
     pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
