@@ -322,6 +322,13 @@ def stop_authoring_run_endpoint(
         stop_authoring_run(uuid.UUID(authoring_run_id))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except TimeoutError:
+        # stop_event is already set at this point — the background thread
+        # only checks it between phases (replay/extract/brain/golden/
+        # certifying), never mid-phase, so a brain-phase repair against a
+        # real portal can legitimately run past the 30s wait here. The stop
+        # request is still durable: it takes effect at the next checkpoint.
+        return {"ok": True, "status": "stopping"}
     return {"ok": True}
 
 

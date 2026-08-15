@@ -250,6 +250,36 @@ def test_stop_authoring_run_via_http_stops_an_active_run(fixture_portal_url, fix
         fixture_portal_server.set_drift_mode(False)
 
 
+def test_stop_authoring_run_during_brain_phase_does_not_500(monkeypatch):
+    """stop_authoring_run's 30s wait can legitimately elapse before the brain
+    phase reaches its next stop_event checkpoint (real portals with no LLM
+    configured can spend several minutes on bounded repair retries) — this
+    is a genuine TimeoutError, not a crash, since the background thread will
+    still honor stop_event once that phase completes. The endpoint must
+    surface this as a normal "stop requested" response, not an unhandled 500."""
+    import atlas_engine.api as api_module
+
+    def _raise_timeout(authoring_run_id, *, timeout=30.0):
+        raise TimeoutError("Authoring run did not finish stopping in time")
+
+    monkeypatch.setattr(api_module, "stop_authoring_run", _raise_timeout)
+
+    client = TestClient(api_module.app)
+    with session_scope() as session:
+        org = Organization(name="Stop Timeout Org", slug=f"stop-timeout-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+    _login_as_developer(client, org_id)
+
+    response = client.post(f"/authoring-runs/{uuid.uuid4()}/stop")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ok"] is True
+    assert body["status"] == "stopping"
+
+
 def test_drifted_authoring_run_fails_autonomously_without_waiting_for_developer(fixture_portal_url, fixture_portal_server):
     """The brain self-heals with an LLM; with no LLM configured (tests), a
     drifted selector that can't be repaired fails the run — it NEVER waits
