@@ -45,6 +45,7 @@ class StepOutcome:
     shot_before: str | None = None
     shot_after: str | None = None
     elapsed_ms: int | None = None
+    extracted_data: dict | None = None
 
 
 def evaluate(
@@ -67,6 +68,7 @@ def evaluate(
     shot_before: str | None = None,
     shot_after: str | None = None,
     elapsed_ms: int | None = None,
+    extracted_data: dict | None = None,
 ) -> StepOutcome:
     """Deterministic on-track check — a byte-for-byte port of the previous
     app's brain `evaluate`:
@@ -130,4 +132,5 @@ def evaluate(
         shot_before=shot_before,
         shot_after=shot_after,
         elapsed_ms=elapsed_ms,
+        extracted_data=extracted_data,
     )

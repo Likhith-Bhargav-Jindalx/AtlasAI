@@ -14,6 +14,7 @@ from atlas_engine.brain.cache import ActionCacheStore, compute_cache_key
 from atlas_engine.brain.evaluate import StepOutcome, evaluate
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 from atlas_engine.brain.repair import RepairAction, think
+from atlas_engine.capture.extraction import collect_page_data
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.llm.sanitize import sanitize_dom
 
@@ -422,6 +423,20 @@ def run_step(
             page.wait_for_timeout(pre_action_ms)
         except Exception:
             pass
+    if step.kind == "extract":
+        extracted = None
+        try:
+            extracted = collect_page_data(page)
+        except Exception:
+            pass
+        return evaluate(
+            step,
+            url_before=page.url, url_after=page.url,
+            dom_before="", dom_after="",
+            resolved_selector="",
+            extracted_data=extracted,
+            elapsed_ms=0,
+        )
     resolved_selector = selector or _first_selector(step)
     if step.kind == "close":
         page.close()
