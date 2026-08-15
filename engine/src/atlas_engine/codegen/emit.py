@@ -120,6 +120,78 @@ def find_frame_with_element(pg, selector, timeout_ms=30000):
 
 _IFRAME_CHAIN_RE = re.compile(r'^(.*?)\.locator\("iframe\[name=\\?"[^"]+\\?"\]"\)\.content_frame\.(.*)$')
 
+_PRINT_CAPTURE_INIT_SCRIPT = (
+    "(() => {\n"
+    "  if (window.__atlasPrintHooked) return;\n"
+    "  window.__atlasPrintHooked = true;\n"
+    "  var serialize = function () {\n"
+    "    var styles = '';\n"
+    "    var sheets = document.styleSheets || [];\n"
+    "    for (var i = 0; i < sheets.length; i++) {\n"
+    "      try { var rules = sheets[i].cssRules; if (rules) { for (var j = 0; j < rules.length; j++) styles += rules[j].cssText + ' '; } }\n"
+    "      catch (e) {}\n"
+    "    }\n"
+    "    var inner = document.body ? document.body.innerHTML : document.documentElement.outerHTML;\n"
+    "    return { styles: styles, inner: inner, base: location.href, title: (document.title || 'report') };\n"
+    "  };\n"
+    "  var fire = function () { try { if (window.__atlasOnPrint) window.__atlasOnPrint(serialize()); } catch (e) {} };\n"
+    "  try { window.print = fire; } catch (e) {}\n"
+    "})();"
+)
+
+_PRINT_CAPTURE_HELPER = '''
+_PRINT_CAPTURES = []
+
+
+def _atlas_sanitize(name):
+    keep = "".join((c if (c.isalnum() or c in " -_") else "_") for c in (name or "report")).strip()
+    return (keep or "report")[:80]
+
+
+def _atlas_on_print(source, data=None):
+    try:
+        if data and data.get("inner"):
+            _PRINT_CAPTURES.append(data)
+    except Exception:
+        pass
+    return True
+
+
+def _flush_print_pdfs(playwright, out_dir, prefix=""):
+    saved = []
+    if not _PRINT_CAPTURES:
+        return saved
+    os.makedirs(out_dir, exist_ok=True)
+    for i, d in enumerate(_PRINT_CAPTURES):
+        hb = None
+        try:
+            base = d.get("base") or ""
+            head = "<!doctype html><html><head><meta charset=\\'utf-8\\'>"
+            if base:
+                head += "<base href=\\'" + base + "\\'>"
+            head += "<style>" + (d.get("styles") or "") + "</style></head><body>"
+            full = head + (d.get("inner") or "") + "</body></html>"
+            hb = playwright.chromium.launch(headless=True)
+            hp = hb.new_context().new_page()
+            try:
+                hp.set_content(full, wait_until="load", timeout=15000)
+            except Exception:
+                hp.set_content(full)
+            name = prefix + _atlas_sanitize(d.get("title")) + (".pdf" if i == 0 else f"_{i + 1}.pdf")
+            dest = os.path.join(out_dir, name)
+            hp.pdf(path=dest, format="A4", print_background=True)
+            saved.append({"name": name, "path": dest})
+        except Exception:
+            pass
+        finally:
+            try:
+                if hb is not None:
+                    hb.close()
+            except Exception:
+                pass
+    return saved
+'''
+
 
 def _uses_static_iframe_reference(expr: str) -> bool:
     """True when a codegen locator chain traverses into an iframe via a

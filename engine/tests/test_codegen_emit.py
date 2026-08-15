@@ -732,6 +732,12 @@ def test_plain_hover_step_via_codegen_expr_through_default_emission_path_compile
         compile(script, f"<step-{kind}-expr>", "exec")
 
 
+def test_print_capture_context_setup_snippet_is_valid_python():
+    from atlas_engine.codegen.emit import _PRINT_CAPTURE_HELPER, _PRINT_CAPTURE_INIT_SCRIPT
+    compile(_PRINT_CAPTURE_HELPER, "<helper>", "exec")
+    assert "window.print = fire" in _PRINT_CAPTURE_INIT_SCRIPT
+
+
 @pytest.mark.skip(reason="wired up in Task 11")
 def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
     """End-to-end: a step that fails must produce step_N_failure.png and
