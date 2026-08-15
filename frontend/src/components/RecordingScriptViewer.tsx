@@ -32,7 +32,7 @@ export function RecordingScriptViewer({ script }: Props) {
   const lines = script ? script.split('\n') : []
 
   return (
-    <div className="bg-atlas-card border border-atlas-border rounded-2xl overflow-hidden shadow-sm">
+    <div className="shrink-0 bg-atlas-card border border-atlas-border rounded-2xl overflow-hidden shadow-sm">
       <div className="flex items-center justify-between gap-3 px-[18px] py-3.5 border-b border-atlas-border bg-atlas-card">
         <div className="flex items-center gap-2.5">
           <div className="w-7 h-7 rounded-lg bg-atlas-accentSubtle flex items-center justify-center text-atlas-primary">

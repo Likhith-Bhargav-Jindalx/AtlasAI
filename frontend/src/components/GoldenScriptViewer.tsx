@@ -11,7 +11,7 @@ export function GoldenScriptViewer({ goldenScript }: Props) {
   }
 
   return (
-    <div className="bg-atlas-card border border-atlas-border rounded-2xl overflow-hidden">
+    <div className="shrink-0 bg-atlas-card border border-atlas-border rounded-2xl overflow-hidden">
       <div className="px-[18px] py-3.5 border-b border-atlas-border flex items-center justify-between">
         <div className="text-[13.5px] font-semibold">Golden script v{goldenScript.version}</div>
         <StatusPill status={goldenScript.status} />
