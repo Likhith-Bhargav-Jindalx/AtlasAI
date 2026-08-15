@@ -1,5 +1,7 @@
 import os
 
+from dotenv import find_dotenv, load_dotenv
+
 from atlas_engine.llm.client import AzureOpenAiClient, LlmClient
 
 
@@ -7,10 +9,15 @@ def create_llm_client(*, usage_context: tuple[str, str | None] | None = None) ->
     """Reads Azure OpenAI config from the environment; returns None (no
     repair capability — an off-track step stays off-track) if unconfigured.
     Supports both ATLAS_AZURE_OPENAI_* and standard AZURE_OPENAI_* env vars
-    for seamless parity with the previous codebase. `usage_context`, when
+    for seamless parity with the previous codebase. Also loads a local
+    `.env` file (see engine/.env.example) if present, matching how
+    `atlas_engine.config.Settings` already reads its own fields from one —
+    real exported env vars still take precedence. `usage_context`, when
     given as (org_id, recording_id), records a UsageLedgerEntry per LLM call
     via the client's on_usage hook — purely additive telemetry, invisible to
     every caller inside brain/*."""
+    load_dotenv(find_dotenv(usecwd=True))
+
     endpoint = os.environ.get("ATLAS_AZURE_OPENAI_ENDPOINT") or os.environ.get("AZURE_OPENAI_ENDPOINT")
     api_key = os.environ.get("ATLAS_AZURE_OPENAI_API_KEY") or os.environ.get("AZURE_OPENAI_API_KEY")
     model = (
