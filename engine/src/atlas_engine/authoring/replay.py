@@ -11,6 +11,7 @@ from atlas_engine.config import settings
 def run_replay_phase(
     page, trajectory: ReferenceTrajectory, authoring_run_id: uuid.UUID,
     resume_event, stop_event,
+    *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
 ) -> ReferenceTrajectory | None:
     """INSTRUMENTED reference replay — the engine's equivalent of the old
     app's transformForReplay. Re-runs the recorded trajectory headed so the
@@ -34,7 +35,10 @@ def run_replay_phase(
             # A 15s resolve ceiling keeps an off-track step bounded during
             # reference replay while allowing slow portals to render: evidence
             # is captured and the brain phase repairs with full 60s budget.
-            outcome = run_step(page, step, shot_dir=str(ref_dir), timeout_ms=min(step.wait_ceiling_ms or 15000, 15000))
+            outcome = run_step(
+                page, step, shot_dir=str(ref_dir), timeout_ms=min(step.wait_ceiling_ms or 15000, 15000),
+                pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+            )
         except Exception as exc:  # keep the step — the brain repairs it
             log_event(
                 authoring_run_id, phase="replay", step_index=step.index, level="warning",

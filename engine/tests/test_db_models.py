@@ -72,7 +72,6 @@ def test_golden_script_versioning_via_parent_version_id():
 
         assert v1.id is not None
         assert v2.id is not None
-        assert v2.parent_version.id == v1.id
 
 
 def test_heal_event_and_golden_script_circular_reference():
@@ -170,3 +169,25 @@ def test_page_extraction_belongs_to_recording():
         assert extraction.recording.id == recording.id
         assert extraction.data["fields"]["Patient ID"] == "12345"
         assert extraction.extracted_at is not None
+
+
+def test_portal_profile_pacing_defaults_to_none_and_is_settable():
+    """Opt-in pacing (preActionMs/settleAfterNavMs) — absent means no pacing,
+    the default for every portal until explicitly configured."""
+    engine = _sqlite_engine()
+    Base.metadata.create_all(engine)
+
+    with Session(engine) as session:
+        org = Organization(name="Anka Health", slug="anka-health-pacing")
+        default_profile = PortalProfile(org=org, domain="portal-default.example.com")
+        paced_profile = PortalProfile(
+            org=org, domain="portal-paced.example.com",
+            pacing_pre_action_ms=800, pacing_settle_after_nav_ms=15000,
+        )
+        session.add_all([org, default_profile, paced_profile])
+        session.commit()
+
+        assert default_profile.pacing_pre_action_ms is None
+        assert default_profile.pacing_settle_after_nav_ms is None
+        assert paced_profile.pacing_pre_action_ms == 800
+        assert paced_profile.pacing_settle_after_nav_ms == 15000

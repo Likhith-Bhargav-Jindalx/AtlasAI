@@ -95,6 +95,8 @@ class _AuthoringRunSession:
                 trajectory_blob_ref = trajectory_row.trajectory_blob_ref
                 request_id = recording.request_id
                 capture_blob_prefix = recording.capture_blob_prefix
+                pre_action_ms = profile.pacing_pre_action_ms or 0
+                settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
 
             trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
 
@@ -126,6 +128,7 @@ class _AuthoringRunSession:
                         )
                     replayed_trajectory = run_replay_phase(
                         page, trajectory, self.authoring_run_id, self.resume_event, self.stop_event,
+                        pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
                     )
                     browser.close()
             except Exception as replay_exc:
@@ -169,7 +172,10 @@ class _AuthoringRunSession:
                             self.authoring_run_id, phase="brain", level="warning",
                             message=f"Initial navigation to {start_url}: {goto_exc}",
                         )
-                    result = run_brain_phase(page, trajectory, self.authoring_run_id, llm=self.llm)
+                    result = run_brain_phase(
+                        page, trajectory, self.authoring_run_id, llm=self.llm,
+                        pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+                    )
                     browser.close()
 
                 if self.stop_event.is_set():
@@ -195,6 +201,7 @@ class _AuthoringRunSession:
                 update_run(self.authoring_run_id, current_phase="golden")
                 golden_script_id, script_path = run_golden_phase(
                     trajectory, start_url, org_id, portal_profile_id, self.recording_id, self.authoring_run_id,
+                    pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
                 )
                 update_run(self.authoring_run_id, golden_script_id=golden_script_id)
 

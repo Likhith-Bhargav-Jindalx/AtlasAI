@@ -276,7 +276,11 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
                         profile = session.get(PortalProfile, recording.portal_profile_id)
                         inferred_url = profile.inferred_login_url if profile else "http://localhost/"
                         start_url = inferred_url or "http://localhost/"
-                        codegen_script = emit_golden_script(traj, start_url=start_url)
+                        codegen_script = emit_golden_script(
+                            traj, start_url=start_url,
+                            pre_action_ms=(profile.pacing_pre_action_ms or 0) if profile else 0,
+                            settle_after_nav_ms=(profile.pacing_settle_after_nav_ms or 0) if profile else 0,
+                        )
                         try:
                             codegen_path.write_text(codegen_script)
                         except Exception:

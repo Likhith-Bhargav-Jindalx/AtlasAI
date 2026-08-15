@@ -25,6 +25,11 @@ class PortalProfile(Base):
     inferred_success_signal: Mapped[dict | None] = mapped_column(PortableJSON, default=None)
     confidence_score: Mapped[Decimal | None] = mapped_column(default=None)
     metadata_: Mapped[dict] = mapped_column("metadata", PortableJSON, default=dict)
+    # Opt-in pacing for slow/flaky portals — absent (None) means no pacing,
+    # byte-for-byte the same replay/brain/codegen behavior as before this
+    # feature existed. Mirrors the previous app's portal.pacing config.
+    pacing_pre_action_ms: Mapped[int | None] = mapped_column(default=None)
+    pacing_settle_after_nav_ms: Mapped[int | None] = mapped_column(default=None)
     first_recorded_at: Mapped[datetime | None] = mapped_column(default=None)
     last_recorded_at: Mapped[datetime | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

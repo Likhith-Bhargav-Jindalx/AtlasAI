@@ -38,6 +38,8 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
         start_url = profile.inferred_login_url or f"https://{profile.domain}"
         trajectory_blob_ref = trajectory_row.trajectory_blob_ref
         request_id = recording.request_id
+        pre_action_ms = profile.pacing_pre_action_ms or 0
+        settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
 
     trajectory = trajectory_from_dict(json.loads(Path(trajectory_blob_ref).read_text()))
 
@@ -45,7 +47,9 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
-        result = BrainLoop(page, llm=llm).run(trajectory)
+        result = BrainLoop(
+            page, llm=llm, pacing_pre_action_ms=pre_action_ms, pacing_settle_after_nav_ms=settle_after_nav_ms,
+        ).run(trajectory)
         browser.close()
 
     # The golden must freeze the VERIFIED trajectory — a repaired selector
@@ -56,7 +60,9 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
 
     store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="goldens")
-    script_text = emit_golden_script(trajectory, start_url=start_url)
+    script_text = emit_golden_script(
+        trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+    )
     script_path = run_dir.path / "golden.py"
     script_path.write_text(script_text)
 

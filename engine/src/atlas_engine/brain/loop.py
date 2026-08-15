@@ -360,6 +360,7 @@ def _act(
     y: float | None = None,
     key: str | None = None,
     loc=None,
+    settle_after_nav_ms: int = 0,
 ) -> None:
     if step.kind == "goto":
         nav_timeout = max(timeout_ms or 0, 60000)
@@ -367,6 +368,16 @@ def _act(
         # it never overrides Playwright's own default, which waits for the
         # load event (subresources/scripts settled), not just the DOM parse.
         page.goto(selector, wait_until="load", timeout=nav_timeout)
+        if settle_after_nav_ms > 0:
+            # Slow-portal settle (opt-in, portal.pacing.settleAfterNavMs):
+            # after a navigation specifically, wait (capped) for the network
+            # to go quiet before the next action — matches the previous
+            # app's runnerEmit.ts pacing. Adaptive: a timeout here is
+            # swallowed, never fails the step.
+            try:
+                page.wait_for_load_state("networkidle", timeout=settle_after_nav_ms)
+            except Exception:
+                pass
         return
     if step.kind == "close":
         page.close()
@@ -392,6 +403,8 @@ def run_step(
     x: float | None = None,
     y: float | None = None,
     key: str | None = None,
+    pre_action_ms: int = 0,
+    settle_after_nav_ms: int = 0,
 ) -> StepOutcome:
     """Executes ONE trajectory step against the live page and gathers the
     evidence the brain evaluates and (when off-track) thinks over: the error,
@@ -399,6 +412,16 @@ def run_step(
     and match count, and pre/post screenshots (when shot_dir is given). A
     faithful port of the old runner's exec_entry — candidates are resolved
     best-first with visible preference and the chosen locator is acted on."""
+    if pre_action_ms > 0:
+        # Slow-portal pacing (opt-in, portal.pacing.preActionMs): a
+        # human-like pause before every step's action, unconditionally (like
+        # the previous app's runnerEmit.ts) — elements can be clickable
+        # before their data/handlers are ready on slow portals, so instant
+        # actions land on a half-ready page.
+        try:
+            page.wait_for_timeout(pre_action_ms)
+        except Exception:
+            pass
     resolved_selector = selector or _first_selector(step)
     if step.kind == "close":
         page.close()
@@ -472,7 +495,7 @@ def run_step(
         try:
             if step.expects_download:
                 with page.expect_download(timeout=max(timeout or 0, 120000)) as dli:
-                    _act(target, resolved_selector, step, force=force, timeout_ms=timeout, x=x, y=y, key=key, loc=loc)
+                    _act(target, resolved_selector, step, force=force, timeout_ms=timeout, x=x, y=y, key=key, loc=loc, settle_after_nav_ms=settle_after_nav_ms)
                 d = dli.value
                 download_started = True
                 if shot_dir:
@@ -483,14 +506,14 @@ def run_step(
                     download_saved = save_path
             elif step.expects_popup:
                 with page.context.expect_page(timeout=max(timeout or 0, 30000)) as pi:
-                    _act(target, resolved_selector, step, force=force, timeout_ms=timeout, x=x, y=y, key=key, loc=loc)
+                    _act(target, resolved_selector, step, force=force, timeout_ms=timeout, x=x, y=y, key=key, loc=loc, settle_after_nav_ms=settle_after_nav_ms)
                 try:
                     pi.value.wait_for_load_state("domcontentloaded", timeout=30000)
                 except Exception:
                     pass
                 popup_opened = True
             else:
-                _act(target, resolved_selector, step, force=force, timeout_ms=timeout, x=x, y=y, key=key, loc=loc)
+                _act(target, resolved_selector, step, force=force, timeout_ms=timeout, x=x, y=y, key=key, loc=loc, settle_after_nav_ms=settle_after_nav_ms)
             popup_opened = popup_opened or len(page.context.pages) > pages_before
         except Exception as exc:
             error = str(exc)[:700]
@@ -588,6 +611,8 @@ class BrainLoop:
         action_cache: ActionCacheStore | None = None,
         golden_script_id: uuid.UUID | None = None,
         max_thinks: int = _MAX_THINKS_PER_STEP,
+        pacing_pre_action_ms: int = 0,
+        pacing_settle_after_nav_ms: int = 0,
     ):
         self.page = page
         self.on_off_track = on_off_track
@@ -595,6 +620,8 @@ class BrainLoop:
         self.action_cache = action_cache
         self.golden_script_id = golden_script_id
         self.max_thinks = max_thinks
+        self.pacing_pre_action_ms = pacing_pre_action_ms
+        self.pacing_settle_after_nav_ms = pacing_settle_after_nav_ms
 
     def run(
         self, trajectory: ReferenceTrajectory, *, shot_dir: str | None = None, goal: str | None = None,
@@ -771,6 +798,8 @@ class BrainLoop:
             self.page, step,
             force=step.force_click, shot_dir=shot_dir,
             x=step.x, y=step.y, key=step.key,
+            pre_action_ms=self.pacing_pre_action_ms,
+            settle_after_nav_ms=self.pacing_settle_after_nav_ms,
         )
 
     def _verified_step(self, working: TrajectoryStep, outcome: StepOutcome) -> TrajectoryStep:

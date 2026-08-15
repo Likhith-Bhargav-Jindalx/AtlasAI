@@ -25,7 +25,7 @@ def run_extract_phase(trajectory: ReferenceTrajectory) -> ReferenceTrajectory:
 
 def run_brain_phase(
     page, trajectory: ReferenceTrajectory, authoring_run_id: uuid.UUID, *, llm: LlmClient | None = None,
-    shot_dir: str | None = None,
+    shot_dir: str | None = None, pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
 ):
     """Headed, LLM-driven supervised replay — BrainLoop already does
     perceive/act/evaluate/think/validate/repair internally (multimodal, using
@@ -38,7 +38,9 @@ def run_brain_phase(
     verified trajectory, repairs folded in), not a zip of the input steps."""
     if shot_dir is None:
         shot_dir = str(Path(settings.ensure_run_root()) / "authoring" / str(authoring_run_id) / "brain")
-    result = BrainLoop(page, llm=llm).run(trajectory, shot_dir=shot_dir)
+    result = BrainLoop(
+        page, llm=llm, pacing_pre_action_ms=pre_action_ms, pacing_settle_after_nav_ms=settle_after_nav_ms,
+    ).run(trajectory, shot_dir=shot_dir)
 
     for outcome in result:
         if outcome.on_track:
@@ -58,13 +60,16 @@ def run_brain_phase(
 def run_golden_phase(
     trajectory: ReferenceTrajectory, start_url: str, org_id: uuid.UUID, portal_profile_id: uuid.UUID,
     recording_id: uuid.UUID, authoring_run_id: uuid.UUID,
+    *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
 ) -> tuple[uuid.UUID, Path]:
     """Freezes the brain-verified trajectory into a deterministic .py
     script and records it as a draft GoldenScript — certifying (next
     phase) decides whether it becomes certified or partially_certified."""
     store = LocalRunStore(root=settings.ensure_run_root())
     run_dir = store.new_run_dir(prefix="goldens")
-    script_text = emit_golden_script(trajectory, start_url=start_url)
+    script_text = emit_golden_script(
+        trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+    )
     script_path = run_dir.path / "golden.py"
     script_path.write_text(script_text)
 

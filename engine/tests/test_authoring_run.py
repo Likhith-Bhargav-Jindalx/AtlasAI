@@ -8,7 +8,16 @@ from playwright.sync_api import sync_playwright
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import AuthoringRun, CertificationRun, GoldenScript, Organization, RecordingRequest, User
+from atlas_engine.db.models import (
+    AuthoringRun,
+    CertificationRun,
+    GoldenScript,
+    Organization,
+    PortalProfile,
+    Recording,
+    RecordingRequest,
+    User,
+)
 from atlas_engine.recording_service import create_recording_request, persist_recording
 
 
@@ -264,3 +273,34 @@ def test_start_authoring_run_fulfills_a_linked_request_on_success(fixture_portal
         request = session.get(RecordingRequest, request_id)
         assert request.status == "fulfilled"
         assert request.fulfilled_golden_script_id == golden_script_id
+
+
+def test_start_authoring_run_threads_portal_pacing_end_to_end(fixture_portal_url):
+    """A PortalProfile with pacing configured must flow all the way through
+    replay/brain/golden without breaking the run — proves the wiring added
+    in authoring/run.py actually reaches BrainLoop and the codegen emitter,
+    not just that the run happens to still pass with pacing off."""
+    with session_scope() as session:
+        org = Organization(name="Pacing Run Org", slug=f"pacing-run-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    recording_id = _record_against_fixture(org_id, fixture_portal_url)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        profile = session.get(PortalProfile, recording.portal_profile_id)
+        profile.pacing_pre_action_ms = 50
+        profile.pacing_settle_after_nav_ms = 500
+
+    authoring_run_id = start_authoring_run(recording_id)
+    status = _wait_for_status(authoring_run_id, {"completed", "failed", "cancelled"})
+
+    assert status == "completed"
+    with session_scope() as session:
+        run = session.get(AuthoringRun, authoring_run_id)
+        golden = session.get(GoldenScript, run.golden_script_id)
+        script_text = open(golden.script_blob_ref).read()
+        assert "PACING_MS = 50" in script_text
+        assert "def _pace(pg):" in script_text

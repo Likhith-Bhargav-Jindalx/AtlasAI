@@ -220,3 +220,82 @@ def test_force_click_does_not_add_visible_true():
     assert "page.click('#hidden', force=True)" in script
     compile(script, "<golden>", "exec")
 
+
+# ── Opt-in per-portal pacing (preActionMs/settleAfterNavMs) ────────────────
+# Ported from the previous app's portal.pacing config (pyEmit.ts). Absent
+# (the default, 0) means byte-for-byte the same script as before this
+# feature existed — no new tables, no new emitted lines.
+
+
+def _one_step_trajectory() -> ReferenceTrajectory:
+    return ReferenceTrajectory(
+        steps=(TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),)
+    )
+
+
+def test_emit_golden_script_is_unchanged_when_pacing_not_configured():
+    trajectory = _one_step_trajectory()
+    baseline = emit_golden_script(trajectory, start_url="https://x.com")
+    with_defaults = emit_golden_script(trajectory, start_url="https://x.com", pre_action_ms=0, settle_after_nav_ms=0)
+    assert baseline == with_defaults
+    assert "PACING_MS" not in baseline
+    assert "_pace(" not in baseline
+    assert "networkidle" not in baseline
+
+
+def test_emit_golden_script_emits_pace_helper_and_calls_when_pre_action_ms_configured():
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+            TrajectoryStep(1, "click", [{"selector": "#login-btn", "rank": 0}], None, "none"),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url="https://x.com", pre_action_ms=800)
+
+    assert "PACING_MS = 800" in script
+    assert "def _pace(pg):" in script
+    # Called before EVERY step's action, unconditionally (matches pyEmit.ts).
+    assert script.count("_pace(page)") == 2
+    compile(script, "<golden>", "exec")
+
+
+def test_emit_golden_script_settles_networkidle_after_goto_when_configured():
+    trajectory = ReferenceTrajectory(
+        steps=(TrajectoryStep(0, "goto", [{"selector": "https://example.com/x", "rank": 0}], None, "url_changed"),)
+    )
+    script = emit_golden_script(trajectory, start_url="https://x.com", settle_after_nav_ms=15000)
+
+    assert 'page.wait_for_load_state("networkidle", timeout=15000)' in script
+    compile(script, "<golden>", "exec")
+
+
+def test_emit_golden_script_settle_only_applies_to_goto_steps():
+    trajectory = ReferenceTrajectory(
+        steps=(TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),)
+    )
+    script = emit_golden_script(trajectory, start_url="https://x.com", settle_after_nav_ms=15000)
+
+    assert "networkidle" not in script
+    compile(script, "<golden>", "exec")
+
+
+def test_emitted_golden_script_with_pacing_actually_runs_against_the_fixture_portal(fixture_portal_url, tmp_path):
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+            TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "demo-pass", "none"),
+            TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+        )
+    )
+    script = emit_golden_script(
+        trajectory, start_url=f"{fixture_portal_url}/login.html",
+        pre_action_ms=50, settle_after_nav_ms=2000,
+    )
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+
