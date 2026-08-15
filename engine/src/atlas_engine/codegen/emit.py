@@ -288,8 +288,7 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams") -> str:
     process listings) or a literal in the script file."""
     lines = ["    parser = argparse.ArgumentParser()"]
     for p in classified.params:
-        attr = p.cli_name.replace("-", "_")
-        lines.append(f'    parser.add_argument("--{p.cli_name}", default="{p.default_value}")')
+        lines.append(f'    parser.add_argument("--{p.cli_name}", default={p.default_value!r})')
     lines.append('    parser.add_argument("--headless", action="store_true", default=True)')
     lines.append('    parser.add_argument("--headed", dest="headless", action="store_false")')
     lines.append('    parser.add_argument("--diagnostics-dir", default="diagnostics")')

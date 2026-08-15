@@ -359,7 +359,8 @@ def test_argparse_block_declares_one_cli_flag_per_param_with_recorded_default():
     classified = ClassifiedParams(secrets=(), params=(CliParam(0, "start-date", "01/01/2026"),))
     block = _build_argparse_and_main_params(classified)
     assert '"--start-date"' in block
-    assert 'default="01/01/2026"' in block
+    # Use !r for escaping, so simple strings get single quotes (Python's repr default)
+    assert "default='01/01/2026'" in block
     assert 'params["start_date"] = args.start_date' in block
 
 
@@ -385,4 +386,28 @@ def test_argparse_block_always_declares_headless_and_diagnostics_dir():
     assert '"--headed"' in block
     assert '"--diagnostics-dir"' in block
     assert '"--batch"' in block
+
+
+def test_argparse_block_escapes_special_characters_in_defaults():
+    """Regression test: default values with quotes, backslashes, etc. must be
+    properly escaped so the generated Python code is syntactically valid and
+    cannot be code-injected. Uses !r formatting to produce safe string literals."""
+    import textwrap
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams, CliParam
+    # Create params with special characters that could break/inject if not escaped
+    classified = ClassifiedParams(
+        secrets=(),
+        params=(
+            CliParam(0, "msg", 'she said "hi"'),  # double-quote
+            CliParam(1, "path", "C:\\Users\\test"),  # backslash
+            CliParam(2, "quoted", "it's fine"),  # single-quote
+            CliParam(3, "newline", "line1\nline2"),  # newline
+        ),
+    )
+    block = _build_argparse_and_main_params(classified)
+    # The generated code should be syntactically valid Python
+    # Dedent to remove the leading spaces (block is indented for insertion into main())
+    dedented = textwrap.dedent(block)
+    compile(dedented, "<generated>", "exec")
 
