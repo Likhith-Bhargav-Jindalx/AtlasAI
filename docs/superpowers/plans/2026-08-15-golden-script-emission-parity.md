@@ -12,7 +12,11 @@
 
 ## Global Constraints
 
-- `emit_golden_script`'s output must stay byte-for-byte identical to today's output for any trajectory with no fill steps, no download steps, and no extract steps — every new capability is additive/opt-in, matching this codebase's existing "absent = no-op" discipline (see the pacing feature for precedent).
+- **Corrected during preflight review (see ledger): the structural machinery this plan adds — the review header banner, per-step try/except diagnostics, dynamic frame resolution, print-capture wiring, and the `--headless`/`--diagnostics-dir`/`--batch` argparse surface plus the JSON result contract — is ALWAYS present in the emitted script, regardless of whether the specific trajectory has a fill/download/extract step. That's the point of this plan: every golden script gets this structure, matching the previous app. Only what's genuinely conditional on the trajectory's content stays conditional:**
+  - The `login`/`attempt_login_once`/`dismiss_post_login_continue` block and any `SECRET_*` env var reads — emitted only when the trajectory has a password step (Task 4's `_build_login_block` returns `("", set())` otherwise).
+  - Per-fill `--<kebab-name>` CLI flags — one per classified `CliParam`; a trajectory with zero fill steps gets zero of these (still gets `--headless`/`--headed`/`--diagnostics-dir`/`--batch`, which are unconditional).
+  - `result["extractions"]` — only present in the printed JSON when at least one extract step ran (existing "absent = no-op" discipline still applies here specifically).
+  - Pacing (`_pace`/`PACING_MS`) — unchanged from the existing feature, still opt-in per `pre_action_ms`/`settle_after_nav_ms`.
 - The generated script stays fully standalone — **no `atlas_engine` import inside the emitted script**. Only `re`, `sys`, `os`, `json`, `argparse`, `time`, and `playwright.sync_api` may be imported by generated code.
 - Keep the context-scoped download fix (`context.expect_event("download", ...)`) — do NOT revert to the previous app's page-scoped `page.expect_download()`.
 - Keep the DOM-walking `SERIALIZER`-based extraction — do NOT build the previous app's frozen-selector-spec extraction architecture.
@@ -1509,22 +1513,26 @@ def test_emit_golden_script_produces_a_runnable_script_with_login_and_result_con
     assert "demo-pass" not in script  # the real secret is never in the file text
 
 
-def test_emit_golden_script_output_is_byte_for_byte_unchanged_with_no_fill_download_or_extract_steps():
-    """Global Constraint: additive/opt-in — a trajectory with only clicks
-    must not gain any login/argparse/print-capture/diagnostics machinery
-    that changes observable behavior for a script with nothing to protect."""
+def test_emit_golden_script_omits_login_and_secrets_with_no_password_step():
+    """Corrected Global Constraint (see plan's preflight ruling): the
+    structural machinery (header banner, diagnostics, print-capture,
+    argparse surface, result contract) is ALWAYS present — only the
+    login block and secret env-var reads are conditional on the
+    trajectory actually having a password step."""
     trajectory = ReferenceTrajectory(steps=(
         TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),
     ))
     script = emit_golden_script(trajectory, start_url="https://x.com", portal_domain="x.com", portal_name="X")
     assert "def login(" not in script
     assert "SECRET_" not in script
+    assert "def dump_failure_context(" in script  # always present
+    assert '"--headless"' in script  # always present
     compile(script, "<golden>", "exec")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `pytest tests/test_codegen_emit.py -k "produces_a_runnable_script or byte_for_byte_unchanged_with_no_fill" -v`
+Run: `pytest tests/test_codegen_emit.py -k "produces_a_runnable_script or omits_login_and_secrets" -v`
 Expected: FAIL — `emit_golden_script` doesn't yet accept `portal_domain`/`portal_name`/`confidence`/`success_signal`, and doesn't emit any of the new machinery.
 
 - [ ] **Step 3: Rewrite `emit_golden_script`**
