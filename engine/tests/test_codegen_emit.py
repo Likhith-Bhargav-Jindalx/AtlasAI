@@ -507,3 +507,29 @@ def test_login_block_replays_a_next_click_between_username_and_password():
     assert consumed == {0, 1, 2, 3}
     compile(block, "<login>", "exec")
 
+
+def test_login_block_reindents_hover_click_steps_without_indentation_errors():
+    """hover/hover_click steps bake an extra literal 8-space indent into one
+    of their emitted lines (_emit_locator_gesture's "hover"/"hover_click"
+    branches hardcode "        page.wait_for_timeout(900)") on top of
+    _emit_step's own uniform 8-space wrap — a pre-existing quirk of
+    _emit_step's output (also visible outside any login block, for a
+    top-level hover_click step in emit_golden_script), not something
+    _build_login_block introduces. _reindent_for_login_body must normalize
+    every line's indentation independently, or a hover_click submit/between
+    step produces an IndentationError once spliced into the login body."""
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(2, "hover_click", [{"selector": "#login-btn", "rank": 0}], None, "none"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block, consumed = _build_login_block(trajectory, classified, success_signal=None)
+    assert consumed == {0, 1, 2}
+    compile(block, "<login>", "exec")
+

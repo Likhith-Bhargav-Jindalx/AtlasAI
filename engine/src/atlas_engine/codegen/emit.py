@@ -312,15 +312,17 @@ def _reindent_for_login_body(emitted: str) -> str:
     The login block's helper functions only nest one level deep, so each
     line needs re-indenting to 4 spaces. A step can emit MULTIPLE lines (a
     hover_click, or any step with expected_effect == "url_changed", which
-    appends a trailing `wait_for_load_state` line) — a plain `.strip()`
-    only trims the whole string's leading/trailing whitespace, leaving
-    interior lines at their original 8-space depth and producing an
-    `IndentationError` once spliced into a 4-space function body. Re-indent
-    every line explicitly instead."""
-    return "\n".join(
-        f"    {line[8:] if line.startswith(' ' * 8) else line.strip()}"
-        for line in emitted.split("\n")
-    )
+    appends a trailing `wait_for_load_state` line) at INCONSISTENT depths —
+    e.g. hover/hover_click's own "page.wait_for_timeout(900)" line already
+    bakes in an extra literal 8-space indent on top of _emit_step's uniform
+    8-space wrap (a pre-existing quirk of _emit_step's output, not something
+    this function introduces). Stripping only a single fixed-width 8-space
+    run would leave that line one level too deep relative to its neighbors
+    once re-embedded — an `IndentationError` at compile() time. Strip ALL
+    leading whitespace from every line independently instead, then
+    re-prefix uniformly: every line in a login helper's body sits at exactly
+    one nesting level, regardless of what depth it was emitted at."""
+    return "\n".join(f"    {line.lstrip()}" for line in emitted.split("\n"))
 
 
 def _build_login_block(
