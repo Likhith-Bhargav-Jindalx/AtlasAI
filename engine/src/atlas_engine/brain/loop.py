@@ -494,7 +494,14 @@ def run_step(
     if error is None:
         try:
             if step.expects_download:
-                with page.expect_download(timeout=max(timeout or 0, 120000)) as dli:
+                # Context-scoped, not page-scoped: some real portals (e.g.
+                # eCW's BI report export) fire the actual download on a
+                # DIFFERENT page than the one the click was dispatched on
+                # (a fresh/hidden tab) — page.expect_download() only listens
+                # on that one page and times out even though the file
+                # genuinely downloads. context.expect_event("download", ...)
+                # catches it regardless of which page in the context fired it.
+                with page.context.expect_event("download", timeout=max(timeout or 0, 120000)) as dli:
                     _act(target, resolved_selector, step, force=force, timeout_ms=timeout, x=x, y=y, key=key, loc=loc, settle_after_nav_ms=settle_after_nav_ms)
                 d = dli.value
                 download_started = True
