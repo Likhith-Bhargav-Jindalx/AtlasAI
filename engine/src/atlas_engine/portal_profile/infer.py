@@ -19,8 +19,15 @@ def _is_password_action(action: RecordedAction) -> bool:
 def infer_portal_profile(start_url: str, actions: list[RecordedAction]) -> InferredProfile:
     domain = urlparse(start_url).netloc
 
+    # login_url is always where the recording BEGAN — the orchestrator's one
+    # entry navigation before replay/brain starts. A login flow can span
+    # several real pages (username page -> password page -> dashboard, e.g.
+    # eCW); using a LATER page's URL (e.g. the password action's url_before)
+    # as the replay entry point skips the flow's own server-side
+    # session/step validation, bouncing back to the first page.
+    login_url = start_url
+
     login_action = next((a for a in actions if _is_password_action(a)), None)
-    login_url = login_action.url_before if login_action else start_url
 
     success_signal = None
     if login_action is not None:

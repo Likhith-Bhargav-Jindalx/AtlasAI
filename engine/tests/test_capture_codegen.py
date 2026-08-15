@@ -131,7 +131,6 @@ def test_parse_codegen_actions_skips_structural_lines():
 
 def test_build_codegen_trajectory_maps_actions_to_steps():
     actions = [
-        CodegenAction("goto", "https://x/login"),
         CodegenAction("click", 'codegen_expr:page.get_by_role("button", name="Next")'),
         CodegenAction("fill", 'codegen_expr:page.get_by_role("textbox", name="PW")', "secret"),
         CodegenAction("click", 'codegen_expr:page1.get_by_role("link", name="Open")'),
@@ -140,15 +139,45 @@ def test_build_codegen_trajectory_maps_actions_to_steps():
     trajectory = build_codegen_trajectory(actions)
     assert trajectory is not None
     steps = trajectory.steps
-    assert [s.kind for s in steps] == ["goto", "click", "fill", "click", "press"]
-    assert steps[0].expected_effect == "dom_changed"
-    assert steps[0].selector_candidates == [{"selector": "https://x/login", "rank": 0}]
-    assert steps[2].value == "secret"
-    assert steps[3].selector_candidates == [
+    assert [s.kind for s in steps] == ["click", "fill", "click", "press"]
+    assert steps[1].value == "secret"
+    assert steps[2].selector_candidates == [
         {"selector": 'codegen_expr:page1.get_by_role("link", name="Open")', "rank": 0}
     ]
-    assert steps[3].expected_effect == "none"
-    assert steps[4].value == "Enter"
+    assert steps[2].expected_effect == "none"
+    assert steps[3].value == "Enter"
+
+
+def test_build_codegen_trajectory_drops_goto_steps_entirely():
+    """A goto in a recorded codegen script is a re-load the recorder
+    captured as a side effect of a click (e.g. an enterprise login flow's
+    username -> password -> dashboard page transitions) — not an
+    independent action. Replaying it as a standalone page.goto() discards
+    whatever session/flow state the click's own navigation carried,
+    which can bounce a multi-page login flow back to its first page.
+    Matches the previous app's codegenImport.ts::assemble() exactly:
+    "Drop mid-flow navigate/goto steps ... a page.goto(...) line is a
+    re-load the recorder captured, not a real step." """
+    actions = [
+        CodegenAction("goto", "https://portal.example/login"),
+        CodegenAction("click", 'codegen_expr:page.get_by_role("textbox", name="Username")'),
+        CodegenAction("fill", 'codegen_expr:page.get_by_role("textbox", name="Username")', "demo"),
+        CodegenAction("click", 'codegen_expr:page.get_by_role("button", name="Next")'),
+        CodegenAction("goto", "https://portal.example/login/password"),
+        CodegenAction("click", 'codegen_expr:page.get_by_role("textbox", name="Password")'),
+        CodegenAction("fill", 'codegen_expr:page.get_by_role("textbox", name="Password")', "secret"),
+        CodegenAction("click", 'codegen_expr:page.get_by_role("button", name="Log In")'),
+    ]
+
+    trajectory = build_codegen_trajectory(actions)
+
+    assert trajectory is not None
+    assert [s.kind for s in trajectory.steps] == ["click", "fill", "click", "click", "fill", "click"]
+    assert all("goto" != s.kind for s in trajectory.steps)
+
+
+def test_build_codegen_trajectory_returns_none_for_goto_only():
+    assert build_codegen_trajectory([CodegenAction("goto", "https://x/login")]) is None
 
 
 def test_build_codegen_trajectory_returns_none_for_unsupported_only():

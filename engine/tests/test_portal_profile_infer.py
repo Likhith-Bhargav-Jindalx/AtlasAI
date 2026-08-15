@@ -32,3 +32,24 @@ def test_infer_portal_profile_falls_back_when_no_password_field_seen():
     assert profile.login_url == "https://portal.example.com/start"
     assert profile.success_signal is None
     assert profile.confidence == 0.5
+
+
+def test_infer_portal_profile_login_url_is_always_the_recording_start_url():
+    """A login flow can span several real pages (username page -> password
+    page -> dashboard, e.g. eCW). login_url must be where the recording
+    STARTED (the orchestrator's one entry navigation before replay begins),
+    not the password action's own url_before — that's a mid-flow page, and
+    starting replay there skips the flow's server-side session/step
+    validation, bouncing back to the first page."""
+    actions = [
+        _action(0, "click", None, "#username", "https://portal.example.com/login", "https://portal.example.com/login"),
+        _action(1, "fill", "demo", "#username", "https://portal.example.com/login", "https://portal.example.com/login"),
+        _action(2, "click", None, "#next", "https://portal.example.com/login", "https://portal.example.com/login/password"),
+        _action(3, "fill", "demo-pass", "#password", "https://portal.example.com/login/password", "https://portal.example.com/login/password"),
+        _action(4, "click", None, "#login-btn", "https://portal.example.com/login/password", "https://portal.example.com/dashboard"),
+    ]
+
+    profile = infer_portal_profile("https://portal.example.com/login", actions)
+
+    assert profile.login_url == "https://portal.example.com/login"
+    assert profile.success_signal == {"url_contains": "/dashboard"}

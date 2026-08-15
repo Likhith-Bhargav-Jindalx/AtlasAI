@@ -227,8 +227,8 @@ def parse_codegen_actions(codegen: str) -> list[CodegenAction]:
 
 
 # Kinds that produce replay steps (kept faithful to the recorded gesture).
+# `goto` is deliberately EXCLUDED — see build_codegen_trajectory's docstring.
 _TRAJECTORY_KINDS = {
-    "goto",
     "click",
     "dblclick",
     "fill",
@@ -245,21 +245,27 @@ def build_codegen_trajectory(codegen_actions: list[CodegenAction]) -> ReferenceT
     """Builds a ReferenceTrajectory directly from the recorded codegen script
     — the script is the ground truth of what the user did, and (unlike the
     raw recorder's CSS candidates) it covers navigations, popups and iframes.
-    Effects are conservative so a faithful replay doesn't pause spuriously:
-    a `goto` always navigates, so it is marked `dom_changed` (the change-intent
-    silent-no-op gate's reference signal) while clicks/fills pass once the
-    action executes (the next step fails loudly if a step's effect was
-    actually wrong)."""
+    `goto` actions are dropped entirely: a goto in a codegen script is a page
+    (re)load the recorder observed as a SIDE EFFECT of a click — not an
+    independent action — and this app's own orchestrator already performs
+    the flow's one real entry navigation before replay starts (using the
+    portal's inferred/configured login URL). Replaying a recorded goto as a
+    standalone page.goto() re-issues that URL as a fresh, stateless request,
+    discarding whatever session/flow state the click's own navigation
+    carried — which can bounce a multi-page login flow (username page ->
+    password page -> dashboard) straight back to its first page. Matches the
+    previous app's codegenImport.ts::assemble() exactly: "a page.goto(...)
+    line is a re-load the recorder captured, not a real step." Effects are
+    conservative so a faithful replay doesn't pause spuriously: clicks/fills
+    pass once the action executes (the next step fails loudly if a step's
+    effect was actually wrong)."""
     from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
 
     steps = []
     for i, action in enumerate(codegen_actions):
         if action.kind not in _TRAJECTORY_KINDS:
             continue
-        if action.kind == "goto":
-            effect = "dom_changed"
-        else:
-            effect = "none"
+        effect = "none"
         steps.append(
             TrajectoryStep(
                 index=len(steps),

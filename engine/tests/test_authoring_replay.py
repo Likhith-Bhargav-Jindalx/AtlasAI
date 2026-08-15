@@ -170,6 +170,10 @@ def test_run_replay_phase_executes_codegen_popup_steps_on_the_popup(fixture_port
 
 
 def test_apply_stored_codegen_selectors_rebuilds_the_trajectory_from_the_script():
+    """The recorded script's goto is dropped from the rebuilt trajectory —
+    it's a page (re)load the recorder captured as a side effect of the
+    preceding click, not an independent step to replay (see
+    capture/codegen.py::build_codegen_trajectory)."""
     trajectory = ReferenceTrajectory(
         steps=(
             TrajectoryStep(0, "click", [{"selector": "#old-btn", "rank": 1}], None, "none"),
@@ -188,15 +192,14 @@ def test_apply_stored_codegen_selectors_rebuilds_the_trajectory_from_the_script(
     enriched, applied = apply_stored_codegen_selectors(trajectory, prefix)
 
     assert applied is True
-    assert [s.kind for s in enriched.steps] == ["goto", "click", "fill"]
-    assert enriched.steps[0].selector_candidates == [{"selector": "https://portal.example/login", "rank": 0}]
-    assert enriched.steps[1].selector_candidates == [
+    assert [s.kind for s in enriched.steps] == ["click", "fill"]
+    assert enriched.steps[0].selector_candidates == [
         {"selector": 'codegen_expr:page.locator("text=Submit")', "rank": 0}
     ]
-    assert enriched.steps[2].selector_candidates == [
+    assert enriched.steps[1].selector_candidates == [
         {"selector": 'codegen_expr:page.locator("[id=\\"u\\"]")', "rank": 0}
     ]
-    assert enriched.steps[2].value == "demo"
+    assert enriched.steps[1].value == "demo"
 
 
 def test_apply_stored_codegen_selectors_is_a_noop_without_a_script():
@@ -233,7 +236,9 @@ def test_apply_stored_codegen_selectors_is_a_noop_for_an_unsupported_script():
 def test_run_replay_phase_captures_expects_popup_trigger_from_codegen(fixture_portal_url):
     """A codegen script whose trigger click lives inside `with
     page.expect_popup()` rebuilds into a step that REQUIRES the popup — the
-    replay then proves it opened and marks the step on-track."""
+    replay then proves it opened and marks the step on-track. The script's
+    leading goto is dropped from the trajectory (build_codegen_trajectory),
+    so the popup-trigger click is step 0, not step 1."""
     from atlas_engine.capture.codegen import build_codegen_trajectory, parse_codegen_actions
 
     codegen = (
@@ -245,8 +250,8 @@ def test_run_replay_phase_captures_expects_popup_trigger_from_codegen(fixture_po
     )
     trajectory = build_codegen_trajectory(parse_codegen_actions(codegen))
     assert trajectory is not None
-    assert trajectory.steps[1].expects_popup is True
-    assert trajectory.steps[2].expects_popup is False
+    assert trajectory.steps[0].expects_popup is True
+    assert trajectory.steps[1].expects_popup is False
 
     authoring_run_id = _make_authoring_run()
     with sync_playwright() as playwright:
@@ -259,5 +264,5 @@ def test_run_replay_phase_captures_expects_popup_trigger_from_codegen(fixture_po
         browser.close()
 
     assert result is not None
-    assert len(result.steps) == 3
-    assert result.steps[1].ref_shot_after is not None  # popup trigger evidence captured
+    assert len(result.steps) == 2
+    assert result.steps[0].ref_shot_after is not None  # popup trigger evidence captured
