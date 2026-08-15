@@ -349,3 +349,40 @@ def test_review_header_omits_warning_lines_when_nothing_to_warn_about():
     assert "no captured/parameterized value" not in header
     assert "opens at least one new page/popup" not in header
 
+
+# ── Argparse CLI surface + secrets from env ──────────────────────────────────
+
+
+def test_argparse_block_declares_one_cli_flag_per_param_with_recorded_default():
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams, CliParam
+    classified = ClassifiedParams(secrets=(), params=(CliParam(0, "start-date", "01/01/2026"),))
+    block = _build_argparse_and_main_params(classified)
+    assert '"--start-date"' in block
+    assert 'default="01/01/2026"' in block
+    assert 'params["start_date"] = args.start_date' in block
+
+
+def test_argparse_block_reads_secrets_from_env_not_cli():
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block = _build_argparse_and_main_params(classified)
+    assert 'os.environ.get("SECRET_X_USERNAME"' in block
+    assert 'os.environ.get("SECRET_X_PASSWORD"' in block
+    assert '"--username"' not in block
+    assert '"--password"' not in block
+
+
+def test_argparse_block_always_declares_headless_and_diagnostics_dir():
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams
+    block = _build_argparse_and_main_params(ClassifiedParams(secrets=(), params=()))
+    assert '"--headless"' in block
+    assert '"--headed"' in block
+    assert '"--diagnostics-dir"' in block
+    assert '"--batch"' in block
+

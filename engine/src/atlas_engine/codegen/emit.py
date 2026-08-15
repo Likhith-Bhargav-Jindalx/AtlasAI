@@ -279,6 +279,34 @@ def _emit_step(step: TrajectoryStep, *, pre_action_ms: int = 0, settle_after_nav
     return body
 
 
+def _build_argparse_and_main_params(classified: "ClassifiedParams") -> str:
+    """Generates the argparse setup + params-dict construction spliced into
+    the emitted script's main(). One --<kebab-name> CLI flag per classified
+    CliParam (default = recorded value, still overridable); secrets are
+    NEVER CLI flags — always read from an env var, so a real credential
+    never appears as a command-line argument (visible in shell history/
+    process listings) or a literal in the script file."""
+    lines = ["    parser = argparse.ArgumentParser()"]
+    for p in classified.params:
+        attr = p.cli_name.replace("-", "_")
+        lines.append(f'    parser.add_argument("--{p.cli_name}", default="{p.default_value}")')
+    lines.append('    parser.add_argument("--headless", action="store_true", default=True)')
+    lines.append('    parser.add_argument("--headed", dest="headless", action="store_false")')
+    lines.append('    parser.add_argument("--diagnostics-dir", default="diagnostics")')
+    lines.append('    parser.add_argument("--batch", default="")')
+    lines.append("    args = parser.parse_args()")
+    lines.append("")
+    lines.append("    params = {}")
+    for s in classified.secrets:
+        lines.append(f'    params["{s.label}"] = os.environ.get("{s.env_var}", "")')
+    for p in classified.params:
+        attr = p.cli_name.replace("-", "_")
+        lines.append(f'    params["{attr}"] = args.{attr}')
+    lines.append('    params["headless"] = args.headless')
+    lines.append('    params["diagnostics_dir"] = args.diagnostics_dir')
+    return "\n".join(lines)
+
+
 def emit_golden_script(
     trajectory: ReferenceTrajectory, *, start_url: str,
     pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
