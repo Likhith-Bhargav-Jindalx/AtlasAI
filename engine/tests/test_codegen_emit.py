@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import textwrap
@@ -75,7 +76,20 @@ def test_emitted_golden_script_actually_runs_against_the_fixture_portal(fixture_
     script_path = tmp_path / "golden.py"
     script_path.write_text(script)
 
-    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+    # This trajectory has fill/password steps, so (per Task 11) the
+    # username/password steps are now swept into the login() block, which
+    # reads credentials from env vars (portal_domain defaults to "unknown"
+    # here, so SECRET_UNKNOWN_USERNAME/SECRET_UNKNOWN_PASSWORD) rather than
+    # baking the recorded literal values into the script — supply them so
+    # login actually succeeds and the flow reaches the dashboard, exactly
+    # as it did when the values were baked in literally before this task.
+    import os
+    env = dict(os.environ)
+    env["SECRET_UNKNOWN_USERNAME"] = "demo"
+    env["SECRET_UNKNOWN_PASSWORD"] = "demo-pass"
+    result = subprocess.run(
+        [sys.executable, str(script_path)], capture_output=True, text=True, timeout=30, env=env,
+    )
 
     assert result.returncode == 0, result.stderr
 
@@ -761,7 +775,6 @@ def test_download_step_emission_uses_context_scoped_event_not_page_scoped():
     compile(script, "<download>", "exec")
 
 
-@pytest.mark.skip(reason="wired up in Task 11")
 def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
     """End-to-end: a step that fails must produce step_N_failure.png and
     step_N_failure.json in the diagnostics dir, and the script must exit
@@ -776,12 +789,146 @@ def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_p
     script_path = tmp_path / "golden.py"
     script_path.write_text(script)
 
+    # Playwright's default actionability timeout on the doomed click is
+    # 30000ms by itself (confirmed by direct measurement: ~31s wall clock
+    # for this exact script to fail and finish writing diagnostics) — a
+    # subprocess timeout of exactly 30s leaves no headroom and reliably
+    # kills the process before it can exit non-zero on its own, which is
+    # a harness timing issue, not a correctness one. Give it real headroom.
     result = subprocess.run(
         [sys.executable, str(script_path), "--diagnostics-dir", str(tmp_path / "diag")],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=45,
     )
 
     assert result.returncode != 0
     assert (tmp_path / "diag" / "step_0_failure.png").exists()
     assert (tmp_path / "diag" / "step_0_failure.json").exists()
+
+
+# ── Task 11: full assembly — login, diagnostics, batch mode, result contract ──
+
+
+def test_emit_golden_script_produces_a_runnable_script_with_login_and_result_contract(fixture_portal_url, tmp_path):
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "demo-pass", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+        TrajectoryStep(3, "click", [{"selector": "#generate-report-btn", "rank": 0}], None, "dom_changed"),
+    ))
+    script = emit_golden_script(
+        trajectory, start_url=f"{fixture_portal_url}/login.html",
+        portal_domain="fixture.test", portal_name="FixturePortal", confidence=0.9,
+        success_signal={"url_contains": "/dashboard.html"},
+    )
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    import os
+    env = dict(os.environ)
+    env["SECRET_FIXTURE_TEST_USERNAME"] = "demo"
+    env["SECRET_FIXTURE_TEST_PASSWORD"] = "demo-pass"
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--diagnostics-dir", str(tmp_path / "diag")],
+        capture_output=True, text=True, timeout=30, env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert "fileCount" in payload
+    assert "demo-pass" not in script  # the real secret is never in the file text
+
+
+def test_emit_golden_script_omits_login_and_secrets_with_no_password_step():
+    """Corrected Global Constraint (see plan's preflight ruling): the
+    structural machinery (header banner, diagnostics, print-capture,
+    argparse surface, result contract) is ALWAYS present — only the
+    login block and secret env-var reads are conditional on the
+    trajectory actually having a password step."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),
+    ))
+    script = emit_golden_script(trajectory, start_url="https://x.com", portal_domain="x.com", portal_name="X")
+    assert "def login(" not in script
+    assert "SECRET_" not in script
+    assert "def dump_failure_context(" in script  # always present
+    assert '"--headless"' in script  # always present
+    compile(script, "<golden>", "exec")
+
+
+def test_emit_golden_script_compiles_with_a_multi_candidate_fallback_step():
+    """Regression test for Bug 1 (per-line .strip() destroying nested
+    control-flow structure): a step with 2+ ranked selector candidates goes
+    through _emit_step_with_fallback's multi-candidate branch, which emits a
+    genuinely nested `for _sel in [...]: try: ... except: ...` block at
+    three distinct relative depths. Flattening every line to zero indent
+    (the brief's original per-line .strip()) turns that into a `for` with no
+    indented body — a SyntaxError/IndentationError at compile() time. The
+    fix (textwrap.dedent, preserving relative indentation) must produce
+    valid, compilable Python when assembled through the full
+    emit_golden_script pipeline."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(
+            0, "click",
+            [{"selector": "#primary", "rank": 0}, {"selector": "#fallback", "rank": 1}],
+            None, "none",
+        ),
+    ))
+    script = emit_golden_script(trajectory, start_url="https://x.com", portal_domain="x.com", portal_name="X")
+    assert "for _sel in [" in script
+    compile(script, "<golden>", "exec")
+
+
+def test_emit_golden_script_compiles_with_settle_after_nav_ms_goto_step():
+    """Regression test for Bug 1's second scenario: a `goto` step with
+    settle_after_nav_ms > 0 makes _emit_step append its own nested
+    try/except (waiting for networkidle, swallowing a timeout) after the
+    goto line. This must also survive the full emit_golden_script assembly
+    (dedent + diagnostics wrap + main() splice) and still compile."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "goto", [{"selector": "https://example.com/x", "rank": 0}], None, "url_changed"),
+    ))
+    script = emit_golden_script(
+        trajectory, start_url="https://x.com", portal_domain="x.com", portal_name="X",
+        settle_after_nav_ms=15000,
+    )
+    assert 'page.wait_for_load_state("networkidle", timeout=15000)' in script
+    compile(script, "<golden>", "exec")
+
+
+def test_emit_golden_script_always_navigates_to_start_url_even_with_login_block():
+    """Regression test for Bug 2: login() never navigates anywhere itself —
+    it assumes the page is already at the login page. The assembled
+    run_flow must always call page.goto(start_url) BEFORE calling login(),
+    never skip the goto just because a login block exists (an
+    about:blank page has no #username/#password to fill)."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "demo-pass", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    script = emit_golden_script(
+        trajectory, start_url="https://example.com/login.html",
+        portal_domain="x.com", portal_name="X",
+    )
+    assert "def login(" in script
+    goto_index = script.index("page.goto('https://example.com/login.html')")
+    # Search for the actual CALL site ("    login(page, params)" at
+    # run_flow's 4-space indent), not script.index("login(page, params)")
+    # alone — that substring also matches inside the earlier function
+    # DEFINITION line "def login(page, params):" emitted in the header,
+    # which would make this assertion pass even if the call were missing.
+    login_call_index = script.index("\n    login(page, params)\n")
+    assert goto_index < login_call_index
+    compile(script, "<golden>", "exec")
+
+
+def test_emit_golden_script_defaults_portal_domain_and_name_for_existing_callers():
+    """Regression test for Bug 3: portal_domain/portal_name must have
+    defaults so pre-existing call sites (that don't care about portal
+    identity) keep working without a TypeError."""
+    trajectory = ReferenceTrajectory(
+        steps=(TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),)
+    )
+    script = emit_golden_script(trajectory, start_url="https://example.com/")
+    compile(script, "<golden>", "exec")
 
