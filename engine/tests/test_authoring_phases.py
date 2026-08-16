@@ -12,11 +12,13 @@ from atlas_engine.db.models import (
     CertificationRun,
     GoldenScript,
     Organization,
+    PageExtraction,
     PortalProfile,
     Recording,
 )
 from atlas_engine.db.repo import get_or_create_portal_profile
 from atlas_engine.llm.client import FakeLlmClient
+from atlas_engine.storage import get_store
 
 
 def _make_authoring_run() -> uuid.UUID:
@@ -157,6 +159,7 @@ def test_run_golden_phase_creates_a_draft_golden_script(fixture_portal_url):
 
     golden_script_id, script_path = run_golden_phase(
         trajectory, f"{fixture_portal_url}/login.html", org_id, portal_profile_id, recording_id, authoring_run_id,
+        portal_domain="portal-golden.example.com", portal_name="Golden Portal",
     )
 
     assert script_path.exists()
@@ -165,6 +168,34 @@ def test_run_golden_phase_creates_a_draft_golden_script(fixture_portal_url):
         golden = session.get(GoldenScript, golden_script_id)
         assert golden.status == "draft"
         assert golden.created_from_recording_id == recording_id
+
+
+def test_run_golden_phase_passes_portal_info_to_emit_golden_script(fixture_portal_url, monkeypatch):
+    captured = {}
+    import atlas_engine.authoring.phases as phases_module
+    real_emit = phases_module.emit_golden_script
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_emit(*args, **kwargs)
+
+    monkeypatch.setattr(phases_module, "emit_golden_script", spy)
+
+    _org_id, _profile_id, recording_id, authoring_run_id = _make_authoring_run_for_golden(fixture_portal_url)
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#generate-report-btn", "rank": 0}], None, "dom_changed"),
+    ))
+
+    run_golden_phase(
+        trajectory, f"{fixture_portal_url}/dashboard.html", _org_id, _profile_id, recording_id, authoring_run_id,
+        portal_domain="fixture.test", portal_name="Fixture", confidence=0.8,
+        success_signal={"url_contains": "/dashboard.html"},
+    )
+
+    assert captured["portal_domain"] == "fixture.test"
+    assert captured["portal_name"] == "Fixture"
+    assert captured["confidence"] == 0.8
+    assert captured["success_signal"] == {"url_contains": "/dashboard.html"}
 
 
 def _write_script_under_run_root(text: str) -> "Path":
@@ -186,7 +217,18 @@ def _write_script_under_run_root(text: str) -> "Path":
     return script_path
 
 
-def test_run_certify_phase_records_one_row_per_run_and_counts_passes(fixture_portal_url):
+def test_run_certify_phase_records_one_row_per_run_and_counts_passes(fixture_portal_url, monkeypatch):
+    # emit_golden_script now genuinely requires SECRET_* env vars at runtime
+    # for the login block (Task 11) — this test doesn't pass portal_domain
+    # explicitly, so it gets the default "unknown", making the required
+    # names SECRET_UNKNOWN_USERNAME/SECRET_UNKNOWN_PASSWORD. The subprocess
+    # certify_golden_script_once launches inherits the current process's
+    # environment, so setting these here (matching the trajectory's own
+    # recorded fill values) lets the fixture portal's login.html accept
+    # them exactly as it did before Task 11.
+    monkeypatch.setenv("SECRET_UNKNOWN_USERNAME", "demo")
+    monkeypatch.setenv("SECRET_UNKNOWN_PASSWORD", "demo-pass")
+
     _org_id, _profile_id, _recording_id, authoring_run_id = _make_authoring_run_for_golden(fixture_portal_url)
     trajectory = ReferenceTrajectory(
         steps=(
@@ -232,3 +274,52 @@ def test_run_certify_phase_records_failure_evidence_for_a_broken_script(fixture_
         assert all(c.failure_evidence_blob_ref is not None for c in cert_runs)
         evidence_path = settings.run_root / cert_runs[0].failure_evidence_blob_ref
         assert "boom" in evidence_path.read_text()
+
+
+def test_run_certify_phase_persists_extractions_and_uploads_downloads_on_first_success(
+    fixture_portal_url, tmp_path, monkeypatch,
+):
+    import atlas_engine.authoring.phases as phases_module
+    monkeypatch.setattr(
+        phases_module, "certify_golden_script_once",
+        lambda script_path, **kw: (
+            True, None,
+            {
+                "fileCount": 1, "filesTransferred": ["report.csv"],
+                "downloaded_files": [{"filename": "report.csv", "path": str(tmp_path / "report.csv")}],
+                "extractions": {"click_1": {"url": "https://x.com", "data": {"fields": {"a": "1"}, "tables": []}}},
+            },
+        ),
+    )
+    (tmp_path / "report.csv").write_text("a,b\n1,2\n")
+
+    with session_scope() as session:
+        org = Organization(name="Certify Persist Org", slug=f"certify-persist-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        recording = Recording(
+            org_id=org.id,
+            portal_profile_id=get_or_create_portal_profile(session, org_id, "x.com").id,
+            status="captured", capture_blob_prefix="orgs/x/recordings/1/",
+        )
+        session.add(recording)
+        session.flush()
+        recording_id = recording.id
+        authoring_run = AuthoringRun(org_id=org.id, recording_id=recording_id, status="running", current_phase="certifying")
+        session.add(authoring_run)
+        session.flush()
+        authoring_run_id = authoring_run.id
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text("print('{}')")
+
+    run_certify_phase(script_path, authoring_run_id, recording_id=recording_id, runs=1)
+
+    with session_scope() as session:
+        extractions = session.query(PageExtraction).filter_by(recording_id=recording_id).all()
+        assert len(extractions) == 1
+        assert extractions[0].data == {"fields": {"a": "1"}, "tables": []}
+
+    store = get_store()
+    assert store.exists(f"authoring/{authoring_run_id}/results/report.csv")

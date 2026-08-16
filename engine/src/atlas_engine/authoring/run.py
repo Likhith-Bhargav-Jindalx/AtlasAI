@@ -96,6 +96,10 @@ class _AuthoringRunSession:
                 capture_blob_prefix = recording.capture_blob_prefix
                 pre_action_ms = profile.pacing_pre_action_ms or 0
                 settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
+                portal_domain = profile.domain
+                portal_name = profile.display_name or profile.domain
+                confidence = float(profile.confidence_score) if profile.confidence_score is not None else None
+                success_signal = profile.inferred_success_signal
 
             trajectory = trajectory_from_dict(get_store().read_json(trajectory_blob_ref))
 
@@ -200,6 +204,8 @@ class _AuthoringRunSession:
                 update_run(self.authoring_run_id, current_phase="golden")
                 golden_script_id, script_path = run_golden_phase(
                     trajectory, start_url, org_id, portal_profile_id, self.recording_id, self.authoring_run_id,
+                    portal_domain=portal_domain, portal_name=portal_name, confidence=confidence,
+                    success_signal=success_signal,
                     pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
                 )
                 update_run(self.authoring_run_id, golden_script_id=golden_script_id)
@@ -211,8 +217,8 @@ class _AuthoringRunSession:
 
                 update_run(self.authoring_run_id, current_phase="certifying")
                 passed, total = run_certify_phase(
-                    script_path, self.authoring_run_id, runs=_CERTIFY_RUNS,
-                    run_number_offset=repair_attempt * _CERTIFY_RUNS,
+                    script_path, self.authoring_run_id, recording_id=self.recording_id,
+                    runs=_CERTIFY_RUNS, run_number_offset=repair_attempt * _CERTIFY_RUNS,
                 )
 
                 if self.stop_event.is_set():

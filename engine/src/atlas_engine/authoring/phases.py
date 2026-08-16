@@ -7,7 +7,7 @@ from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.codegen.emit import emit_golden_script
 from atlas_engine.config import settings
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import CertificationRun, GoldenScript
+from atlas_engine.db.models import CertificationRun, GoldenScript, PageExtraction
 from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.storage import get_store
@@ -60,7 +60,9 @@ def run_brain_phase(
 def run_golden_phase(
     trajectory: ReferenceTrajectory, start_url: str, org_id: uuid.UUID, portal_profile_id: uuid.UUID,
     recording_id: uuid.UUID, authoring_run_id: uuid.UUID,
-    *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
+    *, portal_domain: str, portal_name: str, confidence: float | None = None,
+    success_signal: dict | None = None,
+    pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
 ) -> tuple[uuid.UUID, Path]:
     """Freezes the brain-verified trajectory into a deterministic .py
     script and records it as a draft GoldenScript — certifying (next
@@ -68,7 +70,10 @@ def run_golden_phase(
     store = get_store()
     run_dir = store.new_run_dir(prefix="goldens")
     script_text = emit_golden_script(
-        trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+        trajectory, start_url=start_url,
+        portal_domain=portal_domain, portal_name=portal_name, confidence=confidence,
+        success_signal=success_signal,
+        pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
     )
     script_blob_ref = run_dir.write_text("golden.py", script_text)
     script_path = run_dir.path / "golden.py"
@@ -91,12 +96,17 @@ def run_golden_phase(
 
 
 def run_certify_phase(
-    script_path: Path, authoring_run_id: uuid.UUID, *, runs: int = 3, run_number_offset: int = 0,
+    script_path: Path, authoring_run_id: uuid.UUID, *, recording_id: uuid.UUID | None = None,
+    runs: int = 3, run_number_offset: int = 0,
 ) -> tuple[int, int]:
     """Runs the frozen golden script headless, `runs` times from fresh
     processes, recording one CertificationRun row per attempt. Returns
     (passed, runs) — the orchestrator decides certified/partially_certified/
-    repair-and-retry from this.
+    repair-and-retry from this. On the FIRST successful run only (the
+    remaining runs are a determinism check — no need to persist duplicate
+    copies of the same deterministic output), persists any extractions
+    into PageExtraction rows and uploads any downloaded files via
+    get_store() under authoring/<authoring_run_id>/results/.
 
     `run_number_offset` lets a caller that invokes this more than once for
     the same authoring_run_id (e.g. the orchestrator's repair loop) avoid
@@ -104,15 +114,20 @@ def run_certify_phase(
     "run_number") — each retry passes a different offset so its rows get
     fresh run_numbers instead of re-using 1..runs."""
     passed = 0
+    persisted_once = False
     for i in range(1, runs + 1):
         run_number = run_number_offset + i
-        ok, failure_output, _certify_result = certify_golden_script_once(script_path)
+        ok, failure_output, certify_result = certify_golden_script_once(script_path)
 
         failure_ref = None
         if not ok:
             evidence_path = script_path.parent / f"certify-{run_number}-failure.txt"
             evidence_path.write_text(failure_output or "")
             failure_ref = str(evidence_path.relative_to(settings.run_root))
+
+        if ok and not persisted_once and certify_result and recording_id is not None:
+            _persist_certify_result(certify_result, authoring_run_id, recording_id)
+            persisted_once = True
 
         with session_scope() as session:
             session.add(CertificationRun(
@@ -129,3 +144,24 @@ def run_certify_phase(
             passed += 1
 
     return passed, runs
+
+
+def _persist_certify_result(certify_result: dict, authoring_run_id: uuid.UUID, recording_id: uuid.UUID) -> None:
+    """Persists a certified golden script run's extractions (PageExtraction
+    rows) and uploads its downloaded files to blob storage, under the
+    authoring run's own results/ prefix."""
+    store = get_store()
+    for extraction in (certify_result.get("extractions") or {}).values():
+        with session_scope() as session:
+            session.add(PageExtraction(
+                recording_id=recording_id,
+                page_index=0,
+                url=extraction.get("url", ""),
+                data=extraction.get("data", {}),
+            ))
+    for downloaded in certify_result.get("downloaded_files") or []:
+        local_path = Path(downloaded["path"])
+        if not local_path.exists():
+            continue
+        blob_ref = f"authoring/{authoring_run_id}/results/{downloaded['filename']}"
+        store.write_bytes(blob_ref, local_path.read_bytes())
