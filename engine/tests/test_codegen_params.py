@@ -105,3 +105,61 @@ def test_cli_name_selector_with_digits():
     """Verify _cli_name preserves digits and splits correctly."""
     step = TrajectoryStep(0, "fill", [{"selector": "#reportStartDate2", "rank": 0}], "x", "none")
     assert _cli_name(step) == "report-start-date2"
+
+
+# ── I3: type-kind passwords, and multiple password fields ──────────────────
+
+
+def test_type_kind_password_step_is_classified_as_a_secret_not_a_literal():
+    """A password entered via a 'type'-kind step (press_sequentially) must be
+    classified as a secret exactly like a 'fill'-kind password step — the
+    previous _is_password_step only checked kind == 'fill', silently letting
+    a type-kind password slip through as a literal-valued CliParam."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "type", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+    ))
+
+    result = classify_step_values(trajectory, "portal.example.com")
+
+    secrets_by_label = {s.label: s for s in result.secrets}
+    assert secrets_by_label["password"].step_index == 1
+    assert 1 not in {p.step_index for p in result.params}
+
+
+def test_two_password_matching_steps_both_become_secrets_sharing_the_same_env_var():
+    """A flow with a second password field (re-auth/confirm-password) must
+    have BOTH steps classified as secrets, reading the identical env var —
+    not just the first one found, and not leaking the second as a literal
+    CliParam."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(2, "fill", [{"selector": "#confirmPassword", "rank": 0}], "hunter2", "none"),
+    ))
+
+    result = classify_step_values(trajectory, "portal.example.com")
+
+    password_secrets = [s for s in result.secrets if s.label == "password"]
+    assert {s.step_index for s in password_secrets} == {1, 2}
+    assert len({s.env_var for s in password_secrets}) == 1
+    assert password_secrets[0].env_var == "SECRET_PORTAL_EXAMPLE_COM_PASSWORD"
+    # Neither password step should leak through as a CliParam
+    assert {p.step_index for p in result.params} == set()
+    # The username special-case is still scoped to only the FIRST password step
+    assert {s.label for s in result.secrets} == {"username", "password"}
+
+
+def test_type_kind_non_password_step_still_becomes_a_cli_param():
+    """A 'type'-kind step that ISN'T a password must still be classified as a
+    plain CLI param (not silently dropped) — required for C1's value_expr
+    substitution to have something to point at for type-kind steps too."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "type", [{"selector": "#searchBox", "rank": 0}], "some query", "none"),
+    ))
+
+    result = classify_step_values(trajectory, "portal.example.com")
+
+    assert result.secrets == ()
+    assert result.params[0].cli_name == "search-box"
+    assert result.params[0].default_value == "some query"

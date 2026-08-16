@@ -37,6 +37,10 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
         request_id = recording.request_id
         pre_action_ms = profile.pacing_pre_action_ms or 0
         settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
+        portal_domain = profile.domain
+        portal_name = profile.display_name or profile.domain
+        confidence = float(profile.confidence_score) if profile.confidence_score is not None else None
+        success_signal = profile.inferred_success_signal
 
     trajectory = trajectory_from_dict(get_store().read_json(trajectory_blob_ref))
 
@@ -58,7 +62,10 @@ def author_from_recording(recording_id: uuid.UUID, *, llm: LlmClient | None = No
     store = get_store()
     run_dir = store.new_run_dir(prefix="goldens")
     script_text = emit_golden_script(
-        trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+        trajectory, start_url=start_url,
+        portal_domain=portal_domain, portal_name=portal_name, confidence=confidence,
+        success_signal=success_signal,
+        pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
     )
     script_blob_ref = run_dir.write_text("golden.py", script_text)
     script_path = run_dir.path / "golden.py"

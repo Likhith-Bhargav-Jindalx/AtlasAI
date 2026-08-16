@@ -268,6 +268,10 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
                     start_url = inferred_url or "http://localhost/"
                     codegen_script = emit_golden_script(
                         traj, start_url=start_url,
+                        portal_domain=(profile.domain if profile else "unknown"),
+                        portal_name=(profile.display_name or profile.domain) if profile else "Unknown Portal",
+                        confidence=float(profile.confidence_score) if profile and profile.confidence_score is not None else None,
+                        success_signal=profile.inferred_success_signal if profile else None,
                         pre_action_ms=(profile.pacing_pre_action_ms or 0) if profile else 0,
                         settle_after_nav_ms=(profile.pacing_settle_after_nav_ms or 0) if profile else 0,
                     )

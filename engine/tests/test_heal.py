@@ -4,10 +4,11 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import sync_playwright
 
+from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import GoldenScript, HealEvent, Organization
+from atlas_engine.db.models import GoldenScript, HealEvent, Organization, PortalProfile
 from atlas_engine.db.repo import get_or_create_portal_profile
 from atlas_engine.llm.client import FakeLlmClient
 from atlas_engine.verify.heal import heal_golden_script
@@ -106,3 +107,69 @@ def test_heal_golden_script_records_screenshot_paths_when_a_step_drifts(fixture_
             assert Path(entry["after_screenshot"]).exists()
     finally:
         fixture_portal_server.set_drift_mode(False)
+
+
+def test_heal_golden_script_threads_portal_info_to_emit_golden_script(fixture_portal_url, monkeypatch):
+    """C3: heal_golden_script is one of three production call sites that
+    never threaded portal_domain/portal_name/success_signal to
+    emit_golden_script — re-emitting a CERTIFIED script with the wrong
+    (SECRET_UNKNOWN_*) secret names (a real regression vector). The portal
+    identity + success signal must reach emission on the healed script too."""
+    import dataclasses
+
+    import atlas_engine.verify.heal as heal_module
+
+    _org_id, golden_script_id = _author_against_fixture(fixture_portal_url)
+
+    with session_scope() as session:
+        golden = session.get(GoldenScript, golden_script_id)
+        profile = session.get(PortalProfile, golden.portal_profile_id)
+        profile.inferred_success_signal = {"url_contains": "/dashboard.html"}
+        profile.confidence_score = 0.9
+        expected_domain = profile.domain
+        expected_name = profile.display_name or profile.domain
+        session.add(profile)
+
+    captured = {}
+
+    def spy_emit(*args, **kwargs):
+        captured.update(kwargs)
+        return "def run_flow(playwright, page, params, diagnostics_dir):\n    return {}\n"
+
+    class _FakeOutcome:
+        def __init__(self, step_index):
+            self.step_index = step_index
+            self.shot_after = None
+
+    class _FakeResult:
+        def __init__(self, trajectory):
+            self.success = True
+            self.trajectory = trajectory
+
+        def __iter__(self):
+            return iter([_FakeOutcome(0)])
+
+    class _FakeBrainLoop:
+        def __init__(self, page, **kwargs):
+            pass
+
+        def run(self, trajectory, **kwargs):
+            new_steps = tuple(
+                dataclasses.replace(s, selector_candidates=[{"selector": "#drifted-btn", "rank": 0}])
+                for s in trajectory.steps
+            )
+            return _FakeResult(ReferenceTrajectory(steps=new_steps))
+
+    class _FakeCert:
+        is_certified = True
+
+    monkeypatch.setattr(heal_module, "emit_golden_script", spy_emit)
+    monkeypatch.setattr(heal_module, "BrainLoop", _FakeBrainLoop)
+    monkeypatch.setattr(heal_module, "certify_golden_script", lambda *a, **k: _FakeCert())
+
+    result = heal_golden_script(golden_script_id)
+
+    assert result["status"] == "healed"
+    assert captured["portal_domain"] == expected_domain
+    assert captured["portal_name"] == expected_name
+    assert captured["success_signal"] == {"url_contains": "/dashboard.html"}

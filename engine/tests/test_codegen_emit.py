@@ -24,7 +24,7 @@ def test_emit_golden_script_contains_no_llm_or_engine_imports():
     assert "from playwright.sync_api import" in script
     # CSS selectors now get >> visible=true and emit via page.locator().first
     assert "visible=true" in script
-    assert ".fill('demo')" in script
+    assert 'params["username"]' in script
     assert ".click()" in script
 
 
@@ -56,7 +56,7 @@ def test_emitted_golden_script_emits_codegen_locator_expressions_as_locator_call
     script = emit_golden_script(trajectory, start_url="https://example.com/login.html")
 
     # codegen_expr selectors do NOT get >> visible=true (they use get_by_*)
-    assert 'page.get_by_role("textbox", name="Username").fill(\'demo\')' in script
+    assert 'page.get_by_role("textbox", name="Username").fill(params["codegen_expr_get_by_role_textbox_name_username"])' in script
     assert 'page.get_by_role("button", name="Log in").click()' in script
     assert 'page.click(' not in script
     compile(script, "<golden>", "exec")
@@ -123,7 +123,7 @@ def test_emitted_golden_script_handles_goto_and_popup_steps():
     assert '_page(page, 1).get_by_role("link", name="Open").click()' in script
     assert (
         '_page(page, 1).locator("#q").content_frame'
-        '.get_by_role("searchbox", name="S").fill(\'13.10\')' in script
+        '.get_by_role("searchbox", name="S").fill(params["codegen_expr_page1_locator_q_content_frame_get_by_role_searchbox_name_s"])' in script
     )
     assert "def _page(page, index):" in script
     compile(script, "<golden>", "exec")
@@ -586,8 +586,11 @@ def test_emit_step_with_fallback_tries_every_ranked_candidate_in_turn():
     )
     lines = _emit_step_with_fallback(step, pre_action_ms=0, settle_after_nav_ms=0)
     text = "\n".join(lines)
-    assert "'#primary'" in text
-    assert "'#fallback'" in text
+    # I2: every fallback candidate gets _prefer_visible applied — the
+    # hidden-duplicate trap is exactly when a repair path manufactures a
+    # second candidate, and `>> visible=true` is supported by page.locator().
+    assert "'#primary >> visible=true'" in text
+    assert "'#fallback >> visible=true'" in text
     assert "for _sel in [" in text
     assert "_last_err" in text
     compile(textwrap.dedent("\n".join(f"    {l}" for l in lines)), "<step>", "exec")
@@ -603,6 +606,54 @@ def test_emit_step_with_fallback_is_a_single_call_with_only_one_candidate():
     text = "\n".join(lines)
     assert "for _sel in [" not in text
     assert "#only" in text
+
+
+def test_fallback_applies_visible_preference_unless_force_click():
+    """I2: the multi-candidate fallback branch must apply _prefer_visible to
+    every usable candidate (hidden-duplicate trap — exactly when a repair
+    path manufactures a second candidate), but never to force_click steps
+    (those interact with a deliberately-hidden element)."""
+    from atlas_engine.codegen.emit import _emit_step_with_fallback
+
+    normal = TrajectoryStep(
+        0, "click",
+        [{"selector": "#a", "rank": 0}, {"selector": "#b", "rank": 1}],
+        None, "none",
+    )
+    force = TrajectoryStep(
+        1, "click",
+        [{"selector": "#c", "rank": 0}, {"selector": "#d", "rank": 1}],
+        None, "none", force_click=True,
+    )
+    normal_text = "\n".join(_emit_step_with_fallback(normal, pre_action_ms=0, settle_after_nav_ms=0))
+    force_text = "\n".join(_emit_step_with_fallback(force, pre_action_ms=0, settle_after_nav_ms=0))
+
+    assert "'#a >> visible=true'" in normal_text
+    assert "'#b >> visible=true'" in normal_text
+    assert "'#c >> visible=true'" not in force_text
+    assert "'#d >> visible=true'" not in force_text
+    compile(textwrap.dedent("\n".join(f"    {l}" for l in normal_text.split("\n"))), "<step>", "exec")
+
+
+def test_fallback_emits_a_params_reference_for_a_fill_step_with_multiple_candidates():
+    """C1 through the multi-candidate branch: a fill step that goes through
+    the fallback loop must emit params[...] inside the loop's fill() call,
+    not the recorded literal — otherwise batch rows never reach a fallback
+    fill either."""
+    from atlas_engine.codegen.emit import _emit_step_with_fallback
+    step = TrajectoryStep(
+        0, "fill",
+        [{"selector": "#startDate", "rank": 0}, {"selector": "[data-date]", "rank": 1}],
+        "02/02/2026", "none",
+    )
+    lines = _emit_step_with_fallback(
+        step, pre_action_ms=0, settle_after_nav_ms=0, value_expr='params["start_date"]',
+    )
+    text = "\n".join(lines)
+    assert "for _sel in [" in text
+    assert 'fill(params["start_date"])' in text
+    assert "02/02/2026" not in text
+    compile(textwrap.dedent("\n".join(f"    {l}" for l in lines)), "<step>", "exec")
 
 
 def test_iframe_steps_resolve_dynamically_instead_of_a_baked_in_frame_name():
@@ -920,6 +971,122 @@ def test_emit_golden_script_always_navigates_to_start_url_even_with_login_block(
     login_call_index = script.index("\n    login(page, params)\n")
     assert goto_index < login_call_index
     compile(script, "<golden>", "exec")
+
+
+# ── C1: CLI params/batch rows must reach emitted steps (not just the login block) ──
+
+
+def test_non_secret_fill_step_emits_a_params_reference_not_the_recorded_literal():
+    """A fill step classified as a CliParam (not a secret) must emit a
+    reference to params[...] at runtime, not the recorded literal value —
+    otherwise --start-date on the CLI (or a batch row) silently does
+    nothing, since the emitted line never reads it."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#startDate", "rank": 0}], "02/02/2026", "none"),
+    ))
+    script = emit_golden_script(trajectory, start_url="https://x.com")
+    # The FILL step itself must read params[...] at runtime — the recorded
+    # literal may legitimately still appear as the argparse default value,
+    # so assert on the emitted fill line specifically, not the whole script.
+    fill_line = next(l for l in script.splitlines() if "start_date" in l and "fill" in l)
+    assert 'params["start_date"]' in fill_line
+    assert "02/02/2026" not in fill_line
+    compile(script, "<golden>", "exec")
+
+
+def test_batch_mode_actually_applies_different_row_values_to_the_fixture_portal(fixture_portal_url, tmp_path):
+    """End-to-end regression for C1: a --batch run with 2 rows carrying
+    DIFFERENT values for a classified CLI param must actually apply those
+    different values when filling the field — not silently replay the same
+    recorded literal for every row (which would make every batch row's
+    result identical despite being labeled with different "inputs")."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "extract", [], None, "none"),
+    ))
+    script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/login.html")
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    batch_file = tmp_path / "batch.json"
+    batch_file.write_text(json.dumps([{"username": "alice"}, {"username": "bob"}]))
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--batch", str(batch_file)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    rows = payload["batch"]
+    assert len(rows) == 2
+    row0_username = rows[0]["extractions"]["click_1"]["data"]["fields"]["username"]
+    row1_username = rows[1]["extractions"]["click_1"]["data"]["fields"]["username"]
+    assert row0_username == "alice"
+    assert row1_username == "bob"
+    assert row0_username != row1_username
+
+
+# ── I1: batch mode must attribute each row's print-to-PDF captures to ITS result ──
+
+
+def test_batch_mode_attributes_print_pdfs_to_the_row_that_produced_them(tmp_path):
+    """I1: _PRINT_CAPTURES is module-global, so the batch loop must flush AND
+    clear it after every row and attach that row's PDFs to ITS result —
+    otherwise print captures pile up un-attributed (the pre-fix batch branch
+    flushed once at the end into a variable nobody reads, so every row's
+    downloaded_files stayed empty)."""
+    from pathlib import Path
+
+    print_page = tmp_path / "print.html"
+    print_page.write_text(
+        "<!doctype html><html><head><title>My Report</title></head>"
+        "<body><input id='username' name='username'>"
+        "<script>window.print()</script></body></html>"
+    )
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+    ))
+    script = emit_golden_script(trajectory, start_url=print_page.as_uri())
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    batch_file = tmp_path / "batch.json"
+    batch_file.write_text(json.dumps([{"username": "alice"}, {"username": "bob"}]))
+
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--batch", str(batch_file),
+         "--diagnostics-dir", str(tmp_path / "diag")],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    rows = payload["batch"]
+    assert len(rows) == 2
+    row0_pdfs = rows[0]["downloaded_files"]
+    row1_pdfs = rows[1]["downloaded_files"]
+    # Each row's PDFs are ATTRIBUTED to that row (pre-fix, the batch branch
+    # flushed once into a variable nobody read, so every row's
+    # downloaded_files was empty). Row 0 gets its own single print capture;
+    # row 1 may re-print on the inter-row re-navigation too, so it gets >= 1.
+    assert len(row0_pdfs) >= 1
+    assert len(row1_pdfs) >= 1
+    assert row0_pdfs[0]["filename"] == "My Report.pdf"
+    for pdf in row0_pdfs + row1_pdfs:
+        assert "filename" in pdf
+        assert Path(pdf["path"]).exists()
+
+
+def test_print_capture_helper_clears_captures_after_flushing():
+    """I1/C2: _flush_print_pdfs must (a) emit its saved entries with the
+    same 'filename' key the rest of the downloaded_files contract uses (the
+    pre-fix 'name' key made _persist_certify_result KeyError whenever a
+    print-to-PDF capture reached certification) and (b) clear
+    _PRINT_CAPTURES after flushing so per-row batch flushes don't
+    re-attribute the same captures."""
+    from atlas_engine.codegen.emit import _PRINT_CAPTURE_HELPER
+    assert 'saved.append({"filename": name, "path": dest})' in _PRINT_CAPTURE_HELPER
+    assert "_PRINT_CAPTURES.clear()" in _PRINT_CAPTURE_HELPER
+    compile(_PRINT_CAPTURE_HELPER, "<helper>", "exec")
 
 
 def test_emit_golden_script_defaults_portal_domain_and_name_for_existing_callers():

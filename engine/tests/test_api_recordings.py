@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from atlas_engine.api import app
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import Organization
+from atlas_engine.db.models import Organization, PortalProfile, Recording
 from atlas_engine.recording_service import PageCapture, persist_recording
 
 
@@ -86,6 +86,53 @@ def test_get_recording_detail_404_for_unknown_id():
     client = TestClient(app)
     response = client.get(f"/recordings/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+def test_get_recording_detail_reemits_codegen_with_portal_info_threaded(fixture_portal_url, monkeypatch):
+    """C3: the recording-detail endpoint's fallback re-emission of a golden
+    script from a stored trajectory (when no native codegen script exists)
+    never threaded portal_domain/portal_name/success_signal — collapsing
+    secrets to SECRET_UNKNOWN_*. The portal identity + success signal must
+    reach this emit call too."""
+    import atlas_engine.codegen.emit as emit_module
+
+    with session_scope() as session:
+        org = Organization(name="Reemit Detail Org", slug=f"reemit-detail-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    actions = [
+        RecordedAction(0, "click", [{"selector": "#login-btn", "rank": 0}], None,
+                        start_url, f"{fixture_portal_url}/dashboard.html", "", "", timestamp_ms=1000),
+    ]
+    recording_id = persist_recording(org_id, start_url, actions)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        profile = session.get(PortalProfile, recording.portal_profile_id)
+        profile.inferred_success_signal = {"url_contains": "/dashboard.html"}
+        profile.confidence_score = 0.8
+        expected_domain = profile.domain
+        expected_name = profile.display_name or profile.domain
+        session.add(profile)
+
+    captured = {}
+
+    def spy_emit(*args, **kwargs):
+        captured.update(kwargs)
+        return "def run_flow(playwright, page, params, diagnostics_dir):\n    return {}\n"
+
+    monkeypatch.setattr(emit_module, "emit_golden_script", spy_emit)
+
+    client = TestClient(app)
+    response = client.get(f"/recordings/{recording_id}")
+    assert response.status_code == 200
+    assert response.json()["codegen_script"] is not None
+    assert captured["portal_domain"] == expected_domain
+    assert captured["portal_name"] == expected_name
+    assert captured["success_signal"] == {"url_contains": "/dashboard.html"}
 
 
 def test_list_recordings_returns_newest_first_and_filters_by_status(fixture_portal_url):

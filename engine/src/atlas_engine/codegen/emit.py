@@ -170,7 +170,11 @@ def _flush_print_pdfs(playwright, out_dir, prefix=""):
             name = prefix + _atlas_sanitize(d.get("title")) + (".pdf" if i == 0 else f"_{i + 1}.pdf")
             dest = os.path.join(out_dir, name)
             hp.pdf(path=dest, format="A4", print_background=True)
-            saved.append({"name": name, "path": dest})
+            # 'filename' key matches the rest of the downloaded_files contract
+            # (step downloads use "filename") — a 'name' key here made
+            # _persist_certify_result KeyError whenever print-to-PDF capture
+            # reached certification (C2).
+            saved.append({"filename": name, "path": dest})
         except Exception:
             pass
         finally:
@@ -179,6 +183,10 @@ def _flush_print_pdfs(playwright, out_dir, prefix=""):
                     hb.close()
             except Exception:
                 pass
+    # Clear after flushing: _PRINT_CAPTURES is module-global, so the batch
+    # loop MUST flush+clear per row or each row would re-attribute the
+    # previous rows' captures too (I1).
+    _PRINT_CAPTURES.clear()
     return saved
 '''
 
@@ -191,7 +199,7 @@ def _uses_static_iframe_reference(expr: str) -> bool:
     return bool(_IFRAME_CHAIN_RE.search(expr))
 
 
-def _emit_dynamic_frame_step(expr: str, step: TrajectoryStep) -> list[str]:
+def _emit_dynamic_frame_step(expr: str, step: TrajectoryStep, *, value_expr: str | None = None) -> list[str]:
     """Replaces a static iframe[name=...].content_frame reference with a
     runtime search over every live frame for one containing the step's OWN
     target locator — resolved fresh for this step (never cached/hoisted;
@@ -214,7 +222,7 @@ def _emit_dynamic_frame_step(expr: str, step: TrajectoryStep) -> list[str]:
     # produce an IndentationError — the same pre-existing quirk already
     # handled the same way at _emit_step_with_fallback and
     # _reindent_for_login_body.
-    lines.extend(g.lstrip() for g in _emit_locator_gesture(f"_frame.{rest}", step))
+    lines.extend(g.lstrip() for g in _emit_locator_gesture(f"_frame.{rest}", step, value_expr=value_expr))
     return lines
 
 
@@ -309,11 +317,16 @@ def _best_selector(step: TrajectoryStep) -> str:
     return ranked[0]["selector"]
 
 
-def _emit_locator_gesture(call: str, step: TrajectoryStep) -> list[str]:
+def _emit_locator_gesture(call: str, step: TrajectoryStep, *, value_expr: str | None = None) -> list[str]:
     """Per-gesture lines for an already-resolved Playwright receiver chain
     `call` (e.g. `page` or `_page(page, 1).locator('#q').content_frame`).
     Mirrors the reference brain runner's do_gesture exactly: hover reveals and
-    typed input pause, press keys fall back to Enter, force_click is honored."""
+    typed input pause, press keys fall back to Enter, force_click is honored.
+
+    `value_expr` (a Python expression string, e.g. `params["start_date"]`)
+    substitutes the runtime value source for the recorded literal on
+    fill/type steps — the read side of the classify_step_values convention
+    (C1). When None, the recorded literal is baked in as before."""
     if step.kind == "click":
         return [f"{call}.click(force=True)" if step.force_click else f"{call}.click()"]
     if step.kind == "dblclick":
@@ -325,9 +338,10 @@ def _emit_locator_gesture(call: str, step: TrajectoryStep) -> list[str]:
     if step.kind == "dispatch_click":
         return [f'{call}.dispatch_event("click")']
     if step.kind == "fill":
-        return [f"{call}.fill({step.value!r})"]
+        return [f"{call}.fill({value_expr})" if value_expr is not None else f"{call}.fill({step.value!r})"]
     if step.kind == "type":
-        return [f"{call}.click()", f"{call}.fill('')", f"{call}.press_sequentially({step.value or ''!r}, delay=100)"]
+        seq = value_expr if value_expr is not None else repr(step.value or "")
+        return [f"{call}.click()", f"{call}.fill('')", f"{call}.press_sequentially({seq}, delay=100)"]
     if step.kind == "press":
         return [f"{call}.press({(step.key or step.value or 'Enter')!r})"]
     if step.kind == "check":
@@ -339,21 +353,21 @@ def _emit_locator_gesture(call: str, step: TrajectoryStep) -> list[str]:
     raise ValueError(f"Unsupported step kind for emission: {step.kind}")
 
 
-def _emit_locator_call(expr: str, step: TrajectoryStep) -> list[str]:
+def _emit_locator_call(expr: str, step: TrajectoryStep, *, value_expr: str | None = None) -> list[str]:
     """Emits the codegen locator chain as real Playwright calls, resolving
     the page root (`page` or `page1`, ...) to the right object."""
     if _uses_static_iframe_reference(expr):
-        return _emit_dynamic_frame_step(expr, step)
+        return _emit_dynamic_frame_step(expr, step, value_expr=value_expr)
     m = _PAGE_ROOT_RE.match(expr)
     if not m:
         root, rest = "page", expr
     else:
         root, rest = m.group(1), m.group(2)
     receiver = f"_page(page, {int(root[4:])})" if root != "page" else "page"
-    return _emit_locator_gesture(f"{receiver}.{rest}", step)
+    return _emit_locator_gesture(f"{receiver}.{rest}", step, value_expr=value_expr)
 
 
-def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
+def _emit_css_step(selector: str, step: TrajectoryStep, *, value_expr: str | None = None) -> list[str]:
     """Emit a step that uses a plain CSS selector.  The selector has ALREADY
     been run through _prefer_visible by _emit_step, so it may contain
     >> visible=true — use page.locator() which supports the >> filter."""
@@ -362,7 +376,7 @@ def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
     use_locator = ">>" in selector
     if use_locator:
         call = f"page.locator({selector!r}).first"
-        return _emit_locator_gesture(call, step)
+        return _emit_locator_gesture(call, step, value_expr=value_expr)
     if step.kind == "click":
         return [f"page.click({selector!r}{', force=True' if step.force_click else ''})"]
     if step.kind == "dblclick":
@@ -374,9 +388,12 @@ def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
     if step.kind == "dispatch_click":
         return [f'page.locator({selector!r}).dispatch_event("click")']
     if step.kind == "fill":
+        if value_expr is not None:
+            return [f"page.fill({selector!r}, {value_expr})"]
         return [f"page.fill({selector!r}, {step.value!r})"]
     if step.kind == "type":
-        return [f"page.click({selector!r})", f"page.fill({selector!r}, '')", f"page.press_sequentially({selector!r}, {step.value or ''!r}, delay=100)"]
+        seq = value_expr if value_expr is not None else repr(step.value or "")
+        return [f"page.click({selector!r})", f"page.fill({selector!r}, '')", f"page.press_sequentially({selector!r}, {seq}, delay=100)"]
     if step.kind == "press":
         return [f"page.press({selector!r}, {(step.key or step.value or 'Enter')!r})"]
     if step.kind == "check":
@@ -388,14 +405,14 @@ def _emit_css_step(selector: str, step: TrajectoryStep) -> list[str]:
     raise ValueError(f"Unsupported step kind for emission: {step.kind}")
 
 
-def _emit_step(step: TrajectoryStep, *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0) -> str:
+def _emit_step(step: TrajectoryStep, *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0, value_expr: str | None = None) -> str:
     selector = _best_selector(step)
     if step.kind == "goto":
         lines = [f"page.goto({selector!r})"]
     elif step.kind == "click_xy":
         lines = [f"page.mouse.click({step.x or 0}, {step.y or 0})"]
     elif selector.startswith(_CODEGEN_EXPR_PREFIX):
-        lines = _emit_locator_call(selector[len(_CODEGEN_EXPR_PREFIX):], step)
+        lines = _emit_locator_call(selector[len(_CODEGEN_EXPR_PREFIX):], step, value_expr=value_expr)
     elif step.kind in (
         "click", "dblclick", "hover", "hover_click", "dispatch_click",
         "fill", "type", "press", "check", "uncheck", "select_option",
@@ -403,7 +420,7 @@ def _emit_step(step: TrajectoryStep, *, pre_action_ms: int = 0, settle_after_nav
         # Apply visible=true preference for CSS selectors (ported from
         # emitGolden.ts preferVisible) — handles hidden-duplicate trap.
         selector = _prefer_visible(selector, step.force_click)
-        lines = _emit_css_step(selector, step)
+        lines = _emit_css_step(selector, step, value_expr=value_expr)
     else:
         raise ValueError(f"Unsupported step kind for emission: {step.kind}")
 
@@ -449,7 +466,7 @@ def _wrap_step_with_diagnostics(step_lines: list[str], step_index: int, label: s
     )
 
 
-def _emit_step_with_fallback(step: TrajectoryStep, *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0) -> list[str]:
+def _emit_step_with_fallback(step: TrajectoryStep, *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0, value_expr: str | None = None) -> list[str]:
     """Tries every ranked, non-session-random selector candidate in turn
     (spec §3's fallback chains) — a candidate that broke since authoring
     shouldn't fail the whole step if an earlier-recorded alternate still
@@ -457,17 +474,21 @@ def _emit_step_with_fallback(step: TrajectoryStep, *, pre_action_ms: int = 0, se
     (get_by_role(...) etc.) don't reduce to a simple "try this string"
     loop, so a step whose candidates are codegen_expr (or that has only
     one usable candidate) falls back to the existing single-selector
-    emission (_emit_step) unchanged — no loop, no behavior change."""
+    emission (_emit_step) unchanged — no loop, no behavior change.
+    Each usable candidate also gets _prefer_visible applied (I2) — the
+    hidden-duplicate trap is exactly when a repair path manufactures a
+    second candidate, and `>> visible=true` is supported by page.locator()."""
     usable = [
-        c["selector"] for c in sorted(step.selector_candidates, key=lambda c: c["rank"])
+        _prefer_visible(c["selector"], step.force_click)
+        for c in sorted(step.selector_candidates, key=lambda c: c["rank"])
         if not (c["selector"].startswith("#") and _looks_session_random(c["selector"].lstrip("#")))
         and not c["selector"].startswith(_CODEGEN_EXPR_PREFIX)
     ]
     if len(usable) < 2:
-        return _emit_step(step, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms).split("\n")
+        return _emit_step(step, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms, value_expr=value_expr).split("\n")
 
     call = "page.locator(_sel).first"
-    gesture_lines = _emit_locator_gesture(call, step)
+    gesture_lines = _emit_locator_gesture(call, step, value_expr=value_expr)
 
     # Apply pre_action_ms pacing before the loop if configured
     lines = []
@@ -718,6 +739,21 @@ def emit_golden_script(
 
     remaining_steps = [s for s in trajectory.steps if s.index not in consumed_indices]
 
+    # C1: the read side of the classify_step_values convention — every
+    # fill/type step that stays in the main loop must emit a runtime
+    # reference into params[...] (a secret env-var read, or a --<flag>
+    # default overridable by CLI/batch rows), NOT its recorded literal.
+    # Consumed (login-block) indices are excluded: the login block already
+    # fills username/password directly from params[...].
+    value_expr_by_index: dict[int, str] = {}
+    for s in classified.secrets:
+        if s.step_index not in consumed_indices:
+            value_expr_by_index[s.step_index] = f'params["{s.label}"]'
+    for p in classified.params:
+        if p.step_index not in consumed_indices:
+            attr = p.cli_name.replace("-", "_")
+            value_expr_by_index[p.step_index] = f'params["{attr}"]'
+
     # run_flow() nests these lines exactly ONE level deep (unlike the old
     # _HEADER_RUN's `with sync_playwright(): / def run():` two-level
     # nesting that _emit_step/_emit_step_with_fallback's own uniform
@@ -730,6 +766,7 @@ def emit_golden_script(
             continue
         raw_lines = _emit_step_with_fallback(
             step, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+            value_expr=value_expr_by_index.get(step.index),
         )
         dedented = textwrap.dedent("\n".join(raw_lines))
         stripped = [l for l in dedented.split("\n") if l.strip()]
@@ -795,11 +832,18 @@ def emit_golden_script(
         + "                try:\n"
         + "                    _r = run_flow(playwright, page, _rp, diagnostics_dir)\n"
         + "                except Exception as _be:\n"
-        + "                    _r = {\"fileCount\": 0, \"filesTransferred\": [], \"error\": str(_be)[:400]}\n"
+        + "                    _r = {\"fileCount\": 0, \"filesTransferred\": [], \"downloaded_files\": [], \"error\": str(_be)[:400]}\n"
+        + "                # I1: _PRINT_CAPTURES is module-global — flush AND clear\n"
+        + "                # after EVERY row so each row's print-to-PDF captures are\n"
+        + "                # attributed to that row, never the accumulated pile.\n"
+        + "                _row_pdfs = _flush_print_pdfs(playwright, os.path.join(diagnostics_dir, \"..\", \"results\"))\n"
+        + "                for _pdf in _row_pdfs:\n"
+        + "                    _r[\"downloaded_files\"].append(_pdf)\n"
+        + "                _r[\"fileCount\"] = len(_r[\"downloaded_files\"])\n"
+        + "                _r[\"filesTransferred\"] = [f[\"filename\"] for f in _r[\"downloaded_files\"]]\n"
         + "                _r[\"inputs\"] = _row\n"
         + "                _results.append(_r)\n"
         + "                _post_login_url = page.url\n"
-        + "            _pdfs = _flush_print_pdfs(playwright, os.path.join(diagnostics_dir, \"..\", \"results\"))\n"
         + "            return {\"batch\": _results}\n"
         + "        else:\n"
         + "            _r = run_flow(playwright, page, params, diagnostics_dir)\n"
@@ -807,7 +851,7 @@ def emit_golden_script(
         + "            for _pdf in _pdfs:\n"
         + "                _r[\"downloaded_files\"].append(_pdf)\n"
         + "            _r[\"fileCount\"] = len(_r[\"downloaded_files\"])\n"
-        + "            _r[\"filesTransferred\"] = [f[\"name\"] if \"name\" in f else f[\"filename\"] for f in _r[\"downloaded_files\"]]\n"
+        + "            _r[\"filesTransferred\"] = [f[\"filename\"] for f in _r[\"downloaded_files\"]]\n"
         + "            return _r\n"
         + "    finally:\n"
         + "        context.close()\n"

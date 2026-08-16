@@ -244,7 +244,7 @@ def test_run_certify_phase_records_one_row_per_run_and_counts_passes(fixture_por
         emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/login.html")
     )
 
-    passed, total = run_certify_phase(script_path, authoring_run_id, runs=3)
+    passed, total, _persisted = run_certify_phase(script_path, authoring_run_id, runs=3)
 
     assert total == 3
     assert passed == 3
@@ -264,7 +264,7 @@ def test_run_certify_phase_records_failure_evidence_for_a_broken_script(fixture_
     _org_id, _profile_id, _recording_id, authoring_run_id = _make_authoring_run_for_golden(fixture_portal_url)
     script_path = _write_script_under_run_root("import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n")
 
-    passed, total = run_certify_phase(script_path, authoring_run_id, runs=2)
+    passed, total, _persisted = run_certify_phase(script_path, authoring_run_id, runs=2)
 
     assert passed == 0
     assert total == 2
@@ -323,3 +323,170 @@ def test_run_certify_phase_persists_extractions_and_uploads_downloads_on_first_s
 
     store = get_store()
     assert store.exists(f"authoring/{authoring_run_id}/results/report.csv")
+
+
+# ── C2 + I4: persist ordering/safety, and cross-repair-attempt dedup ─────────
+
+
+def test_run_certify_phase_records_certification_run_even_if_result_persist_fails(
+    fixture_portal_url, tmp_path, monkeypatch,
+):
+    """C2: persist happens AFTER the CertificationRun insert and is
+    try/except-wrapped — a store failure must neither crash the whole
+    authoring run nor leave the passing run without its CertificationRun
+    row."""
+    import atlas_engine.authoring.phases as phases_module
+
+    with session_scope() as session:
+        org = Organization(name="Certify Persist Fail Org", slug=f"certify-persist-fail-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        recording = Recording(
+            org_id=org.id,
+            portal_profile_id=get_or_create_portal_profile(session, org_id, "x.com").id,
+            status="captured", capture_blob_prefix="orgs/x/recordings/1/",
+        )
+        session.add(recording)
+        session.flush()
+        recording_id = recording.id
+        authoring_run = AuthoringRun(org_id=org.id, recording_id=recording_id, status="running", current_phase="certifying")
+        session.add(authoring_run)
+        session.flush()
+        authoring_run_id = authoring_run.id
+
+    monkeypatch.setattr(
+        phases_module, "certify_golden_script_once",
+        lambda script_path, **kw: (
+            True, None,
+            {
+                "extractions": {"click_1": {"url": "https://x.com", "data": {"fields": {"a": "1"}, "tables": []}}},
+                "downloaded_files": [],
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        phases_module, "_persist_certify_result",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("store boom")),
+    )
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text("print('{}')")
+
+    passed, total, persisted = run_certify_phase(
+        script_path, authoring_run_id, recording_id=recording_id, runs=1,
+    )
+
+    assert passed == 1
+    assert persisted is False
+    with session_scope() as session:
+        cert_runs = session.query(CertificationRun).filter_by(authoring_run_id=authoring_run_id).all()
+        assert len(cert_runs) == 1
+        assert cert_runs[0].status == "pass"
+
+
+def test_run_certify_phase_persists_print_pdf_entries_using_the_filename_key(
+    fixture_portal_url, tmp_path, monkeypatch,
+):
+    """C2 regression: print-to-PDF captures reach certification as
+    downloaded_files entries carrying 'filename' (the emitted script's
+    contract after the name->filename rename) — _persist_certify_result must
+    upload them without a KeyError (pre-fix, the 'name' key crashed the WHOLE
+    authoring run whenever a print-to-PDF capture succeeded)."""
+    import atlas_engine.authoring.phases as phases_module
+
+    with session_scope() as session:
+        org = Organization(name="Certify Print Pdf Org", slug=f"certify-print-pdf-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        recording = Recording(
+            org_id=org.id,
+            portal_profile_id=get_or_create_portal_profile(session, org_id, "x.com").id,
+            status="captured", capture_blob_prefix="orgs/x/recordings/1/",
+        )
+        session.add(recording)
+        session.flush()
+        recording_id = recording.id
+        authoring_run = AuthoringRun(org_id=org.id, recording_id=recording_id, status="running", current_phase="certifying")
+        session.add(authoring_run)
+        session.flush()
+        authoring_run_id = authoring_run.id
+
+    (tmp_path / "My Report.pdf").write_bytes(b"%PDF-1.4 fake")
+    monkeypatch.setattr(
+        phases_module, "certify_golden_script_once",
+        lambda script_path, **kw: (
+            True, None,
+            {
+                "extractions": {},
+                "downloaded_files": [{"filename": "My Report.pdf", "path": str(tmp_path / "My Report.pdf")}],
+            },
+        ),
+    )
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text("print('{}')")
+
+    run_certify_phase(script_path, authoring_run_id, recording_id=recording_id, runs=1)
+
+    store = get_store()
+    assert store.exists(f"authoring/{authoring_run_id}/results/My Report.pdf")
+
+
+def test_run_certify_phase_with_already_persisted_does_not_duplicate_extraction_rows(
+    fixture_portal_url, tmp_path, monkeypatch,
+):
+    """I4: two repair attempts for the same authoring_run_id/recording_id,
+    both with a successful first run, must persist PageExtraction rows only
+    ONCE — the second call (already_persisted=True) must not write a second
+    set of rows."""
+    import atlas_engine.authoring.phases as phases_module
+
+    with session_scope() as session:
+        org = Organization(name="Certify Dedup Org", slug=f"certify-dedup-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        recording = Recording(
+            org_id=org.id,
+            portal_profile_id=get_or_create_portal_profile(session, org_id, "x.com").id,
+            status="captured", capture_blob_prefix="orgs/x/recordings/1/",
+        )
+        session.add(recording)
+        session.flush()
+        recording_id = recording.id
+        authoring_run = AuthoringRun(org_id=org.id, recording_id=recording_id, status="running", current_phase="certifying")
+        session.add(authoring_run)
+        session.flush()
+        authoring_run_id = authoring_run.id
+
+    monkeypatch.setattr(
+        phases_module, "certify_golden_script_once",
+        lambda script_path, **kw: (
+            True, None,
+            {
+                "extractions": {"click_1": {"url": "https://x.com", "data": {"fields": {"a": "1"}, "tables": []}}},
+                "downloaded_files": [],
+            },
+        ),
+    )
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text("print('{}')")
+
+    # Repair attempt 1: successful first run -> persists.
+    _passed1, _total1, persisted1 = run_certify_phase(
+        script_path, authoring_run_id, recording_id=recording_id, runs=1,
+    )
+    assert persisted1 is True
+    # Repair attempt 2: already_persisted=True -> must NOT persist again.
+    _passed2, _total2, persisted2 = run_certify_phase(
+        script_path, authoring_run_id, recording_id=recording_id,
+        runs=1, run_number_offset=1, already_persisted=True,
+    )
+    assert persisted2 is True
+
+    with session_scope() as session:
+        extractions = session.query(PageExtraction).filter_by(recording_id=recording_id).all()
+        assert len(extractions) == 1

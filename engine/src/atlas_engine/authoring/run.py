@@ -150,6 +150,11 @@ class _AuthoringRunSession:
             update_run(self.authoring_run_id, current_phase="extract")
             trajectory = run_extract_phase(trajectory)
 
+            # I4: once a certification run has persisted its PageExtraction/
+            # downloaded-file results, later repair-loop retries must pass
+            # already_persisted=True so they never write a duplicate set.
+            already_persisted = False
+
             while True:
                 if self.stop_event.is_set():
                     log_event(self.authoring_run_id, phase="extract", message="Run cancelled")
@@ -216,10 +221,12 @@ class _AuthoringRunSession:
                     return
 
                 update_run(self.authoring_run_id, current_phase="certifying")
-                passed, total = run_certify_phase(
+                passed, total, persisted = run_certify_phase(
                     script_path, self.authoring_run_id, recording_id=self.recording_id,
                     runs=_CERTIFY_RUNS, run_number_offset=repair_attempt * _CERTIFY_RUNS,
+                    already_persisted=already_persisted,
                 )
+                already_persisted = already_persisted or persisted
 
                 if self.stop_event.is_set():
                     log_event(self.authoring_run_id, phase="certifying", message="Run cancelled")

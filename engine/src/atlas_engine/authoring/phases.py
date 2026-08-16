@@ -97,16 +97,19 @@ def run_golden_phase(
 
 def run_certify_phase(
     script_path: Path, authoring_run_id: uuid.UUID, *, recording_id: uuid.UUID | None = None,
-    runs: int = 3, run_number_offset: int = 0,
-) -> tuple[int, int]:
+    runs: int = 3, run_number_offset: int = 0, already_persisted: bool = False,
+) -> tuple[int, int, bool]:
     """Runs the frozen golden script headless, `runs` times from fresh
     processes, recording one CertificationRun row per attempt. Returns
-    (passed, runs) — the orchestrator decides certified/partially_certified/
-    repair-and-retry from this. On the FIRST successful run only (the
-    remaining runs are a determinism check — no need to persist duplicate
-    copies of the same deterministic output), persists any extractions
-    into PageExtraction rows and uploads any downloaded files via
-    get_store() under authoring/<authoring_run_id>/results/.
+    (passed, runs, persisted) — the orchestrator decides certified/
+    partially_certified/repair-and-retry from (passed, runs), and threads
+    `persisted` back as `already_persisted` on a repair-loop retry so the
+    retry never persists a second set of PageExtraction/download rows (I4).
+    On the FIRST successful run only (the remaining runs are a determinism
+    check — no need to persist duplicate copies of the same deterministic
+    output), persists any extractions into PageExtraction rows and uploads
+    any downloaded files via get_store() under
+    authoring/<authoring_run_id>/results/.
 
     `run_number_offset` lets a caller that invokes this more than once for
     the same authoring_run_id (e.g. the orchestrator's repair loop) avoid
@@ -114,7 +117,7 @@ def run_certify_phase(
     "run_number") — each retry passes a different offset so its rows get
     fresh run_numbers instead of re-using 1..runs."""
     passed = 0
-    persisted_once = False
+    persisted = already_persisted
     for i in range(1, runs + 1):
         run_number = run_number_offset + i
         ok, failure_output, certify_result = certify_golden_script_once(script_path)
@@ -125,15 +128,25 @@ def run_certify_phase(
             evidence_path.write_text(failure_output or "")
             failure_ref = str(evidence_path.relative_to(settings.run_root))
 
-        if ok and not persisted_once and certify_result and recording_id is not None:
-            _persist_certify_result(certify_result, authoring_run_id, recording_id)
-            persisted_once = True
-
+        # C2: the CertificationRun row is recorded FIRST — a persistence
+        # failure below must never leave a passing run without its row, and
+        # the persist is try/except-wrapped so a broken store/file can't
+        # crash the whole authoring run.
         with session_scope() as session:
             session.add(CertificationRun(
                 authoring_run_id=authoring_run_id, run_number=run_number,
                 status="pass" if ok else "fail", failure_evidence_blob_ref=failure_ref,
             ))
+
+        if ok and not persisted and certify_result and recording_id is not None:
+            try:
+                _persist_certify_result(certify_result, authoring_run_id, recording_id)
+                persisted = True
+            except Exception as exc:
+                log_event(
+                    authoring_run_id, phase="certifying", level="warning",
+                    message=f"Failed to persist certification results: {exc}",
+                )
 
         log_event(
             authoring_run_id, phase="certifying",
@@ -143,7 +156,7 @@ def run_certify_phase(
         if ok:
             passed += 1
 
-    return passed, runs
+    return passed, runs, persisted
 
 
 def _persist_certify_result(certify_result: dict, authoring_run_id: uuid.UUID, recording_id: uuid.UUID) -> None:

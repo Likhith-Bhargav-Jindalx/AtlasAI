@@ -75,6 +75,10 @@ def heal_golden_script(
         trajectory_blob_ref = trajectory_row.trajectory_blob_ref
         pre_action_ms = profile.pacing_pre_action_ms or 0
         settle_after_nav_ms = profile.pacing_settle_after_nav_ms or 0
+        portal_domain = profile.domain
+        portal_name = profile.display_name or profile.domain
+        confidence = float(profile.confidence_score) if profile.confidence_score is not None else None
+        success_signal = profile.inferred_success_signal
 
     store = get_store()
     old_trajectory = trajectory_from_dict(store.read_json(trajectory_blob_ref))
@@ -109,7 +113,10 @@ def heal_golden_script(
 
     run_dir = store.new_run_dir(prefix="goldens")
     script_text = emit_golden_script(
-        new_trajectory, start_url=start_url, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+        new_trajectory, start_url=start_url,
+        portal_domain=portal_domain, portal_name=portal_name, confidence=confidence,
+        success_signal=success_signal,
+        pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
     )
     script_blob_ref = run_dir.write_text("golden.py", script_text)
     script_path = run_dir.path / "golden.py"
