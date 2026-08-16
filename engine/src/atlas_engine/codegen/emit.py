@@ -632,6 +632,31 @@ def _reindent_for_login_body(emitted: str) -> str:
     return "\n".join(f"    {line.lstrip()}" for line in emitted.split("\n") if line.strip())
 
 
+def _reindent_with_indent(emitted: str, indent: int) -> list[str]:
+    """Strips leading whitespace and re-prefixes with `indent` spaces, returning
+    lines (used to nest login steps inside an `if not pw_visible_now:` block)."""
+    pad = " " * indent
+    return [f"{pad}{line.lstrip()}" for line in emitted.split("\n") if line.strip()]
+
+
+def _login_locator_expr(step: TrajectoryStep) -> str:
+    """A Python expression yielding the locator a login step targets — mirrors
+    _fill_from_params/_emit_locator_call's receiver resolution so a
+    codegen_expr selector ('get_by_role(...)') resolves against the right
+    page object and a plain CSS selector resolves via page.locator()."""
+    selector = _best_selector(step)
+    if selector.startswith(_CODEGEN_EXPR_PREFIX):
+        expr = selector[len(_CODEGEN_EXPR_PREFIX):]
+        m = _PAGE_ROOT_RE.match(expr)
+        if not m:
+            root, rest = "page", expr
+        else:
+            root, rest = m.group(1), m.group(2)
+        receiver = f"_page(page, {int(root[4:])})" if root != "page" else "page"
+        return f"{receiver}.{rest}"
+    return f"page.locator({selector!r})"
+
+
 def _step_page_expr(step: TrajectoryStep) -> str:
     """The page expression a step acts on — `page` or `_page(page, N)` for
     popup steps — used for the per-step _settle_frames() call (matches the
@@ -650,6 +675,19 @@ def _step_page_expr(step: TrajectoryStep) -> str:
 # and the login block emits byte-for-byte the same code as before. When present,
 # the matching handlers are woven into login() exactly like the previous app
 # (security-question answers, manual/email/otp-api OTP second factor).
+
+_FIRST_VISIBLE_HELPER = '''def first_visible_selector(page, hints, per_try_ms):
+    for sel in hints:
+        try:
+            page.locator(sel).first.wait_for(state="visible", timeout=per_try_ms)
+            return sel
+        except Exception:
+            continue
+    raise Exception("None of the selectors matched: " + ", ".join(hints))'''
+
+_LOGIN_USERNAME_FALLBACKS = ["#username", "#doctorID", "input[name=username]", "input[type=email]"]
+_LOGIN_PASSWORD_FALLBACKS = ["#password", "#passwordField", "input[name=password]", "input[type=password]"]
+_LOGIN_SUBMIT_FALLBACKS = ["[name=login]", "#Login", "button[type=submit]", "#nextStep"]
 
 _OTP_INPUT_DEFAULT_HINTS = [
     "input[autocomplete='one-time-code']",
@@ -972,6 +1010,19 @@ def _build_login_block(
 
     body: list[str] = []
     body.append("def attempt_login_once(page, params):")
+    # Re-navigate to the login URL at the start of EVERY attempt (mirrors the
+    # old app's emitAttemptLoginOnce: page.goto(loginUrl, networkidle, 45s)
+    # with a 'load' fallback + 2s settle). The brain-run reference navigated
+    # once; a certification attempt that wedges mid-login (e.g. the password
+    # screen never appearing after Next) would otherwise replay the SAME stuck
+    # page on retries — each retry MUST start from a fresh navigation.
+    body.append('    log_step("Navigating to login")')
+    if start_url:
+        body.append("    try:")
+        body.append(f'        page.goto({start_url!r}, wait_until="networkidle", timeout=45000)')
+        body.append("    except Exception:")
+        body.append(f'        page.goto({start_url!r}, wait_until="load", timeout=30000)')
+        body.append("    page.wait_for_timeout(2000)")
     if username_entries:
         username_step = steps_by_index[username_entries[0].step_index]
         # The recording usually opens with a focus CLICK on the username field
@@ -993,20 +1044,37 @@ def _build_login_block(
                 break
         body.extend(reversed(focus_lines))
         consumed.add(username_step.index)
+        body.append('    log_step("Entering username")')
         body.append(_fill_from_params(username_step, "username"))
     between_indices = sorted(
         i for i in steps_by_index
         if (username_entries and username_entries[0].step_index < i < password_step.index)
     )
+    password_selector = _best_selector(password_step)
+    next_indices = [
+        i for i in between_indices if _best_selector(steps_by_index[i]) != password_selector
+    ]
     for i in between_indices:
-        body.append(_reindent_for_login_body(_emit_step(steps_by_index[i])))
         consumed.add(i)
+    if next_indices:
+        # Port of the old app's `pw_visible_now` guard: eCW-style portals gate
+        # the password behind a "Next" click. Only click it when the password
+        # field is NOT already visible — clicking Next when it is already shown
+        # (a retry after a partially-successful attempt) wedges the flow. The
+        # focus CLICK on the password field itself (recorded between username
+        # and password) is dropped: fill() focuses the field itself.
+        body.append(f"    pw_visible_now = {_login_locator_expr(password_step)}.first.is_visible()")
+        body.append("    if not pw_visible_now:")
+        for i in next_indices:
+            body.extend(_reindent_with_indent(_emit_step(steps_by_index[i]), 8))
+        body.append("        page.wait_for_timeout(3000)")
+    body.append('    log_step("Entering password")')
     body.append(_fill_from_params(password_step, "password"))
     submit_index = password_step.index + 1
     if submit_index in steps_by_index:
         body.append(_reindent_for_login_body(_emit_step(steps_by_index[submit_index])))
         consumed.add(submit_index)
-    body.append("    page.wait_for_timeout(3000)")
+    body.append("    page.wait_for_timeout(5000)")
     body.append("")
     body.append("")
 

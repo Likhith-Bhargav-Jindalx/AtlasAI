@@ -567,6 +567,69 @@ def test_login_block_replays_a_next_click_between_username_and_password():
     compile(block, "<login>", "exec")
 
 
+def test_login_block_renavigates_on_every_attempt_and_guards_the_next_click():
+    """Regression for certification failures on two-screen (eCW-style) logins:
+    (1) attempt_login_once must re-navigate to the login URL at the START of
+    every attempt (networkidle with a 'load' fallback + 2s settle) so a wedged
+    attempt is retried from a fresh page instead of replaying the same stuck
+    one; (2) the recorded between username->password 'Next' click must be
+    gated behind a pw_visible_now check (only clicked when the password field
+    is NOT already visible), mirroring the old app's emitAttemptLoginOnce."""
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "click", [{"selector": "#next-btn", "rank": 0}], None, "url_changed"),
+        TrajectoryStep(2, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(3, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(2, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block, consumed = _build_login_block(
+        trajectory, classified, success_signal=None,
+        start_url="https://txbsirapp.ecwcloud.com/mobiledoc/jsp/webemr/login/newLogin.jsp",
+    )
+    body = block.split("def attempt_login_once")[1].split("def login")[0]
+    assert 'page.goto(' in body
+    assert 'wait_until="networkidle"' in body
+    assert 'wait_until="load"' in body
+    assert "pw_visible_now" in body
+    assert "if not pw_visible_now:" in body
+    # the Next click sits INSIDE the pw_visible_now guard, after the guard check
+    assert body.index("pw_visible_now") < body.index("#next-btn")
+    assert body.index("#next-btn") < body.index('params["password"]')
+    assert consumed == {0, 1, 2, 3}
+    compile(block, "<login>", "exec")
+
+
+def test_login_block_emits_single_screen_login_without_guard_when_no_next_step():
+    """A single-screen login (username -> password -> submit, no 'Next'
+    between them) must NOT emit the pw_visible_now guard block — there is
+    nothing to gate — but must still re-navigate on every attempt."""
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block, consumed = _build_login_block(
+        trajectory, classified, success_signal=None, start_url="https://example.com/login",
+    )
+    body = block.split("def attempt_login_once")[1].split("def login")[0]
+    assert 'page.goto(' in body
+    assert "pw_visible_now" not in body
+    assert "if not pw_visible_now:" not in body
+    assert consumed == {0, 1, 2}
+    compile(block, "<login>", "exec")
+
+
 def test_login_block_consumes_the_focus_click_on_the_username_field():
     """eCW-style login: click-username-field -> fill username -> click Next ->
     click password-field -> fill password -> click Log In. The focus CLICK on

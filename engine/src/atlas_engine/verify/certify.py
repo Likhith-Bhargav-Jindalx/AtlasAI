@@ -1,14 +1,40 @@
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+from dotenv import dotenv_values, find_dotenv
 
 # Certification timeout per run — real portal golden scripts can take 2-3
 # minutes (report generation, download waits, slow SPAs).  The old app used
 # 120s for download steps; 300s is a conservative upper bound that avoids
 # false failures on legitimately slow portals.
 _CERTIFY_TIMEOUT_SECONDS = 300
+
+
+def _certify_env() -> dict[str, str]:
+    """Explicit subprocess environment: the parent's os.environ (which may
+    already carry SECRET_* vars if create_llm_client ran) merged with the
+    engine's .env file, found deterministically from the package root rather
+    than the CWD. Real exported env vars win (dotenv_values only fills keys
+    that aren't already set). This is what guarantees a golden's
+    os.environ.get("SECRET_<DOMAIN>_USERNAME")/PASSWORD actually resolves —
+    a missing credential renders the username fill empty, eCW's "Next" never
+    advances, and the password field never appears (the exact certification
+    failure observed)."""
+    env = dict(os.environ)
+    dotenv_path = find_dotenv(usecwd=True)
+    if not dotenv_path:
+        candidate = Path(__file__).resolve().parents[3] / ".env"
+        if candidate.exists():
+            dotenv_path = str(candidate)
+    if dotenv_path:
+        for key, value in dotenv_values(dotenv_path).items():
+            if value is not None and key not in env:
+                env[key] = value
+    return env
 
 
 @dataclass(frozen=True)
@@ -31,6 +57,7 @@ def certify_golden_script(script_path: Path, *, args: list[str] | None = None, r
             capture_output=True,
             text=True,
             timeout=_CERTIFY_TIMEOUT_SECONDS,
+            env=_certify_env(),
         )
         if result.returncode == 0:
             succeeded += 1
@@ -65,6 +92,7 @@ def certify_golden_script_once(
             capture_output=True,
             text=True,
             timeout=_CERTIFY_TIMEOUT_SECONDS,
+            env=_certify_env(),
         )
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
