@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright
 
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
 from atlas_engine.capture.recorder import CaptureSession
+from atlas_engine.codegen.params import _env_var
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import (
     AuthoringRun,
@@ -40,6 +41,20 @@ def _record_against_fixture(
     return persist_recording(org_id, start_url, capture.actions, request_id=request_id, role=role)
 
 
+def _set_login_secret_env(monkeypatch, fixture_portal_url: str) -> None:
+    """The golden script's login block now genuinely requires SECRET_*
+    env vars at runtime (Task 11) instead of baking in the recorded
+    literal values. persist_recording derives the PortalProfile's domain
+    straight from the recorded URL (recording_service.py's
+    `domain = target_url.split("/")[2]`), so for the fixture portal that's
+    the literal "127.0.0.1:<port>" — not "unknown". Compute the env var
+    names the same way recording_service.py derives the domain, so this
+    stays correct even if the fixture portal's bound port changes."""
+    domain = f"{fixture_portal_url}/login.html".split("/")[2]
+    monkeypatch.setenv(_env_var(domain, "username"), "demo")
+    monkeypatch.setenv(_env_var(domain, "password"), "demo-pass")
+
+
 def _wait_for_status(authoring_run_id, statuses, timeout=90):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -51,7 +66,8 @@ def _wait_for_status(authoring_run_id, statuses, timeout=90):
     raise TimeoutError(f"authoring run never reached one of {statuses}")
 
 
-def test_start_authoring_run_completes_and_certifies(fixture_portal_url):
+def test_start_authoring_run_completes_and_certifies(fixture_portal_url, monkeypatch):
+    _set_login_secret_env(monkeypatch, fixture_portal_url)
     with session_scope() as session:
         org = Organization(name="Full Run Org", slug=f"full-run-org-{uuid.uuid4()}")
         session.add(org)
@@ -157,7 +173,9 @@ def test_stop_authoring_run_on_an_already_terminal_orphaned_run_is_a_noop(fixtur
         assert run.status == "completed"
 
 
-def test_start_authoring_run_repairs_and_reaches_partially_certified(fixture_portal_url, fixture_portal_server):
+def test_start_authoring_run_repairs_and_reaches_partially_certified(
+    fixture_portal_url, fixture_portal_server, monkeypatch,
+):
     """Drives the repair loop through the REAL golden/certify pipeline
     (not a standalone certify call) by keeping the fixture portal drifted
     only while the orchestrator is in its "golden" or "certifying" phase,
@@ -180,6 +198,7 @@ def test_start_authoring_run_repairs_and_reaches_partially_certified(fixture_por
     headless chromium subprocess, or a fresh headed browser) actually
     reaches the point in the fixture portal where drift would matter.
     """
+    _set_login_secret_env(monkeypatch, fixture_portal_url)
     with session_scope() as session:
         org = Organization(name="Repair Run Org", slug=f"repair-run-org-{uuid.uuid4()}")
         session.add(org)
@@ -249,7 +268,8 @@ def test_start_authoring_run_raises_for_unknown_recording():
         start_authoring_run(uuid.uuid4())
 
 
-def test_start_authoring_run_fulfills_a_linked_request_on_success(fixture_portal_url):
+def test_start_authoring_run_fulfills_a_linked_request_on_success(fixture_portal_url, monkeypatch):
+    _set_login_secret_env(monkeypatch, fixture_portal_url)
     with session_scope() as session:
         org = Organization(name="Run Fulfill Org", slug=f"run-fulfill-org-{uuid.uuid4()}")
         session.add(org)
@@ -276,11 +296,12 @@ def test_start_authoring_run_fulfills_a_linked_request_on_success(fixture_portal
         assert request.fulfilled_golden_script_id == golden_script_id
 
 
-def test_start_authoring_run_threads_portal_pacing_end_to_end(fixture_portal_url):
+def test_start_authoring_run_threads_portal_pacing_end_to_end(fixture_portal_url, monkeypatch):
     """A PortalProfile with pacing configured must flow all the way through
     replay/brain/golden without breaking the run — proves the wiring added
     in authoring/run.py actually reaches BrainLoop and the codegen emitter,
     not just that the run happens to still pass with pacing off."""
+    _set_login_secret_env(monkeypatch, fixture_portal_url)
     with session_scope() as session:
         org = Organization(name="Pacing Run Org", slug=f"pacing-run-org-{uuid.uuid4()}")
         session.add(org)
