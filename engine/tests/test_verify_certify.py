@@ -1,4 +1,6 @@
+import json
 import subprocess
+import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
@@ -47,7 +49,7 @@ def test_certify_golden_script_once_returns_true_and_no_evidence_on_success(tmp_
 
     script_path = _write_fixture_golden(tmp_path, fixture_portal_url)
 
-    passed, evidence = certify_golden_script_once(script_path)
+    passed, evidence, result = certify_golden_script_once(script_path)
 
     assert passed is True
     assert evidence is None
@@ -59,10 +61,11 @@ def test_certify_golden_script_once_returns_false_and_evidence_on_failure(tmp_pa
     script_path = tmp_path / "broken.py"
     script_path.write_text("import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n")
 
-    passed, evidence = certify_golden_script_once(script_path)
+    passed, evidence, result = certify_golden_script_once(script_path)
 
     assert passed is False
     assert "boom" in evidence
+    assert result is None
 
 
 def test_certify_golden_script_once_handles_subprocess_timeout(tmp_path):
@@ -78,9 +81,50 @@ def test_certify_golden_script_once_handles_subprocess_timeout(tmp_path):
 
     timeout_exc = subprocess.TimeoutExpired(cmd=["python", str(script_path)], timeout=60, output="partial-out", stderr="partial-err")
     with patch("atlas_engine.verify.certify.subprocess.run", side_effect=timeout_exc):
-        passed, evidence = certify_golden_script_once(script_path)
+        passed, evidence, result = certify_golden_script_once(script_path)
 
     assert passed is False
     assert "timed out" in evidence
     assert "partial-out" in evidence
     assert "partial-err" in evidence
+    assert result is None
+
+
+def test_certify_golden_script_once_parses_stdout_json_on_success(tmp_path):
+    from atlas_engine.verify.certify import certify_golden_script_once
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(textwrap.dedent('''
+        import json
+        print(json.dumps({"fileCount": 2, "filesTransferred": ["a.csv", "b.csv"]}))
+    '''))
+
+    ok, failure_output, result = certify_golden_script_once(script_path)
+
+    assert ok is True
+    assert failure_output is None
+    assert result == {"fileCount": 2, "filesTransferred": ["a.csv", "b.csv"]}
+
+
+def test_certify_golden_script_once_tolerates_unparseable_stdout(tmp_path):
+    from atlas_engine.verify.certify import certify_golden_script_once
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text("print('not json')\n")
+
+    ok, failure_output, result = certify_golden_script_once(script_path)
+
+    assert ok is True
+    assert result is None
+
+
+def test_certify_golden_script_once_returns_no_result_on_failure(tmp_path):
+    from atlas_engine.verify.certify import certify_golden_script_once
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text("import sys; sys.exit(1)\n")
+
+    ok, failure_output, result = certify_golden_script_once(script_path)
+
+    assert ok is False
+    assert result is None

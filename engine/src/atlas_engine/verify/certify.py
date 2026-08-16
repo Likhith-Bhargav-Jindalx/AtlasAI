@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -36,12 +37,16 @@ def certify_golden_script(script_path: Path, *, args: list[str] | None = None, r
     return CertificationResult(runs=runs, succeeded=succeeded)
 
 
-def certify_golden_script_once(script_path: Path, *, args: list[str] | None = None) -> tuple[bool, str | None]:
+def certify_golden_script_once(script_path: Path, *, args: list[str] | None = None) -> tuple[bool, str | None, dict | None]:
     """Runs a golden script once from a fresh process. Unlike
     certify_golden_script (which only returns an aggregate pass count),
     this exposes per-run failure evidence — the authoring orchestrator
     needs one CertificationRun row per attempt, each with its own
-    evidence when it fails."""
+    evidence when it fails. The third element is the script's parsed
+    stdout JSON result (fileCount/filesTransferred/extractions/
+    downloaded_files) — None if the run failed or its stdout wasn't valid
+    JSON (never turns a passing run into a failure over a reporting-only
+    parse issue)."""
     try:
         result = subprocess.run(
             [sys.executable, str(script_path), *(args or [])],
@@ -52,8 +57,13 @@ def certify_golden_script_once(script_path: Path, *, args: list[str] | None = No
     except subprocess.TimeoutExpired as exc:
         stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
         stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return False, f"timed out after {_CERTIFY_TIMEOUT_SECONDS}s\n{stdout}{stderr}"
+        return False, f"timed out after {_CERTIFY_TIMEOUT_SECONDS}s\n{stdout}{stderr}", None
     if result.returncode == 0:
-        return True, None
-    return False, (result.stdout or "") + (result.stderr or "")
+        parsed = None
+        try:
+            parsed = json.loads(result.stdout.strip())
+        except Exception:
+            pass
+        return True, None, parsed
+    return False, (result.stdout or "") + (result.stderr or ""), None
 

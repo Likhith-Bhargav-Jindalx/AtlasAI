@@ -106,7 +106,7 @@ def run_certify_phase(
     passed = 0
     for i in range(1, runs + 1):
         run_number = run_number_offset + i
-        ok, failure_output = certify_golden_script_once(script_path)
+        ok, failure_output, _certify_result = certify_golden_script_once(script_path)
 
         failure_ref = None
         if not ok:
