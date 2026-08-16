@@ -18,21 +18,47 @@ def test_password_step_becomes_a_secret_with_a_domain_derived_env_var():
     assert secrets_by_label["username"].env_var == "SECRET_PORTAL_EXAMPLE_COM_USERNAME"
 
 
-def test_username_is_only_classified_when_it_immediately_precedes_the_password_fill():
-    """A fill that happens well before the password step (e.g. a search box
-    used earlier in a multi-page login) is NOT assumed to be the username —
-    only the fill immediately preceding the password fill is."""
+def test_username_is_not_classified_when_a_navigation_separates_fill_and_password():
+    """A fill that happens on an EARLIER page of a multi-page login (separated
+    from the password step by an explicit page.goto) is NOT assumed to be the
+    username — the walk-back stops at a goto, not blindly grabbing the nearest
+    prior fill."""
     trajectory = ReferenceTrajectory(steps=(
         TrajectoryStep(0, "fill", [{"selector": "#search", "rank": 0}], "foo", "none"),
-        TrajectoryStep(1, "click", [{"selector": "#next", "rank": 0}], None, "none"),
+        TrajectoryStep(1, "goto", [{"selector": "https://x.com/login", "rank": 0}], None, "url_changed"),
         TrajectoryStep(2, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
     ))
 
     result = classify_step_values(trajectory, "portal.example.com")
 
     labels = {s.step_index: s.label for s in result.secrets}
-    assert labels == {2: "password"}  # step 0 (a click sits between it and
-    # the password fill) is NOT auto-classified as username
+    assert labels == {2: "password"}  # step 0 was on the PREVIOUS page — not the username
+
+
+def test_username_walks_back_over_focus_and_next_clicks_before_first_password_fill():
+    """eCW-style two-screen login: click-username -> fill username -> click
+    Next -> click password field -> fill password -> click Log In. The step
+    immediately before the password fill is a CLICK, not a fill, so the
+    username special-case must walk back over the intervening clicks to find
+    the real username (previously missed -> login block filled a password
+    field that didn't exist yet and every cert run failed). A URL-only change
+    on the Next click must NOT stop the walk — two-screen logins do exactly
+    that between the username and password screens."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#usernameField", "rank": 0}], None, "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#usernameField", "rank": 0}], "demo", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#next", "rank": 0}], None, "url_changed"),
+        TrajectoryStep(3, "click", [{"selector": "#passwordField", "rank": 0}], None, "none"),
+        TrajectoryStep(4, "fill", [{"selector": "#passwordField", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(5, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+
+    result = classify_step_values(trajectory, "portal.example.com")
+
+    secrets_by_label = {s.label: s for s in result.secrets}
+    assert secrets_by_label["username"].step_index == 1
+    assert secrets_by_label["password"].step_index == 4
+    assert {p.step_index for p in result.params} == set()
 
 
 def test_every_other_fill_becomes_a_kebab_case_cli_param_with_the_recorded_default():

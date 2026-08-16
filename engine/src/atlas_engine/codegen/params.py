@@ -59,10 +59,12 @@ def classify_step_values(trajectory: ReferenceTrajectory, portal_domain: str) ->
     — baked in as an overridable default. EVERY password-matching step
     (fill or type) is classified "password", all sharing the identical env
     var (a "confirm password" field should get the same value as the
-    first); the fill immediately preceding the FIRST password step (no
-    other step in between) is classified "username" — that special case is
-    scoped to exactly the first password step, never a later one. Every
-    other fill/type step becomes a CLI param."""
+    first); the fill/type immediately preceding the FIRST password step —
+    walking back over any intervening non-fill steps (focus clicks on the
+    username/password fields, "Next" buttons on two-screen logins) — is
+    classified "username". That special case is scoped to exactly the
+    first password step, never a later one. Every other fill/type step
+    becomes a CLI param."""
     steps = list(trajectory.steps)
     password_indices = [i for i, s in enumerate(steps) if _is_password_step(s)]
 
@@ -79,13 +81,38 @@ def classify_step_values(trajectory: ReferenceTrajectory, portal_domain: str) ->
             secret_indices.add(password_index)
 
         first_password_index = password_indices[0]
-        if first_password_index > 0 and steps[first_password_index - 1].kind == "fill":
-            username_step = steps[first_password_index - 1]
+        # The username is the nearest fill/type BEFORE the first password
+        # step. Portals that split login into two screens (eCW) record
+        # intervening actions: click-username-field -> fill username ->
+        # click Next -> click password-field -> fill password. The step
+        # immediately before the password fill is then a CLICK, not a fill,
+        # so walk backward over non-fill steps (focus clicks, Next buttons)
+        # to find the real username. The walk is bounded so an unrelated
+        # fill from far back in the flow is never grabbed, and stops at an
+        # explicit page.goto (a true navigation boundary). NOTE: a "Next"
+        # click that merely changes the URL (expected_effect=url_changed)
+        # is NOT a boundary — two-screen logins do exactly that between the
+        # username and password screens.
+        username_index: int | None = None
+        max_walk = 4
+        i = first_password_index - 1
+        walked = 0
+        while i >= 0 and walked < max_walk:
+            s = steps[i]
+            if s.kind == "goto":
+                break
+            if s.kind in ("fill", "type"):
+                username_index = i
+                break
+            i -= 1
+            walked += 1
+        if username_index is not None:
+            username_step = steps[username_index]
             secrets.append(SecretParam(
                 step_index=username_step.index, label="username",
                 env_var=_env_var(portal_domain, "username"),
             ))
-            secret_indices.add(first_password_index - 1)
+            secret_indices.add(username_index)
 
     params = [
         CliParam(step_index=step.index, cli_name=_cli_name(step), default_value=step.value or "")

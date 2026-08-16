@@ -525,6 +525,36 @@ def test_login_block_replays_a_next_click_between_username_and_password():
     compile(block, "<login>", "exec")
 
 
+def test_login_block_consumes_the_focus_click_on_the_username_field():
+    """eCW-style login: click-username-field -> fill username -> click Next ->
+    click password-field -> fill password -> click Log In. The focus CLICK on
+    the username field immediately before the username fill must be swept into
+    the login block too (it replays fine inside attempt_login_once, but left in
+    the main flow it re-runs POST-login — when the field no longer exists —
+    and fails certification). All login steps (0-5) must be consumed."""
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#usernameField", "rank": 0}], None, "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#usernameField", "rank": 0}], "demo", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#next-btn", "rank": 0}], None, "url_changed"),
+        TrajectoryStep(3, "click", [{"selector": "#passwordField", "rank": 0}], None, "none"),
+        TrajectoryStep(4, "fill", [{"selector": "#passwordField", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(5, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(1, "username", "SECRET_X_USERNAME"), SecretParam(4, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    block, consumed = _build_login_block(trajectory, classified, success_signal=None)
+    assert "#usernameField" in block
+    assert consumed == {0, 1, 2, 3, 4, 5}
+    # the focus click is replayed BEFORE the fill, and the fill uses params
+    body = block.split("def attempt_login_once")[1].split("def ")[0]
+    assert body.index("#usernameField") < body.index('params["username"]')
+    compile(block, "<login>", "exec")
+
+
 def test_login_block_reindents_hover_click_steps_without_indentation_errors():
     """hover/hover_click steps bake an extra literal 8-space indent into one
     of their emitted lines (_emit_locator_gesture's "hover"/"hover_click"
@@ -763,6 +793,58 @@ def test_emit_dynamic_frame_step_direct():
     compile(script, "<golden>", "exec")
 
 
+def test_dynamic_frame_probe_uses_the_steps_own_target_not_a_wildcard():
+    """The frame search must probe with the step's OWN locator (role=textbox,
+    label=..., or the raw CSS), never the literal '*' that matches any element
+    in any frame. With '*' the first child frame wins regardless of whether it
+    actually contains the target — the frame search is then a no-op that can
+    land the subsequent action on the wrong (toolbar/ad) frame. This mirrors
+    the old app's `find_frame_with_element(page1, "role=textbox", ..., host="reportframe", prefer_child=True)`."""
+    from atlas_engine.codegen.emit import _emit_dynamic_frame_step
+
+    step = TrajectoryStep(0, "click", [{"selector": "unused", "rank": 0}], None, "none")
+
+    for expr, expected_probe in (
+        (
+            'page1.locator("iframe[name=\\"i1F008FA3F9314C30BF326A2A49A5D68B\\"]").content_frame.get_by_role("textbox").first',
+            "'role=textbox'",
+        ),
+        (
+            'page.locator("iframe[name=\\"i1F008FA3F9314C30BF326A2A49A5D68B\\"]").content_frame.get_by_label("Account")',
+            "'label=Account'",
+        ),
+        (
+            'page.locator("iframe[name=\\"i1F008FA3F9314C30BF326A2A49A5D68B\\"]").content_frame.locator("#q")',
+            "'#q'",
+        ),
+    ):
+        text = "\n".join(_emit_dynamic_frame_step(expr, step))
+        assert f"find_frame_with_element(_page(page, 1), {expected_probe}, prefer_child=True)" in text or \
+            f"find_frame_with_element(page, {expected_probe}, prefer_child=True)" in text
+        assert "find_frame_with_element(..., '*')" not in text
+        assert "find_frame_with_element(_page(page, 1), '*')" not in text
+        assert "find_frame_with_element(page, '*')" not in text
+
+
+def test_every_step_emits_a_settle_frames_call_before_its_action():
+    """Matches pyEmit.ts's `_settle_frames(${p.pageVar})` before EVERY planned
+    step (wait for nested iframes to finish (re)loading before locating a
+    frame or acting — Epic/eCW reload frames on navigation)."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#q", "rank": 0}], "x", "none"),
+        TrajectoryStep(
+            2, "click",
+            [{"selector": 'codegen_expr:page1.get_by_role("button", name="Go")', "rank": 0}],
+            None, "none",
+        ),
+    ))
+    script = emit_golden_script(trajectory, start_url="https://x.com")
+    assert script.count("_settle_frames(page)") == 2
+    assert script.count("_settle_frames(_page(page, 1))") == 1
+    compile(script, "<golden>", "exec")
+
+
 def test_plain_hover_step_through_default_emission_path_compiles():
     """Root-cause regression test: _emit_step (the DEFAULT emission path used
     for ordinary steps that don't go through login/fallback/dynamic-frame
@@ -818,12 +900,32 @@ def test_download_step_emission_uses_context_scoped_event_not_page_scoped():
     from atlas_engine.codegen.emit import _emit_download_step
     lines = _emit_download_step(["page1.get_by_role(\"link\", name=\"Excel data\").click()"])
     text = "\n".join(lines)
-    assert 'context.expect_event("download"' in text
+    assert 'page.context.expect_event("download"' in text
     assert "page.expect_download(" not in text
     assert 'result["downloaded_files"].append(' in text
     body = "\n".join(f"    {l}" for l in lines)
     script = "def run():\n" + body + "\n"
     compile(script, "<download>", "exec")
+
+
+def test_download_step_references_page_dot_context_not_bare_context():
+    """The download wait must resolve `context` through the page object:
+    run_flow() receives (playwright, page, params, diagnostics_dir) and has no
+    bare `context` binding — the old emission referenced `context` directly,
+    a NameError the moment a download step executed during certification."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+    from atlas_engine.codegen.emit import emit_golden_script
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(
+            0, "click",
+            [{"selector": 'codegen_expr:page.get_by_role("link", name="Excel data")', "rank": 0}],
+            None, "none", expects_download=True,
+        ),
+    ))
+    script = emit_golden_script(trajectory, start_url="https://x.com")
+    assert "with page.context.expect_event(\"download\"" in script
+    assert "with context.expect_event(\"download\"" not in script
+    compile(script, "<golden>", "exec")
 
 
 def test_emitted_script_with_failing_step_writes_diagnostics(tmp_path, fixture_portal_url):
