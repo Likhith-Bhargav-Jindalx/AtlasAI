@@ -26,14 +26,17 @@ _VALID_ACTIONS = {
     "give_up",
 }
 
-_GESTURES = ["click", "hover_click", "hover", "dblclick", "dispatch_click", "type", "fill", "press", "check", "select"]
+_GESTURES = [
+    "click", "hover_click", "hover", "dblclick", "dispatch_click", "type", "fill", "press",
+    "check", "uncheck", "select_option",
+]
 
 _SYSTEM_PROMPT = """You supervise a Playwright replay of a RECORDED human flow on a live portal. A step is off-track.
 Ground every decision in (a) what the human's recording did here and (b) the LIVE page evidence.
 Never invent selectors — anything you propose must be visible in the DOM snapshot. Respond with ONE
 STRICT-JSON action:
 - {"action":"replace_selector","selector":{"kind":"css|role|text|testid|label|title|placeholder","value":"...","role":"<for kind=role>"}}  the recorded selector no longer matches; point at the SAME element the recording targeted.
-- {"action":"set_gesture","gesture":"click|hover_click|hover|dblclick|dispatch_click|type|fill|press|check|select","key":"<press only>"}  right element, wrong gesture (hover-reveal -> hover_click; single click only selects -> dblclick; SPA ignores clicks -> dispatch_click; autocomplete needs keystrokes -> type).
+- {"action":"set_gesture","gesture":"click|hover_click|hover|dblclick|dispatch_click|type|fill|press|check|uncheck|select_option","key":"<press only>"}  right element, wrong gesture (hover-reveal -> hover_click; single click only selects -> dblclick; SPA ignores clicks -> dispatch_click; autocomplete needs keystrokes -> type; native <select> needs select_option).
 - {"action":"force_click"}  element resolves but is reported hidden forever, yet IS the real control.
 - {"action":"wait_longer","ceilingMs":120000}  nothing wrong — content still loading.
 - {"action":"insert_step","gesture":"click|hover","selector":{...},"label":"..."}  a required reveal/opener the replay is missing (menu opener, tab, expander). Runs BEFORE retrying this step.

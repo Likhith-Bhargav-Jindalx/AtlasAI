@@ -2,6 +2,91 @@ from typing import Any, Callable
 
 from playwright.sync_api import BrowserContext, Page
 
+# Ported verbatim from the previous Atlas AI application's reportDump.ts
+# (REPORT_DUMP_JS). Runs inside a nested content frame — an Epic HSWeb
+# "Detail Report", a ReportViewer iframe, any heading+table report layout —
+# and returns its COMPLETE content as structured JSON:
+# { "<section title>": [ { label: value, ... }, ... ] }. Used by the golden's
+# `reportFrame` extraction path: when the operator marked a data-dense nested
+# frame rather than page fields, the extractor finds that frame and dumps
+# EVERYTHING in it instead of reading individual selectors. Kept as a raw
+# string so regex backslashes survive; embedded into the emitted Python via
+# base64 (see codegen/emit.py) so no escaping layer can corrupt it.
+REPORT_DUMP_JS = r"""() => {
+  const collapse = (s) => (s || "").replace(/\n/g, " ").replace(/\s+/g, " ").trim();
+  const txt = (el) => collapse(el ? (el.textContent || "") : "");
+  const lines = (el) => (el ? (el.textContent || "") : "")
+    .split(/\n|[\r\n]+/).map((x) => x.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const cellPairs = (cell) => {
+    const o = {};
+    const labs = Array.from(cell.querySelectorAll('[class*="label" i]'));
+    if (!labs.length) return o;
+    const vals = Array.from(cell.querySelectorAll('[class*="content" i], [class*="value" i]'));
+    if (vals.length === labs.length) {
+      labs.forEach((l, i) => { const k = txt(l); if (k) o[k] = txt(vals[i]); });
+    } else {
+      for (const l of labs) { const k = txt(l); if (!k) continue; const s = l.nextElementSibling; o[k] = s ? txt(s) : ""; }
+    }
+    return o;
+  };
+  const isHeading = (el) => {
+    const t = el.tagName.toLowerCase();
+    if (["h1", "h2", "h3", "h4"].includes(t)) return true;
+    const c = (el.className || "") + "";
+    return /section.?title|sectiontitle|report.?title|panelheader|group.?title/i.test(c);
+  };
+  const dumpTable = (tbl) => {
+    const allRows = Array.from(tbl.querySelectorAll(":scope > thead > tr, :scope > tbody > tr, :scope > tr"));
+    if (!allRows.length) return null;
+    const headRow = allRows.find((r) => r.querySelector(":scope > th"));
+    const headers = headRow ? Array.from(headRow.querySelectorAll(":scope > th")).map(txt) : [];
+    const bodyRows = allRows.filter((r) => r !== headRow && r.querySelector(":scope > td"));
+    const rows = [];
+    for (const r of bodyRows) {
+      const cells = Array.from(r.querySelectorAll(":scope > td"));
+      if (!cells.length) continue;
+      if (headers.length && headers.length === cells.length) {
+        const o = {};
+        headers.forEach((h, i) => { const v = txt(cells[i]); if (h || v) o[h || ("col" + i)] = v; });
+        if (Object.values(o).some((v) => v !== "")) rows.push(o);
+        continue;
+      }
+      const o = {}; let anyPair = false;
+      cells.forEach((c, i) => {
+        const pairs = cellPairs(c);
+        if (Object.keys(pairs).length) { Object.assign(o, pairs); anyPair = true; return; }
+        const ls = lines(c);
+        if (ls.length >= 2) { o[ls[0]] = ls.slice(1).join(" "); anyPair = true; }
+        else if (ls.length === 1) { o["col" + i] = ls[0]; }
+      });
+      if (Object.keys(o).length && (anyPair || cells.length === 2)) rows.push(o);
+      else { const vals = cells.map(txt).filter((v) => v !== ""); if (vals.length) rows.push(vals); }
+    }
+    return rows.length ? rows : null;
+  };
+  const out = {};
+  let section = "";
+  const walk = (node) => {
+    for (const el of Array.from(node.children || [])) {
+      if (isHeading(el)) { section = txt(el) || section; continue; }
+      if (el.tagName && el.tagName.toLowerCase() === "table") {
+        if (el.closest("td, th")) continue;
+        const rows = dumpTable(el);
+        if (rows) { (out[section || "data"] = out[section || "data"] || []).push(...rows); }
+        continue;
+      }
+      walk(el);
+    }
+  };
+  walk(document.body || document.documentElement);
+  for (const k of Object.keys(out)) {
+    const seen = new Set(); const uniq = [];
+    for (const row of out[k]) { const sig = JSON.stringify(row); if (!seen.has(sig)) { seen.add(sig); uniq.push(row); } }
+    out[k] = uniq;
+  }
+  return out;
+}"""
+
 # Ported verbatim from the previous Atlas AI application
 # (/Users/apple/Desktop/atlasAI/core/src/capture/grabEmit.ts, lines 22-82).
 # Runs on-demand via frame.evaluate() — never resident via add_init_script.
@@ -125,21 +210,32 @@ def collect_page_data(page: Page) -> dict[str, Any]:
     merges the per-frame results into one dict shaped like the previous
     app's stored extraction: {"fields": {...}, "tables": [...]}.
 
+    The per-frame SERIALIZER output carries BOTH the discovered spec
+    (`fields`/`tables` arrays with selectors + read modes, suitable for
+    freezing into a golden's _extract_<name>(scope) functions) and the
+    value dump (`data.fields`/`data.tables`). Both are preserved here,
+    under `spec` and the value keys, so a recording holds everything
+    needed to compile a verified extraction spec later.
+
     Must only ever be called from the thread that owns `page`'s
     Playwright connection, and never from inside an expose_binding
     callback for this same page — see the Global Constraints note on
     the sync-API nested-call deadlock."""
-    merged: dict[str, Any] = {"fields": {}, "tables": []}
+    merged: dict[str, Any] = {"fields": {}, "tables": [], "spec": {"fields": [], "tables": []}}
     for frame in page.frames:
         try:
             result = frame.evaluate(SERIALIZER)
         except Exception:
             continue
-        data = result.get("data") if result else None
-        if not data:
+        if not result:
             continue
-        merged["fields"].update(data.get("fields") or {})
-        merged["tables"].extend(data.get("tables") or [])
+        data = result.get("data") if isinstance(result, dict) else None
+        if data:
+            merged["fields"].update(data.get("fields") or {})
+            merged["tables"].extend(data.get("tables") or [])
+        if isinstance(result, dict):
+            merged["spec"]["fields"].extend(result.get("fields") or [])
+            merged["spec"]["tables"].extend(result.get("tables") or [])
     return sanitize_collected_text(merged)
 
 

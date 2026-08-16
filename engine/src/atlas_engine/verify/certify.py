@@ -37,7 +37,9 @@ def certify_golden_script(script_path: Path, *, args: list[str] | None = None, r
     return CertificationResult(runs=runs, succeeded=succeeded)
 
 
-def certify_golden_script_once(script_path: Path, *, args: list[str] | None = None) -> tuple[bool, str | None, dict | None]:
+def certify_golden_script_once(
+    script_path: Path, *, args: list[str] | None = None, diagnostics_dir: Path | None = None,
+) -> tuple[bool, str | None, dict | None]:
     """Runs a golden script once from a fresh process. Unlike
     certify_golden_script (which only returns an aggregate pass count),
     this exposes per-run failure evidence — the authoring orchestrator
@@ -46,10 +48,20 @@ def certify_golden_script_once(script_path: Path, *, args: list[str] | None = No
     stdout JSON result (fileCount/filesTransferred/extractions/
     downloaded_files) — None if the run failed or its stdout wasn't valid
     JSON (never turns a passing run into a failure over a reporting-only
-    parse issue)."""
+    parse issue).
+
+    `diagnostics_dir` is deliberately optional because this public helper is
+    also useful for arbitrary Python scripts. The authoring pipeline supplies
+    it for generated goldens so every fresh certification process writes its
+    step screenshot/HTML evidence to an isolated directory, just as the old
+    app's frozen-run runner did."""
+    command_args = list(args or [])
+    if diagnostics_dir is not None and "--diagnostics-dir" not in command_args:
+        diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        command_args.extend(["--diagnostics-dir", str(diagnostics_dir)])
     try:
         result = subprocess.run(
-            [sys.executable, str(script_path), *(args or [])],
+            [sys.executable, str(script_path), *command_args],
             capture_output=True,
             text=True,
             timeout=_CERTIFY_TIMEOUT_SECONDS,
@@ -66,4 +78,3 @@ def certify_golden_script_once(script_path: Path, *, args: list[str] | None = No
             pass
         return True, None, parsed
     return False, (result.stdout or "") + (result.stderr or ""), None
-

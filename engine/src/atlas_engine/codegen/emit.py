@@ -1,9 +1,11 @@
+import base64
 import os
 import re
 import sys
 import textwrap
 
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+from atlas_engine.capture.extraction import REPORT_DUMP_JS as _REPORT_DUMP_JS
 from atlas_engine.capture.extraction import SERIALIZER as _SERIALIZER_JS
 from atlas_engine.codegen.params import ClassifiedParams, classify_step_values
 
@@ -72,6 +74,7 @@ def first_visible_selector(page, hints, per_try_ms):
 '''
 
 _HEADER_TOP = '''import argparse
+import base64
 import json
 import os
 import re
@@ -351,6 +354,9 @@ def _emit_locator_gesture(call: str, step: TrajectoryStep, *, value_expr: str | 
         return [f"{call}.click()", f"{call}.fill('')", f"{call}.press_sequentially({seq}, delay=100)"]
     if step.kind == "press":
         return [f"{call}.press({(step.key or step.value or 'Enter')!r})"]
+    if step.kind == "select_option":
+        value = value_expr if value_expr is not None else repr(step.value or "")
+        return [f"{call}.select_option({value})"]
     if step.kind == "check":
         return [f"{call}.check()"]
     if step.kind == "uncheck":
@@ -435,6 +441,12 @@ def _emit_css_step(
     elif step.kind == "press":
         key = step.key or step.value or "Enter"
         lines.append(f"    page.locator({selector!r}).first.press({key!r})" if use_locator else f"    page.press({selector!r}, {key!r})")
+    elif step.kind == "select_option":
+        value = value_expr if value_expr is not None else repr(step.value or "")
+        lines.append(
+            f"    page.locator({selector!r}).first.select_option({value})"
+            if use_locator else f"    page.select_option({selector!r}, {value})"
+        )
     elif step.kind == "check":
         lines.append(f"    page.locator({selector!r}).first.check()" if use_locator else f"    page.check({selector!r})")
     elif step.kind == "uncheck":
@@ -467,6 +479,19 @@ def _emit_step(
             lines.append("    page.wait_for_load_state()")
         return "\n".join(lines)
 
+    # The brain can repair an otherwise-valid step by using a recorded click
+    # coordinate when no durable locator can be resolved. It returns that
+    # repair in the verified trajectory, so golden emission must preserve it
+    # instead of rejecting a brain run that already completed successfully.
+    if step.kind == "click_xy":
+        lines = []
+        if pre_action_ms > 0:
+            lines.append("    _pace(page)")
+        lines.append(f"    page.mouse.click({step.x or 0}, {step.y or 0})")
+        if step.expected_effect == "url_changed":
+            lines.append("    page.wait_for_load_state()")
+        return "\n".join(lines)
+
     selector = _best_selector(step)
     if selector.startswith(_CODEGEN_EXPR_PREFIX):
         raw_expr = selector[len(_CODEGEN_EXPR_PREFIX):]
@@ -493,7 +518,7 @@ def _emit_step_with_fallback(
     if not candidates:
         candidates = [c["selector"] for c in sorted(step.selector_candidates, key=lambda c: c["rank"])]
 
-    if len(candidates) <= 1 or step.kind == "goto":
+    if len(candidates) <= 1 or step.kind in ("goto", "click_xy"):
         return [_emit_step(step, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms, value_expr=value_expr)]
 
     has_codegen_expr = any(c.startswith(_CODEGEN_EXPR_PREFIX) for c in candidates)
@@ -536,6 +561,9 @@ def _emit_step_with_fallback(
     elif step.kind == "press":
         key = step.key or step.value or "Enter"
         lines.append(f"                page.locator(_sel).first.press({key!r})")
+    elif step.kind == "select_option":
+        value = value_expr if value_expr is not None else repr(step.value or "")
+        lines.append(f"                page.locator(_sel).first.select_option({value})")
     elif step.kind == "check":
         lines.append("                page.locator(_sel).first.check()")
     elif step.kind == "uncheck":
@@ -567,7 +595,7 @@ def _wrap_step_with_diagnostics(step_lines: list[str], step_index: int, label: s
     return lines
 
 
-def _build_argparse_and_main_params(classified: "ClassifiedParams") -> str:
+def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config: dict | None = None) -> str:
     """Generates the argparse setup + params-dict construction."""
     lines = ["    parser = argparse.ArgumentParser()"]
     for p in classified.params:
@@ -587,6 +615,15 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams") -> str:
     for p in classified.params:
         attr = p.cli_name.replace("-", "_")
         lines.append(f'    params["{attr}"] = args.{attr}')
+    auth_config = auth_config or {}
+    sq_answers = (auth_config.get("security_question") or {}).get("answers") or []
+    if sq_answers:
+        lines.append('    params["security_answers"] = [')
+        for a in sq_answers:
+            match = a.get("match") or ""
+            env_var = a.get("env_var") or ""
+            lines.append(f'        {{"match": {_py_str(match)}, "answer": os.environ.get({_py_str(env_var)}, "")}},')
+        lines.append("    ]")
     return "\n".join(lines)
 
 
@@ -608,11 +645,305 @@ def _step_page_expr(step: TrajectoryStep) -> str:
     return "page"
 
 
+# ── Auth/MFA handlers (ported from the previous app's pyLoginCodegen.ts) ──
+# Config-driven, all opt-in: when auth_config is absent every helper is skipped
+# and the login block emits byte-for-byte the same code as before. When present,
+# the matching handlers are woven into login() exactly like the previous app
+# (security-question answers, manual/email/otp-api OTP second factor).
+
+_OTP_INPUT_DEFAULT_HINTS = [
+    "input[autocomplete='one-time-code']",
+    "#TFA_SecurityCode",
+    "input[name*='code' i]",
+    "input[name*='otp' i]",
+    "input[type='tel']",
+]
+_OTP_SUBMIT_DEFAULT_HINTS = [
+    "role=button[name=\"LOG IN\"]",
+    "role=link[name=\"LOG IN\"]",
+    "button[type='submit']",
+    "input[type='submit']",
+]
+
+
+def _emit_enter_otp() -> list[str]:
+    return [
+        "def _enter_otp(page, code, input_hints, submit_hints):",
+        "    import time as _t",
+        "    filled = False",
+        "    fdl = _t.time() + 20",
+        "    while _t.time() < fdl and not filled:",
+        "        for fr in page.frames:",
+        "            for sel in input_hints:",
+        "                try:",
+        "                    loc = fr.locator(sel).first",
+        "                    if loc.count() > 0 and loc.is_visible():",
+        "                        try:",
+        "                            loc.click(); loc.fill(''); loc.press_sequentially(code, delay=80)",
+        "                        except Exception:",
+        "                            loc.fill(code)",
+        "                        filled = True; break",
+        "                except Exception: pass",
+        "            if filled: break",
+        "        if not filled: page.wait_for_timeout(1000)",
+        "    if not filled:",
+        "        raise Exception('OTP: could not find the OTP input field')",
+        "    for fr in page.frames:",
+        "        for sel in submit_hints:",
+        "            try:",
+        "                loc = fr.locator(sel).first",
+        "                if loc.count() > 0 and loc.is_visible():",
+        "                    try: loc.evaluate('el => { try { el.disabled = false } catch (e) {} }')",
+        "                    except Exception: pass",
+        "                    loc.click(timeout=10000); page.wait_for_timeout(2000); return",
+        "            except Exception: pass",
+        "    try: page.keyboard.press('Enter')",
+        "    except Exception: pass",
+        "    page.wait_for_timeout(2000)",
+    ]
+
+
+def _emit_email_otp_handler(cfg: dict) -> list[str]:
+    im = cfg.get("email_imap") or {}
+    user_env = im.get("user_env") or "SECRET_EMAIL_OTP_USER"
+    pass_env = im.get("password_env") or "SECRET_EMAIL_OTP_PASSWORD"
+    input_hints = _OTP_INPUT_DEFAULT_HINTS
+    submit_hints = _OTP_SUBMIT_DEFAULT_HINTS
+    if cfg.get("otp_input_hints"):
+        input_hints = cfg["otp_input_hints"]
+    if cfg.get("otp_submit_hints"):
+        submit_hints = cfg["otp_submit_hints"]
+    return [
+        "def handle_email_otp(page, params):",
+        "    import imaplib, email, re, time as _t",
+        "    from email.utils import parsedate_to_datetime",
+        "    from datetime import timezone as _tz",
+        f"    HOST = {_py_str(im.get('host') or '')}",
+        f"    PORT = {im.get('port') or 993}",
+        f"    USE_SSL = {'False' if im.get('use_ssl') is False else 'True'}",
+        f"    MAILBOX = {_py_str(im.get('mailbox') or 'INBOX')}",
+        f"    USER = os.environ.get({_py_str(user_env)}, '')",
+        f"    PW = os.environ.get({_py_str(pass_env)}, '')",
+        f"    SENDER = {_py_str((im.get('sender_contains') or '').lower())}",
+        f"    SUBJECT = {_py_str((im.get('subject_contains') or '').lower())}",
+        f"    PATTERN = {_py_str(im.get('code_regex') or '\\b(\\d{4,8})\\b')}",
+        f"    TIMEOUT_MS = {im.get('timeout_ms') or 120000}",
+        f"    POLL_MS = {im.get('poll_ms') or 4000}",
+        "    OTP_INPUT_HINTS = " + repr(list(input_hints)),
+        "    OTP_SUBMIT_HINTS = " + repr(list(submit_hints)),
+        "    if not USER or not PW:",
+        f"        raise Exception('EMAIL-OTP: set {user_env} and {pass_env} (IMAP user + app password) in the environment')",
+        "",
+        "    def _msg_text(msg):",
+        "        parts = []",
+        "        if msg.is_multipart():",
+        "            for part in msg.walk():",
+        "                if part.get_content_type() in ('text/plain', 'text/html'):",
+        "                    try:",
+        "                        pl = part.get_payload(decode=True)",
+        "                        if pl: parts.append(pl.decode(part.get_content_charset() or 'utf-8', 'ignore'))",
+        "                    except Exception: pass",
+        "        else:",
+        "            try:",
+        "                pl = msg.get_payload(decode=True)",
+        "                if pl: parts.append(pl.decode(msg.get_content_charset() or 'utf-8', 'ignore'))",
+        "            except Exception: pass",
+        "        txt = '\\n'.join(parts)",
+        "        return re.sub(r'<[^>]+>', ' ', txt)",
+        "",
+        "    log_step('Email OTP: watching ' + MAILBOX + ' for a fresh code')",
+        "    start = _t.time()",
+        "    since = start - 300",
+        "    deadline = start + TIMEOUT_MS / 1000.0",
+        "    code = None",
+        "    while _t.time() < deadline and not code:",
+        "        M = None",
+        "        try:",
+        "            M = imaplib.IMAP4_SSL(HOST, PORT) if USE_SSL else imaplib.IMAP4(HOST, PORT)",
+        "            M.login(USER, PW)",
+        "            M.select(MAILBOX)",
+        "            typ, data = M.search(None, 'UNSEEN')",
+        "            ids = data[0].split() if (data and data[0]) else []",
+        "            for num in reversed(ids[-15:]):",
+        "                typ, md = M.fetch(num, '(RFC822)')",
+        "                if typ != 'OK' or not md or not md[0]: continue",
+        "                msg = email.message_from_bytes(md[0][1])",
+        "                try:",
+        "                    dt = parsedate_to_datetime(msg.get('Date'))",
+        "                    if dt is not None:",
+        "                        if dt.tzinfo is None: dt = dt.replace(tzinfo=_tz.utc)",
+        "                        if dt.timestamp() < since: continue",
+        "                except Exception: pass",
+        "                _text = _msg_text(msg)",
+        "                _subj = str(msg.get('Subject', ''))",
+        "                if SENDER and (SENDER not in str(msg.get('From', '')).lower()) and (SENDER not in _text.lower()): continue",
+        "                if SUBJECT and SUBJECT not in _subj.lower(): continue",
+        "                m = re.search(PATTERN, _subj + '\\n' + _text)",
+        "                if m:",
+        "                    code = m.group(1) if m.groups() else m.group(0)",
+        "                    try: M.store(num, '+FLAGS', '\\\\Seen')",
+        "                    except Exception: pass",
+        "                    break",
+        "        except imaplib.IMAP4.error as e:",
+        "            raise Exception('EMAIL-OTP: IMAP login/search failed (' + str(e)[:150] + ') — enable IMAP + use an app password')",
+        "        except Exception as e:",
+        "            log_step('Email OTP poll error: ' + str(e)[:150])",
+        "        finally:",
+        "            try:",
+        "                if M is not None: M.logout()",
+        "            except Exception: pass",
+        "        if not code:",
+        "            page.wait_for_timeout(POLL_MS)",
+        "    if not code:",
+        "        raise Exception('EMAIL-OTP: no code found within %d s' % int(TIMEOUT_MS / 1000))",
+        "    log_step('Email OTP: code received — entering it')",
+        "    _enter_otp(page, code, OTP_INPUT_HINTS, OTP_SUBMIT_HINTS)",
+    ]
+
+
+def _emit_otp_api_handler(cfg: dict) -> list[str]:
+    api = cfg.get("otp_api") or {}
+    input_hints = cfg.get("otp_input_hints") or _OTP_INPUT_DEFAULT_HINTS
+    submit_hints = cfg.get("otp_submit_hints") or _OTP_SUBMIT_DEFAULT_HINTS
+    key_env = api.get("api_key_env")
+    query = api.get("query") or {}
+    query_entries = ", ".join(f"{_py_str(k)}: {_py_str(v)}" for k, v in query.items())
+    return [
+        "def handle_otp_api(page, params):",
+        "    import json, time as _t, urllib.request, urllib.parse, urllib.error",
+        f"    URL = {_py_str(api.get('url') or '')}",
+        f"    CODE_FIELD = {_py_str(api.get('code_field') or 'otp_code')}",
+        f"    TIMEOUT_MS = {api.get('timeout_ms') or 120000}",
+        f"    POLL_MS = {api.get('poll_ms') or 4000}",
+        "    OTP_INPUT_HINTS = " + repr(list(input_hints)),
+        "    OTP_SUBMIT_HINTS = " + repr(list(submit_hints)),
+        "    q = {" + query_entries + "}",
+        f"    q['api_key'] = os.environ.get({_py_str(key_env or 'SECRET_OTP_API_KEY')}, '')" if key_env else "    # no api key configured",
+        "    _sep = '&' if ('?' in URL) else '?'",
+        "    full = URL + ((_sep + urllib.parse.urlencode(q)) if q else '')",
+        "    log_step('OTP API: polling for a code')",
+        "    deadline = _t.time() + TIMEOUT_MS / 1000.0",
+        "    code = None",
+        "    while _t.time() < deadline and not code:",
+        "        try:",
+        "            with urllib.request.urlopen(urllib.request.Request(full), timeout=20) as _r:",
+        "                data = json.loads(_r.read().decode('utf-8', 'ignore'))",
+        "                code = str(data.get(CODE_FIELD) or '').strip() or None",
+        "        except urllib.error.HTTPError as he:",
+        "            if he.code != 404: log_step('OTP API HTTP ' + str(he.code))",
+        "        except Exception as e:",
+        "            log_step('OTP API poll error: ' + str(e)[:120])",
+        "        if not code: page.wait_for_timeout(POLL_MS)",
+        "    if not code:",
+        "        raise Exception('OTP-API: no code within %d s' % int(TIMEOUT_MS / 1000))",
+        "    log_step('OTP API: code received — entering it')",
+        "    _enter_otp(page, code, OTP_INPUT_HINTS, OTP_SUBMIT_HINTS)",
+    ]
+
+
+def _emit_manual_otp_waiter(timeout_ms: int) -> list[str]:
+    return [
+        "def _past_login_page(cur, login_url):",
+        "    def norm(u): return (u or '').split('?')[0].split('#')[0].rstrip('/')",
+        "    return bool(cur) and norm(cur) != norm(login_url)",
+        "",
+        "",
+        "def wait_for_manual_otp(page, login_url, success_signal, timeout_ms):",
+        "    secs = int(timeout_ms / 1000)",
+        "    print('', file=sys.stderr)",
+        "    print('=' * 72, file=sys.stderr)",
+        "    print('  \\u23f8  WAITING FOR OTP', file=sys.stderr)",
+        "    print('  Enter the one-time code in the browser window and submit it.', file=sys.stderr)",
+        "    print('  The automated run resumes on its own once you are past login.', file=sys.stderr)",
+        f"    print('  (waiting up to %d seconds)' % secs, file=sys.stderr)",
+        "    print('=' * 72, file=sys.stderr)",
+        "    print('', file=sys.stderr)",
+        "    log_step('Waiting for manual OTP/MFA completion (up to %d s)' % secs)",
+        "    deadline = time.time() + timeout_ms / 1000.0",
+        "    while time.time() < deadline:",
+        "        if success_signal:",
+        "            try:",
+        "                if page.locator(success_signal).first.is_visible():",
+        "                    log_step('OTP complete — success signal detected'); return",
+        "            except Exception:",
+        "                pass",
+        "        try: cur = page.url",
+        "        except Exception: cur = ''",
+        "        if _past_login_page(cur, login_url):",
+        "            page.wait_for_timeout(1500)",
+        "            log_step('OTP complete — left the login page'); return",
+        "        try: page.wait_for_timeout(1000)",
+        "        except Exception: break",
+        "    raise Exception('Manual OTP not completed within %d seconds' % secs)",
+    ]
+
+
+def _emit_security_question_handler(cfg: dict) -> list[str]:
+    sq = cfg.get("security_question") or {}
+    question_sel = sq.get("question_text_selector") or "body"
+    answer_hints = sq.get("answer_input_hints") or ["input[type=password]", "input[name*=answer i]"]
+    submit_hints = sq.get("submit_hints") or ["button[type=submit]", "#verify", "input[type=submit]"]
+    return [
+        "def handle_security_question(page, params, state):",
+        "    answer_loc = None",
+        "    for sel in " + repr(list(answer_hints)) + ":",
+        "        loc = page.locator(sel).first",
+        "        try:",
+        "            if loc.count() > 0 and loc.is_visible():",
+        "                answer_loc = loc",
+        "                break",
+        "        except Exception:",
+        "            pass",
+        "    if answer_loc is None:",
+        "        return False",
+        "",
+        "    question_text = ''",
+        "    try:",
+        f"        question_text = page.locator({_py_str(question_sel)}).first.inner_text(timeout=5000)",
+        "    except Exception:",
+        "        question_text = ''",
+        "    q_lower = question_text.lower()",
+        "    log_step('Security question detected')",
+        "",
+        "    chosen = None",
+        "    for a in params.get('security_answers', []):",
+        "        kw = (a.get('match') or '').lower()",
+        "        if kw and kw in q_lower:",
+        "            chosen = a",
+        "            break",
+        "    if chosen is None:",
+        "        raise Exception('SECURITY-QUESTION ABORT: unrecognized question (no configured keyword matched) — refusing to guess to avoid account lockout. Question: ' + question_text[:200])",
+        "    ans = (chosen.get('answer') or '').strip()",
+        "    if not ans:",
+        "        raise Exception(\"SECURITY-QUESTION ABORT: matched keyword '\" + str(chosen.get('match')) + \"' but its answer secret is empty — refusing to submit an empty answer (lockout risk).\")",
+        "",
+        "    log_step('Answering security question (matched keyword: ' + str(chosen.get('match')) + ')')",
+        "    answer_loc.fill(ans)",
+        "    page.wait_for_timeout(500)",
+        "    state['submitted'] = True",
+        "    clicked = False",
+        "    for sel in " + repr(list(submit_hints)) + ":",
+        "        loc = page.locator(sel).first",
+        "        try:",
+        "            if loc.count() > 0 and loc.is_visible():",
+        "                loc.click(timeout=10000)",
+        "                clicked = True",
+        "                break",
+        "        except Exception:",
+        "            pass",
+        "    if not clicked:",
+        "        raise Exception('SECURITY-QUESTION: could not find a verify/submit button after filling the answer.')",
+        "    page.wait_for_timeout(3000)",
+        "    return True",
+    ]
+
+
 def _build_login_block(
     trajectory: ReferenceTrajectory, classified: "ClassifiedParams", *, success_signal: dict | None = None,
-    start_url: str = "",
+    start_url: str = "", auth_config: dict | None = None,
 ) -> tuple[str, set[int]]:
-    """Emits login()/attempt_login_once()/dismiss_post_login_continue()."""
+    """Emits login()/attempt_login_once()/dismiss_post_login_continue() plus
+    any configured auth handlers (security question, MFA OTP)."""
     password_entries = [s for s in classified.secrets if s.label == "password"]
     if not password_entries:
         return "", set()
@@ -706,14 +1037,33 @@ def _build_login_block(
         elif success_signal.get("url_contains"):
             signal_check = f'"{success_signal["url_contains"]}" in page.url'
 
+    auth_config = auth_config or {}
+    has_security = bool(auth_config.get("security_question"))
+    mfa_type = (auth_config.get("mfa") or {}).get("type")
+    mfa_cfg = (auth_config.get("mfa") or {}).get("config") or {}
+
     body.append("def login(page, params):")
     body.append('    last_error = None')
+    if has_security:
+        body.append('    sec_state = {"submitted": False}')
     body.append("    for attempt in range(1, 4):")
     body.append("        if attempt > 1:")
     body.append('            log_step("Retrying login (attempt " + str(attempt) + "/3) — previous: " + str(last_error))')
     body.append("        try:")
     body.append("            attempt_login_once(page, params)")
+    if has_security:
+        body.append("            handle_security_question(page, params, sec_state)")
     body.append("            dismiss_post_login_continue(page)")
+    if mfa_type == "manual":
+        timeout_ms = mfa_cfg.get("timeout_ms") or 300000
+        signal_selector = ""
+        if signal_css:
+            signal_selector = signal_css
+        body.append(f'            wait_for_manual_otp(page, {start_url!r}, {signal_selector!r}, {timeout_ms})')
+    elif mfa_type == "email":
+        body.append("            handle_email_otp(page, params)")
+    elif mfa_type == "otp_api":
+        body.append("            handle_otp_api(page, params)")
     if signal_css:
         body.append(f'            log_step("Verifying login via successSignal: " + {signal_css!r})')
         body.append(f"            page.locator({signal_css!r}).first.wait_for(timeout=60000)")
@@ -726,9 +1076,37 @@ def _build_login_block(
         body.append('                raise Exception("login success signal never appeared")')
     body.append("            return")
     body.append("        except Exception as e:")
+    if has_security:
+        # SAFETY: once a security answer has been submitted, NEVER retry — a
+        # retry would re-submit the answer, and repeated wrong answers LOCK the
+        # account. Mirrors the previous app's lockout-safe retry policy.
+        body.append('            if sec_state.get("submitted"):')
+        body.append('                raise Exception("Login failed AFTER submitting a security answer; NOT retrying to avoid account lockout. Error: " + str(e))')
     body.append("            last_error = e")
     body.append('    raise Exception("Login failed after 3 attempt(s). Last error: " + str(last_error))')
     body.append("")
+
+    # Append the configured handler definitions after login().
+    if has_security:
+        body.append("")
+        body.extend(_emit_security_question_handler(auth_config))
+        body.append("")
+    if mfa_type == "email":
+        body.append("")
+        body.extend(_emit_enter_otp())
+        body.append("")
+        body.extend(_emit_email_otp_handler(mfa_cfg))
+        body.append("")
+    elif mfa_type == "otp_api":
+        body.append("")
+        body.extend(_emit_enter_otp())
+        body.append("")
+        body.extend(_emit_otp_api_handler(mfa_cfg))
+        body.append("")
+    elif mfa_type == "manual":
+        body.append("")
+        body.extend(_emit_manual_otp_waiter(mfa_cfg.get("timeout_ms") or 300000))
+        body.append("")
 
     return "\n".join(body) + "\n", consumed
 
@@ -750,9 +1128,214 @@ def _emit_extract_step() -> list[str]:
     ]
 
 
+# ── Spec-driven extraction (ported from the previous app's emitExtractionFuncs) ──
+# When a verified ExtractionSpec is frozen onto an extract step, the golden
+# compiles deterministic Playwright reads — NO runtime DOM-walk heuristic and
+# NO LLM — exactly like the previous application. The helpers below are emitted
+# once into the header; each spec compiles to its own `_extract_<name>(scope)`.
+
+_EXTRACTION_HELPERS = '''
+_REPORT_DUMP_JS = base64.b64decode("""_B64_REPORT_DUMP_JS""").decode("utf-8")
+
+
+def _ex_report_frame(scope, url_contains):
+    # Comprehensive report-frame dump. Find the nested content frame the operator
+    # marked (by a stable substring of its URL) and serialize its COMPLETE content
+    # (every section -> headed/label-value table -> rows) to JSON. Falls back to the
+    # frame with the most tables if the URL hint doesn't resolve. Portal-agnostic.
+    _cands = []
+    try: _frames = list(scope.frames)
+    except Exception: _frames = []
+    _hint = (url_contains or '').lower()
+    _target = None; _best = -1
+    for _fr in _frames:
+        try: _u = (_fr.url or '').lower()
+        except Exception: _u = ''
+        if _hint and _hint in _u:
+            try: _cnt = _fr.locator('table').count()
+            except Exception: _cnt = 0
+            if _cnt > _best: _best = _cnt; _target = _fr
+    if _target is None:
+        # no URL match (session tokens differ across runs) — pick the richest frame
+        for _fr in _frames:
+            try: _cnt = _fr.locator('table').count()
+            except Exception: _cnt = 0
+            if _cnt > _best: _best = _cnt; _target = _fr
+    if _target is None: _target = scope
+    try: _target.locator('table').first.wait_for(state='attached', timeout=15000)
+    except Exception: pass
+    try: return _target.evaluate(_REPORT_DUMP_JS)
+    except Exception as _e:
+        log_step('report-frame dump failed: ' + str(_e)[:160])
+        return {}
+
+
+def _ex_frame(scope, selector, prefix=""):
+    # Resolve WHERE to read `selector`, honoring the topmost-modal `prefix` (the
+    # frozen scopeSelector of an open dialog, or "" for whole-page reads). Returns
+    # (target, sel): the Page/Frame/Locator to query and the selector to use on it.
+    #  1) if a modal prefix is set, read INSIDE the topmost (.last) matching modal
+    #     container, so the read can never fall through to the background page;
+    #  2) else (or if not found there) descend into every nested/cross-origin
+    #     iframe, any depth — a report-viewer grid lives in a deep iframe
+    #     .locator() can't pierce;
+    #  3) else fall back to the whole page.
+    if prefix:
+        try:
+            _modal = scope.locator(prefix).last
+            if _modal.locator(selector).count() > 0: return _modal, selector
+        except Exception: pass
+    try:
+        for _fr in scope.frames:
+            try:
+                if _fr.locator(selector).count() > 0: return _fr, selector
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return scope, selector
+
+
+def _ex_txt(scope, selector, prefix=""):
+    try:
+        _tgt, _sel = _ex_frame(scope, selector, prefix)
+        loc = _tgt.locator(_sel).first
+        loc.wait_for(state="visible", timeout=8000)
+        return (loc.inner_text(timeout=8000) or "").strip()
+    except Exception:
+        return None
+
+
+def _ex_attr(scope, selector, attr, prefix=""):
+    try:
+        _tgt, _sel = _ex_frame(scope, selector, prefix)
+        return _tgt.locator(_sel).first.get_attribute(attr, timeout=8000)
+    except Exception:
+        return None
+
+
+def _ex_count(scope, selector, prefix=""):
+    try:
+        _tgt, _sel = _ex_frame(scope, selector, prefix)
+        return _tgt.locator(_sel).count()
+    except Exception:
+        return 0
+
+
+def _cell_txt(loc):
+    try:
+        return (loc.first.inner_text(timeout=4000) or "").strip()
+    except Exception:
+        return None
+
+
+def _cell_attr(loc, attr):
+    try:
+        return loc.first.get_attribute(attr, timeout=4000)
+    except Exception:
+        return None
+
+
+def _ex_classify(text, rules, default):
+    import re
+    t = (text or "").lower()
+    for pat, val in rules:
+        try:
+            if re.search(pat, t): return val
+        except Exception:
+            pass
+    return default
+'''
+
+
+def _py_str(value: str) -> str:
+    return repr(value)
+
+
+def _extract_fn_name(name: str) -> str:
+    import re as _re
+    return "_extract_" + _re.sub(r"[^a-zA-Z0-9_]", "_", name)
+
+
+def _spec_body(spec: dict) -> list[str]:
+    """Compiles one ExtractionSpec into the body lines of `_extract_<name>(scope)`."""
+    if spec.get("reportFrame") and spec["reportFrame"].get("urlContains"):
+        return [f"return _ex_report_frame(scope, {_py_str(spec['reportFrame']['urlContains'])})"]
+    pfx = _py_str(spec.get("scopeSelector") or "")
+    b: list[str] = ["out = {}"]
+    for f in spec.get("fields") or []:
+        read = f.get("read") or "text"
+        if read == "attr":
+            b.append(f"_v = _ex_attr(scope, {_py_str(f['selector'])}, {_py_str(f.get('attr') or 'value')}, {pfx})")
+        elif read == "present":
+            b.append(f"_v = _ex_count(scope, {_py_str(f['selector'])}, {pfx}) > 0")
+        elif read == "count":
+            b.append(f"_v = _ex_count(scope, {_py_str(f['selector'])}, {pfx})")
+        else:
+            b.append(f"_v = _ex_txt(scope, {_py_str(f['selector'])}, {pfx})")
+        if f.get("classify"):
+            rules = "[" + ", ".join(f"({_py_str(r['when'])}, {_py_str(r['value'])})" for r in f["classify"].get("rules") or []) + "]"
+            b.append(f"out[{_py_str(f['name'])}] = _ex_classify(_v, {rules}, {_py_str(f['classify'].get('default') or 'unknown')})")
+            b.append(f"out[{_py_str(f['name'] + '_raw')}] = _v")
+        else:
+            b.append(f"out[{_py_str(f['name'])}] = _v")
+    for t in spec.get("tables") or []:
+        b.append("_rows = []")
+        b.append(f"_tscope, _trsel = _ex_frame(scope, {_py_str(t['rowSelector'])}, {pfx})")
+        b.append("try:")
+        b.append(f"    _tscope.locator(_trsel).first.wait_for(state=\"attached\", timeout=8000)")
+        b.append("except Exception:")
+        b.append("    pass")
+        b.append("_trs = _tscope.locator(_trsel)")
+        b.append("_tn = 0")
+        b.append("try: _tn = _trs.count()")
+        b.append("except Exception: _tn = 0")
+        b.append("for _i in range(_tn):")
+        row_lines = ["_row = {}", "_r = _trs.nth(_i)"]
+        for c in t.get("columns") or []:
+            loc = f"_r.locator({_py_str(c['selector'])})" if c.get("selector") else f"_r.locator(\"td,th\").nth({c.get('index') or 0})"
+            row_lines.append(
+                f"_row[{_py_str(c['name'])}] = _cell_attr({loc}, {_py_str(c.get('attr') or 'value')})"
+                if (c.get("read") or "text") == "attr"
+                else f"_row[{_py_str(c['name'])}] = _cell_txt({loc})"
+            )
+        row_lines.append("_rows.append(_row)")
+        b.append(textwrap.indent("\n".join(row_lines), "    "))
+        b.append(f"out[{_py_str(t['name'])}] = _rows")
+    for d in spec.get("derived") or []:
+        if d.get("tableNonEmpty"):
+            b.append(f"out[{_py_str(d['name'])}] = len(out.get({_py_str(d['tableNonEmpty'])}, [])) > 0")
+    b.append("return out")
+    return b
+
+
+def _emit_extract_funcs(specs: list[tuple[str, dict]]) -> list[str]:
+    """Emits one `def _extract_<name>(scope):` per (name, spec), after the shared helpers."""
+    out: list[str] = []
+    for name, spec in specs:
+        out.append(f"def {_extract_fn_name(name)}(scope):")
+        out.extend(textwrap.indent("\n".join(_spec_body(spec)), "    ").split("\n"))
+        out.append("")
+        out.append("")
+    return out
+
+
+def _extraction_helpers_header() -> str:
+    b64 = base64.b64encode(_REPORT_DUMP_JS.encode("utf-8")).decode("ascii")
+    return _EXTRACTION_HELPERS.replace("_B64_REPORT_DUMP_JS", b64)
+
+
+def _emit_extract_checkpoint(name: str) -> list[str]:
+    """Body lines that run a compiled extractor at its mid-flow checkpoint."""
+    return [
+        f"result[\"extractions\"][{_py_str(name)}] = {{\"url\": page.url, \"data\": {_extract_fn_name(name)}(page)}}",
+    ]
+
+
 def _emit_download_step(action_lines: list[str]) -> list[str]:
-    """Wraps a download-triggering step's action lines in a CONTEXT-scoped download wait."""
-    lines = ['with page.context.expect_event("download", timeout=300000) as _dl_info:']
+    """Wraps a download-triggering step's action lines in a page-scoped
+    `page.expect_download` wait, matching the previous app's golden emission."""
+    lines = ["with page.expect_download(timeout=300000) as _dl_info:"]
     lines.extend(f"    {line}" for line in action_lines)
     lines.append("_download = _dl_info.value")
     lines.append('_dl_dir = os.path.join(diagnostics_dir, "..", "results")')
@@ -768,11 +1351,26 @@ def emit_golden_script(
     portal_domain: str = "unknown", portal_name: str = "Unknown Portal", confidence: float | None = None,
     success_signal: dict | None = None,
     pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
+    extraction_specs: dict[int, dict] | None = None,
+    auth_config: dict | None = None,
 ) -> str:
-    """Deterministic, no LLM — converts a verified trajectory into a self-contained Playwright script."""
+    """Deterministic, no LLM — converts a verified trajectory into a self-contained Playwright script.
+
+    `extraction_specs` maps an extract step's index to its verified
+    ExtractionSpec (name/fields/tables/reportFrame/scopeSelector/derived).
+    Extract steps WITH a spec compile to deterministic `_extract_<name>(scope)`
+    reads at their mid-flow checkpoint (previous-app parity). Extract steps
+    WITHOUT a spec fall back to the runtime DOM-walk serializer, so flows that
+    never carried a spec emit byte-for-byte the same code as before.
+
+    `auth_config` optionally enables auth handlers ported from the previous app
+    (security-question answers + MFA second factor). Absent (or empty), the
+    emitted script contains no auth code beyond the plain login.
+    """
     classified = classify_step_values(trajectory, portal_domain)
     login_block, consumed_indices = _build_login_block(
         trajectory, classified, success_signal=success_signal, start_url=start_url,
+        auth_config=auth_config,
     )
 
     remaining_steps = [s for s in trajectory.steps if s.index not in consumed_indices]
@@ -786,10 +1384,21 @@ def emit_golden_script(
             attr = p.cli_name.replace("-", "_")
             value_expr_by_index[p.step_index] = f'params["{attr}"]'
 
+    extraction_specs = extraction_specs or {}
+    spec_steps = [(step.index, step) for step in remaining_steps if step.kind == "extract" and step.index in extraction_specs]
+    compiled_specs = [
+        (extraction_specs[idx].get("name") or f"extract_{idx}", extraction_specs[idx])
+        for idx, _step in spec_steps
+    ]
+
     body_lines: list[str] = []
     for step in remaining_steps:
         if step.kind == "extract":
-            body_lines.extend(f"    {line}" for line in _emit_extract_step())
+            if step.index in extraction_specs:
+                name = extraction_specs[step.index].get("name") or f"extract_{step.index}"
+                body_lines.extend(f"    {line}" for line in _emit_extract_checkpoint(name))
+            else:
+                body_lines.extend(f"    {line}" for line in _emit_extract_step())
             continue
         page_expr = _step_page_expr(step)
         body_lines.append(f"    _settle_frames({page_expr})")
@@ -814,6 +1423,9 @@ def emit_golden_script(
     header += "\n" + _FIND_FRAME_WITH_ELEMENT_HELPER
     header += "\n" + _DUMP_FAILURE_CONTEXT_HELPER
     header += "\n" + _PRINT_CAPTURE_HELPER
+    if compiled_specs:
+        header += "\n" + _extraction_helpers_header()
+        header += "\n" + "\n".join(_emit_extract_funcs(compiled_specs))
     if login_block:
         header += "\n" + login_block
 
@@ -823,7 +1435,7 @@ def emit_golden_script(
 
     run_body = "\n".join(body_lines)
 
-    main_params_block = _build_argparse_and_main_params(classified)
+    main_params_block = _build_argparse_and_main_params(classified, auth_config=auth_config)
 
     script = (
         review_header

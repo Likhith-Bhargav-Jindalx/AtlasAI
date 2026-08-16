@@ -94,7 +94,49 @@ def test_emitted_golden_script_actually_runs_against_the_fixture_portal(fixture_
     assert result.returncode == 0, result.stderr
 
 
-def test_emitted_golden_script_handles_goto_and_popup_steps():
+def test_spec_driven_extraction_golden_runs_and_reads_real_values(fixture_portal_url, tmp_path):
+    """End-to-end parity check: a golden compiled from a verified ExtractionSpec
+    must execute against the live fixture portal and return the EXACT values the
+    spec's selectors read — not a runtime DOM-walk dump."""
+    import os
+
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+    from atlas_engine.codegen.emit import emit_golden_script
+
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "goto", [{"selector": f"{fixture_portal_url}/extraction_target.html", "rank": 0}], None, "url_changed"),
+        TrajectoryStep(1, "extract", [], None, "none"),
+    ))
+    spec = {
+        "name": "patient",
+        "fields": [
+            {"name": "mrn", "selector": "[data-lbl=MRN]", "read": "text"},
+            {"name": "dob", "selector": "#dob-field", "read": "attr", "attr": "value"},
+        ],
+        "tables": [
+            {"name": "visits", "rowSelector": "table#visits-table tbody tr",
+             "columns": [{"name": "date", "selector": "td:first-child"}, {"name": "reason", "selector": "td:nth-child(2)"}]},
+        ],
+        "derived": [{"name": "has_visits", "tableNonEmpty": "visits"}],
+    }
+    script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/extraction_target.html", extraction_specs={1: spec})
+
+    script_path = tmp_path / "golden_extract.py"
+    script_path.write_text(script)
+
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+    import json
+    output = json.loads(result.stdout)
+    extraction = output["extractions"]["patient"]
+    assert extraction["data"]["mrn"] == "MRN-4821"
+    assert extraction["data"]["dob"] == "1990-01-15"
+    assert extraction["data"]["visits"] == [
+        {"date": "2026-08-01", "reason": "Checkup"},
+        {"date": "2026-07-15", "reason": "Follow-up"},
+    ]
+    assert extraction["data"]["has_visits"] is True
     trajectory = ReferenceTrajectory(
         steps=(
             TrajectoryStep(0, "goto", [{"selector": "https://example.com/pwd", "rank": 0}], None, "url_changed"),
@@ -896,23 +938,114 @@ def test_extract_step_emission_runs_serializer_across_frames_and_accumulates_res
     compile(script, "<extract>", "exec")
 
 
-def test_download_step_emission_uses_context_scoped_event_not_page_scoped():
+def test_spec_driven_extract_emits_compiled_reads_not_dom_walk():
+    """An extract step WITH a verified ExtractionSpec compiles to deterministic
+    _ex_txt/_ex_attr/_ex_count reads (previous-app parity) instead of the
+    runtime DOM-walk serializer."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+    from atlas_engine.codegen.emit import emit_golden_script
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(
+            0, "click", [{"selector": "#open", "rank": 0}], None, "none",
+        ),
+        TrajectoryStep(
+            1, "extract", [], None, "none",
+        ),
+    ))
+    spec = {
+        "name": "patient_demographics",
+        "fields": [
+            {"name": "mrn", "selector": "[data-lbl=MRN]", "read": "text"},
+            {"name": "dob", "selector": "#dob", "read": "attr", "attr": "value"},
+            {"name": "has_notes", "selector": "#notes", "read": "present"},
+            {"name": "visit_count", "selector": "table tbody tr", "read": "count"},
+            {"name": "status", "selector": "#status", "read": "text",
+             "classify": {"default": "unknown", "rules": [{"when": r"discharged", "value": "DISCHARGED"}]}},
+        ],
+        "tables": [
+            {"name": "visits", "rowSelector": "table#visits tbody tr",
+             "columns": [
+                 {"name": "date", "selector": "td:first-child"},
+                 {"name": "reason", "selector": "td:nth-child(2)"},
+             ]},
+        ],
+        "derived": [{"name": "has_visits", "tableNonEmpty": "visits"}],
+    }
+    script = emit_golden_script(trajectory, start_url="https://x.com", extraction_specs={1: spec})
+    assert "def _extract_patient_demographics(scope):" in script
+    assert "_ex_txt(scope, '[data-lbl=MRN]', '')" in script
+    assert "_ex_attr(scope, '#dob', 'value', '')" in script
+    assert "_ex_count(scope, '#notes', '') > 0" in script
+    assert "_v = _ex_count(scope, 'table tbody tr', '')" in script
+    assert "_ex_classify(_v, [('discharged', 'DISCHARGED')], 'unknown')" in script
+    assert "result[\"extractions\"]['patient_demographics']" in script
+    assert "_fr.evaluate(" not in script
+    compile(script, "<golden-spec>", "exec")
+
+
+def test_spec_driven_report_frame_extraction_emits_report_dump():
+    """reportFrame.urlContains mode compiles to _ex_report_frame with the
+    base64-embedded REPORT_DUMP_JS — no field-level reads, no DOM-walk."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+    from atlas_engine.codegen.emit import emit_golden_script
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "extract", [], None, "none"),
+    ))
+    spec = {"name": "epic_report", "reportFrame": {"urlContains": "HSWebReport"}}
+    script = emit_golden_script(trajectory, start_url="https://x.com", extraction_specs={0: spec})
+    assert "def _extract_epic_report(scope):" in script
+    assert "return _ex_report_frame(scope, 'HSWebReport')" in script
+    assert "_REPORT_DUMP_JS = base64.b64decode(" in script
+    assert "_fr.evaluate(" not in script
+    compile(script, "<golden-report>", "exec")
+
+
+def test_extract_step_without_spec_keeps_dom_walk_fallback():
+    """An extract step with NO spec must still emit the runtime DOM-walk —
+    flows that never carried a spec stay byte-for-byte identical to before."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+    from atlas_engine.codegen.emit import emit_golden_script
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "extract", [], None, "none"),
+    ))
+    script = emit_golden_script(trajectory, start_url="https://x.com")
+    assert "_fr.evaluate(" in script
+    assert "def _extract_" not in script
+    compile(script, "<golden-fallback>", "exec")
+
+
+def test_extraction_helpers_header_is_self_contained():
+    from atlas_engine.codegen.emit import _extraction_helpers_header
+    header = _extraction_helpers_header()
+    assert "def _ex_report_frame(scope, url_contains):" in header
+    assert "def _ex_frame(scope, selector, prefix=\"\"):" in header
+    assert "def _ex_txt(scope, selector, prefix=\"\"):" in header
+    assert "def _ex_attr(scope, selector, attr, prefix=\"\"):" in header
+    assert "def _ex_count(scope, selector, prefix=\"\"):" in header
+    assert "def _ex_classify(text, rules, default):" in header
+    assert "_REPORT_DUMP_JS = base64.b64decode(" in header
+    assert "_B64_REPORT_DUMP_JS" not in header
+    compile(header, "<extraction-helpers>", "exec")
+
+
+def test_download_step_emission_uses_page_scoped_expect_download():
     from atlas_engine.codegen.emit import _emit_download_step
     lines = _emit_download_step(["page1.get_by_role(\"link\", name=\"Excel data\").click()"])
     text = "\n".join(lines)
-    assert 'page.context.expect_event("download"' in text
-    assert "page.expect_download(" not in text
+    assert "with page.expect_download(timeout=300000)" in text
+    assert "expect_event(" not in text
     assert 'result["downloaded_files"].append(' in text
     body = "\n".join(f"    {l}" for l in lines)
     script = "def run():\n" + body + "\n"
     compile(script, "<download>", "exec")
 
 
-def test_download_step_references_page_dot_context_not_bare_context():
-    """The download wait must resolve `context` through the page object:
-    run_flow() receives (playwright, page, params, diagnostics_dir) and has no
-    bare `context` binding — the old emission referenced `context` directly,
-    a NameError the moment a download step executed during certification."""
+def test_download_step_emission_is_page_scoped():
+    """The download wait is page-scoped via `page.expect_download` (matching the
+    previous app's golden emission). It must never reference a bare `context`
+    binding — run_flow() receives (playwright, page, params, diagnostics_dir)
+    and has no `context` variable, a NameError the moment a download step
+    executed during certification."""
     from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
     from atlas_engine.codegen.emit import emit_golden_script
     trajectory = ReferenceTrajectory(steps=(
@@ -923,8 +1056,8 @@ def test_download_step_references_page_dot_context_not_bare_context():
         ),
     ))
     script = emit_golden_script(trajectory, start_url="https://x.com")
-    assert "with page.context.expect_event(\"download\"" in script
-    assert "with context.expect_event(\"download\"" not in script
+    assert "with page.expect_download(timeout=300000)" in script
+    assert "expect_event(" not in script
     compile(script, "<golden>", "exec")
 
 
@@ -1201,3 +1334,215 @@ def test_emit_golden_script_defaults_portal_domain_and_name_for_existing_callers
     script = emit_golden_script(trajectory, start_url="https://example.com/")
     compile(script, "<golden>", "exec")
 
+
+def test_verified_select_option_step_is_emitted_for_css_codegen_and_fallback_paths():
+    """`select_option` is a supported native-codegen and BrainLoop action.
+    A successful brain run can therefore return it in the verified trajectory;
+    freezing that trajectory must not raise Unsupported step kind."""
+    plain = TrajectoryStep(
+        0, "select_option", [{"selector": "#role", "rank": 0}], "admin", "none",
+    )
+    codegen = TrajectoryStep(
+        1, "select_option",
+        [{"selector": 'codegen_expr:page.get_by_label("Role")', "rank": 0}],
+        "reviewer", "none",
+    )
+    fallback = TrajectoryStep(
+        2, "select_option",
+        [{"selector": "#role", "rank": 0}, {"selector": "[name=role]", "rank": 1}],
+        "auditor", "none",
+    )
+
+    script = emit_golden_script(
+        ReferenceTrajectory(steps=(plain, codegen, fallback)), start_url="https://example.com/",
+    )
+
+    assert ".select_option('admin')" in script
+    assert '.get_by_label("Role").select_option(\'reviewer\')' in script
+    assert 'page.locator(_sel).first.select_option(\'auditor\')' in script
+    compile(script, "<golden>", "exec")
+
+
+def test_verified_coordinate_click_is_emitted_instead_of_rejecting_golden_generation():
+    """Coordinate repair is a valid BrainLoop outcome when no selector can
+    be repaired. Golden emission must preserve that verified action."""
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(
+            0, "click_xy", [{"selector": "#stale", "rank": 0}], None, "url_changed",
+            x=314, y=159,
+        ),
+    ))
+
+    script = emit_golden_script(trajectory, start_url="https://example.com/")
+
+    assert "page.mouse.click(314, 159)" in script
+    assert "page.wait_for_load_state()" in script
+    compile(script, "<golden>", "exec")
+
+
+# ── Auth/MFA handlers (ported from the previous app's pyLoginCodegen.ts) ──
+
+def _login_trajectory():
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
+        TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
+    ))
+    classified = ClassifiedParams(
+        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        params=(),
+    )
+    return trajectory, classified
+
+
+def test_auth_config_absent_emits_no_auth_code():
+    """Baseline guard: with no auth_config the login block must contain none of
+    the auth handlers — the whole feature is opt-in and must not disturb flows
+    that never configured MFA."""
+    from atlas_engine.codegen.emit import _build_login_block
+    trajectory, classified = _login_trajectory()
+    block, consumed = _build_login_block(trajectory, classified, success_signal=None)
+    assert "handle_security_question" not in block
+    assert "wait_for_manual_otp" not in block
+    assert "handle_email_otp" not in block
+    assert "handle_otp_api" not in block
+    assert "sec_state" not in block
+    compile(block, "<login>", "exec")
+
+
+def test_security_question_handler_is_emitted_and_woven_into_login():
+    """A security-question config must emit handle_security_question(), init a
+    sec_state guard, weave the call in after attempt_login_once, and emit the
+    lockout-safe no-retry-after-submit guard."""
+    from atlas_engine.codegen.emit import _build_login_block
+    trajectory, classified = _login_trajectory()
+    auth_config = {
+        "security_question": {
+            "question_text_selector": "body",
+            "answers": [
+                {"match": "name of your first pet", "env_var": "SECRET_X_SECURITY_ANSWER_PET"},
+                {"match": "mother's maiden name", "env_var": "SECRET_X_SECURITY_ANSWER_MAIDEN"},
+            ],
+        }
+    }
+    block, consumed = _build_login_block(
+        trajectory, classified, success_signal=None, auth_config=auth_config,
+    )
+    assert "def handle_security_question(page, params, state):" in block
+    assert "handle_security_question(page, params, sec_state)" in block
+    assert 'sec_state = {"submitted": False}' in block
+    assert "state['submitted'] = True" in block
+    assert "refusing to guess to avoid account lockout" in block
+    assert "NOT retrying to avoid account lockout" in block
+    assert "params.get('security_answers', [])" in block
+    compile(block, "<login>", "exec")
+
+
+def test_security_question_answers_flow_into_params_dict():
+    """emit_golden_script must build params['security_answers'] from the
+    configured env vars, never embed the answer literals."""
+    from atlas_engine.codegen.params import ClassifiedParams
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    auth_config = {
+        "security_question": {
+            "answers": [
+                {"match": "first pet", "env_var": "SECRET_X_SECURITY_ANSWER_PET"},
+                {"match": "maiden name", "env_var": "SECRET_X_SECURITY_ANSWER_MAIDEN"},
+            ],
+        }
+    }
+    out = _build_argparse_and_main_params(ClassifiedParams(secrets=(), params=()), auth_config=auth_config)
+    assert 'params["security_answers"] = [' in out
+    assert '"match": \'first pet\'' in out
+    assert "os.environ.get('SECRET_X_SECURITY_ANSWER_PET'" in out
+    assert '"match": \'maiden name\'' in out
+    compile("def main():\n" + out, "<params>", "exec")
+
+
+def test_manual_otp_waiter_is_emitted_when_configured():
+    from atlas_engine.codegen.emit import _build_login_block
+    trajectory, classified = _login_trajectory()
+    auth_config = {"mfa": {"type": "manual", "config": {"timeout_ms": 240000}}}
+    block, consumed = _build_login_block(
+        trajectory, classified, success_signal={"url_contains": "/dashboard"}, auth_config=auth_config,
+    )
+    assert "def wait_for_manual_otp(page, login_url, success_signal, timeout_ms):" in block
+    assert "def _past_login_page(cur, login_url):" in block
+    assert "WAITING FOR OTP" in block
+    assert "240000" in block
+    assert "wait_for_manual_otp(page, " in block
+    compile(block, "<login>", "exec")
+
+
+def test_email_otp_handler_is_emitted_when_configured():
+    from atlas_engine.codegen.emit import _build_login_block
+    trajectory, classified = _login_trajectory()
+    auth_config = {
+        "mfa": {
+            "type": "email",
+            "config": {
+                "email_imap": {
+                    "host": "imap.example.com", "port": 993, "use_ssl": True,
+                    "mailbox": "INBOX",
+                    "user_env": "SECRET_EMAIL_USER", "password_env": "SECRET_EMAIL_PASS",
+                    "sender_contains": "noreply@example.com", "subject_contains": "verification code",
+                    "code_regex": r"\b(\d{4,8})\b",
+                },
+            },
+        }
+    }
+    block, consumed = _build_login_block(
+        trajectory, classified, success_signal=None, auth_config=auth_config,
+    )
+    assert "def handle_email_otp(page, params):" in block
+    assert "import imaplib, email, re, time as _t" in block
+    assert "def _enter_otp(page, code, input_hints, submit_hints):" in block
+    assert "handle_email_otp(page, params)" in block
+    assert "SECRET_EMAIL_USER" in block
+    compile(block, "<login>", "exec")
+
+
+def test_otp_api_handler_is_emitted_when_configured():
+    from atlas_engine.codegen.emit import _build_login_block
+    trajectory, classified = _login_trajectory()
+    auth_config = {
+        "mfa": {
+            "type": "otp_api",
+            "config": {
+                "otp_api": {
+                    "url": "https://otp.example.com/issue", "code_field": "otp_code",
+                    "api_key_env": "SECRET_OTP_API_KEY",
+                },
+                "query": {"email": "demo@example.com"},
+            },
+        }
+    }
+    block, consumed = _build_login_block(
+        trajectory, classified, success_signal=None, auth_config=auth_config,
+    )
+    assert "def handle_otp_api(page, params):" in block
+    assert "def _enter_otp(page, code, input_hints, submit_hints):" in block
+    assert "handle_otp_api(page, params)" in block
+    assert "https://otp.example.com/issue" in block
+    assert "SECRET_OTP_API_KEY" in block
+    compile(block, "<login>", "exec")
+
+
+def test_emit_golden_script_with_security_question_config_compiles_and_keeps_flow():
+    """End-to-end: a configured security question must land in the emitted
+    golden and still compile as one valid runnable script."""
+    trajectory, _classified = _login_trajectory()
+    auth_config = {
+        "security_question": {
+            "question_text_selector": "body",
+            "answers": [{"match": "first pet", "env_var": "SECRET_X_SECURITY_ANSWER_PET"}],
+        }
+    }
+    script = emit_golden_script(
+        trajectory, start_url="https://example.com/login.html", auth_config=auth_config,
+    )
+    assert "def handle_security_question(page, params, state):" in script
+    assert 'params["security_answers"] = [' in script
+    assert "handle_security_question(page, params, sec_state)" in script
+    compile(script, "<golden>", "exec")

@@ -6,6 +6,17 @@ from atlas_engine.brain.repair import RepairAction, think
 from atlas_engine.llm.client import FakeLlmClient
 
 
+def test_brain_prompt_uses_the_executor_and_golden_select_option_action_name():
+    """The model-facing vocabulary must match the name accepted by
+    BrainLoop and emitted into Playwright; `select` was a stale internal name
+    from the previous TypeScript trajectory format."""
+    from atlas_engine.brain.repair import _GESTURES, _SYSTEM_PROMPT
+
+    assert "select_option" in _GESTURES
+    assert "select_option" in _SYSTEM_PROMPT
+    assert '|select"' not in _SYSTEM_PROMPT
+
+
 def test_think_validates_and_returns_a_selector_that_exists_on_the_live_page(fixture_portal_url):
     step = TrajectoryStep(
         index=0, kind="click", selector_candidates=[{"selector": "#does-not-exist", "rank": 0}],

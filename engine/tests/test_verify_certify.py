@@ -146,3 +146,32 @@ def test_certify_golden_script_once_returns_no_result_on_failure(tmp_path):
 
     assert ok is False
     assert result is None
+
+
+def test_certify_once_passes_an_isolated_diagnostics_directory_to_a_golden(tmp_path):
+    """Certification must invoke the emitted script as a genuine standalone
+    run while giving that process its own failure-evidence directory."""
+    from atlas_engine.verify.certify import certify_golden_script_once
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(textwrap.dedent('''
+        import argparse
+        import json
+        from pathlib import Path
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--diagnostics-dir")
+        args = parser.parse_args()
+        Path(args.diagnostics_dir, "received.txt").write_text("yes")
+        print(json.dumps({"diagnostics_dir": args.diagnostics_dir}))
+    '''))
+    diagnostics_dir = tmp_path / "certify-1"
+
+    ok, failure_output, result = certify_golden_script_once(
+        script_path, diagnostics_dir=diagnostics_dir,
+    )
+
+    assert ok is True
+    assert failure_output is None
+    assert result == {"diagnostics_dir": str(diagnostics_dir)}
+    assert (diagnostics_dir / "received.txt").read_text() == "yes"

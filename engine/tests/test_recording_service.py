@@ -19,6 +19,7 @@ from atlas_engine.db.models import (
     VideoStep,
 )
 from atlas_engine.recording_service import (
+    build_extraction_specs,
     create_recording_request,
     list_page_extractions,
     persist_recording,
@@ -253,6 +254,33 @@ def test_persist_recording_stores_codegen_script(fixture_portal_url):
         )
 
 
+def test_persist_recording_stores_rich_capture_trace_and_har_artifacts(tmp_path, fixture_portal_url):
+    """Trace/HAR are captured with the recording and retained next to its
+    native codegen so authoring has the same reference evidence as the old
+    pipeline, without introducing a duplicate persistence path."""
+    with session_scope() as session:
+        org = Organization(name="Rich Capture Org", slug=f"rich-capture-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    trace = tmp_path / "trace.zip"
+    har = tmp_path / "network.har"
+    trace.write_bytes(b"trace-bytes")
+    har.write_text('{"log": {"entries": []}}')
+
+    recording_id = persist_recording(
+        org_id, f"{fixture_portal_url}/login.html", [],
+        capture_artifacts=[("trace.zip", trace), ("network.har", har)],
+    )
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        prefix = Path(settings.run_root) / recording.capture_blob_prefix
+    assert (prefix / "trace.zip").read_bytes() == b"trace-bytes"
+    assert (prefix / "network.har").read_text() == '{"log": {"entries": []}}'
+
+
 def test_persist_recording_without_codegen_writes_no_file(fixture_portal_url):
     with session_scope() as session:
         org = Organization(name="No Codegen Org", slug=f"no-codegen-org-{uuid.uuid4()}")
@@ -344,6 +372,81 @@ def test_list_page_extractions_returns_empty_list_when_none_exist(fixture_portal
     recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
 
     assert list_page_extractions(recording_id) == []
+
+
+def test_build_extraction_specs_aligns_recorded_data_with_extract_steps():
+    """build_extraction_specs must compile a recording's captured extraction
+    data (fields/tables spec + read modes, as SERIALIZER discovers them) into
+    the ExtractionSpec mapping the golden emits _extract_<name>(scope) from —
+    keyed by the extract step's index so mid-flow checkpoints land correctly."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "click", [{"selector": "#open", "rank": 0}], None, "none"),
+        TrajectoryStep(1, "extract", [], None, "none"),
+        TrajectoryStep(2, "click", [{"selector": "#next", "rank": 0}], None, "none"),
+        TrajectoryStep(3, "extract", [], None, "none"),
+    ))
+    page_extractions = [
+        {
+            "page_index": 0,
+            "url": "https://portal.test/extraction_target.html",
+            "data": {
+                "fields": {"mrn": "MRN-4821"},
+                "tables": [],
+                "spec": {
+                    "fields": [
+                        {"name": "mrn", "selector": "[data-lbl=MRN]", "read": "text"},
+                    ],
+                    "tables": [],
+                },
+            },
+        },
+        {
+            "page_index": 1,
+            "url": "https://portal.test/details.html",
+            "data": {
+                "fields": {"dob": "1990-01-01"},
+                "tables": [],
+                "spec": {
+                    "fields": [
+                        {"name": "dob", "selector": "#dob", "read": "attr", "attr": "value"},
+                    ],
+                    "tables": [],
+                },
+            },
+        },
+    ]
+
+    specs = build_extraction_specs(trajectory, page_extractions)
+
+    # The two extract steps (indexes 1 and 3) get their specs in order.
+    assert set(specs) == {1, 3}
+    assert specs[1]["fields"][0]["selector"] == "[data-lbl=MRN]"
+    assert specs[3]["fields"][0]["read"] == "attr"
+    assert specs[3]["fields"][0]["attr"] == "value"
+    # Default names are derived from the step index.
+    assert specs[1].get("name") == "extract_1"
+    assert specs[3].get("name") == "extract_3"
+
+
+def test_build_extraction_specs_skips_rows_without_spec_and_mismatched_counts():
+    """A recorded extraction with no spec (legacy rows) must be skipped, and
+    extra rows beyond the extract-step count must not misalign later specs."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "extract", [], None, "none"),
+    ))
+    page_extractions = [
+        {"page_index": 0, "url": "u1", "data": {"fields": {"a": "1"}, "tables": []}},  # no spec
+        {"page_index": 1, "url": "u2", "data": {"spec": {"fields": [{"name": "b", "selector": "#b", "read": "text"}], "tables": []}}},
+    ]
+
+    specs = build_extraction_specs(trajectory, page_extractions)
+
+    assert specs == {}
+    assert len(specs) == 0
 
 
 def test_get_recording_detail_synthesizes_codegen_script_when_missing(fixture_portal_url):

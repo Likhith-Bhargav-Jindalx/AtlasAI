@@ -48,6 +48,7 @@ def persist_recording(
     additional_pages: list[PageCapture] | None = None,
     page_extractions: list[dict] | None = None,
     codegen_script: str | None = None,
+    capture_artifacts: list[tuple[str, Path]] | None = None,
 ) -> uuid.UUID:
     """Persists a captured recording — actions.json, the extracted
     trajectory, one VideoAsset per page (main plus any tabs/popups opened
@@ -65,6 +66,14 @@ def persist_recording(
 
     if codegen_script is not None:
         run_dir.write_text("codegen.py", codegen_script)
+
+    # Rich reference evidence captured in the same browser session as the
+    # operator's actions. Keep it alongside codegen/actions rather than adding
+    # a second persistence model: authoring can resolve these stable blob refs
+    # under `recording.capture_blob_prefix` exactly as it does trajectory.json.
+    for filename, artifact_path in capture_artifacts or []:
+        if artifact_path.exists() and artifact_path.is_file() and artifact_path.stat().st_size > 0:
+            run_dir.write_bytes(filename, artifact_path.read_bytes())
 
     profile_data = infer_portal_profile(start_url, actions)
 
@@ -358,6 +367,31 @@ def list_page_extractions(recording_id: uuid.UUID) -> list[dict]:
             }
             for e in extractions
         ]
+
+
+def build_extraction_specs(
+    trajectory: "ReferenceTrajectory", page_extractions: list[dict] | None,
+) -> dict[int, dict]:
+    """Aligns a recording's captured extraction data with the trajectory's
+    extract steps and compiles each into an ExtractionSpec dict — the same
+    shape the previous app's plan.extractions carried (fields/tables with
+    selectors + read modes, scopeSelector, reportFrame, derived). Each
+    `# __ATLAS_EXTRACT__` marker/button click produces one extract step and
+    one PageExtraction row, in the same order, so they zip 1:1. An extract
+    step with no matching recorded extraction is left out — the golden then
+    falls back to the runtime DOM-walk for it."""
+    from atlas_engine.brain.models import ReferenceTrajectory
+
+    extract_steps = [s for s in trajectory.steps if s.kind == "extract"]
+    specs: dict[int, dict] = {}
+    for step, row in zip(extract_steps, page_extractions or []):
+        data = row.get("data") or {}
+        spec = dict(data.get("spec") or {})
+        if not spec:
+            continue
+        spec.setdefault("name", f"extract_{step.index}")
+        specs[step.index] = spec
+    return specs
 
 
 def _caption_for(action: RecordedAction) -> str:

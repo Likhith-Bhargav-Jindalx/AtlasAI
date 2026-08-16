@@ -2,7 +2,7 @@ import shutil
 
 from playwright.sync_api import sync_playwright
 
-from atlas_engine.capture.video import finalize_video, start_capture_context
+from atlas_engine.capture.video import capture_artifact_paths, finalize_video, start_capture_context
 
 
 def test_start_and_finalize_video_produces_a_playable_file(fixture_portal_url):
@@ -10,6 +10,8 @@ def test_start_and_finalize_video_produces_a_playable_file(fixture_portal_url):
         browser = playwright.chromium.launch(headless=False)
         context, page, started_at_ms, video_dir = start_capture_context(browser)
         try:
+            artifact_paths = capture_artifact_paths(context)
+            assert artifact_paths is not None
             page.goto(f"{fixture_portal_url}/login.html")
             page.fill("#username", "demo")
 
@@ -20,6 +22,11 @@ def test_start_and_finalize_video_produces_a_playable_file(fixture_portal_url):
             assert video_path.exists()
             assert video_path.stat().st_size > 0
             assert ended_at_ms >= started_at_ms
+            trace_path, har_path = artifact_paths
+            assert trace_path.exists()
+            assert trace_path.stat().st_size > 0
+            assert har_path.exists()
+            assert har_path.stat().st_size > 0
         finally:
             shutil.rmtree(video_dir, ignore_errors=True)
 

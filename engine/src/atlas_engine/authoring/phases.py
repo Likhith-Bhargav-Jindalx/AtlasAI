@@ -10,6 +10,7 @@ from atlas_engine.db import session_scope
 from atlas_engine.db.models import CertificationRun, GoldenScript, PageExtraction
 from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.llm.client import LlmClient
+from atlas_engine.recording_service import build_extraction_specs, list_page_extractions
 from atlas_engine.storage import get_store
 from atlas_engine.verify.certify import certify_golden_script_once
 
@@ -69,11 +70,13 @@ def run_golden_phase(
     phase) decides whether it becomes certified or partially_certified."""
     store = get_store()
     run_dir = store.new_run_dir(prefix="goldens")
+    extraction_specs = build_extraction_specs(trajectory, list_page_extractions(recording_id))
     script_text = emit_golden_script(
         trajectory, start_url=start_url,
         portal_domain=portal_domain, portal_name=portal_name, confidence=confidence,
         success_signal=success_signal,
         pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+        extraction_specs=extraction_specs,
     )
     script_blob_ref = run_dir.write_text("golden.py", script_text)
     script_path = run_dir.path / "golden.py"
@@ -120,7 +123,14 @@ def run_certify_phase(
     persisted = already_persisted
     for i in range(1, runs + 1):
         run_number = run_number_offset + i
-        ok, failure_output, certify_result = certify_golden_script_once(script_path)
+        # Every standalone run gets a fresh diagnostics directory. Without
+        # this, the emitted script's default `diagnostics/` path is shared by
+        # all certification attempts and later failures overwrite the first
+        # run's screenshot/HTML evidence.
+        diagnostics_dir = script_path.parent / f"certify-{run_number}"
+        ok, failure_output, certify_result = certify_golden_script_once(
+            script_path, diagnostics_dir=diagnostics_dir,
+        )
 
         failure_ref = None
         if not ok:

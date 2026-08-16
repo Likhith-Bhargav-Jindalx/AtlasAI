@@ -11,7 +11,7 @@ from playwright.sync_api import sync_playwright
 from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers
 from atlas_engine.capture.extraction import attach_extraction_button, collect_page_data
 from atlas_engine.capture.recorder import CaptureSession
-from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
+from atlas_engine.capture.video import capture_artifact_paths, finalize_video, start_capture_context, video_path_for_page
 from atlas_engine.recording_service import PageCapture, persist_recording
 
 logger = logging.getLogger(__name__)
@@ -164,6 +164,7 @@ class _LiveCaptureSession:
                         video_ended_at_ms=int(time.time() * 1000),
                     ))
 
+                artifact_paths = capture_artifact_paths(context)
                 video_path, video_ended_at_ms = finalize_video(context, page)
                 try:
                     browser.close()
@@ -188,6 +189,10 @@ class _LiveCaptureSession:
                 additional_pages=additional_pages,
                 page_extractions=pending_extractions,
                 codegen_script=codegen_script,
+                capture_artifacts=(
+                    [("trace.zip", artifact_paths[0]), ("network.har", artifact_paths[1])]
+                    if artifact_paths is not None else None
+                ),
             )
         except Exception as exc:  # surfaced to the caller of stop()
             self.error = exc
