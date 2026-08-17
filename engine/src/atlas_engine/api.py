@@ -17,6 +17,7 @@ from atlas_engine.auth.deps import CurrentUser, get_current_user, require_job_fu
 from atlas_engine.auth.passwords import verify_password
 from atlas_engine.auth.session import create_session_token, verify_session_token
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
+from atlas_engine.authoring_export import export_recording_for_authoring
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.cli import author_from_recorded_actions
 from atlas_engine.db import session_scope
@@ -27,9 +28,11 @@ from atlas_engine.db.models import (
     GoldenScript,
     HealEvent,
     Recording,
+    RecordingRequest,
     User,
     VideoAsset,
 )
+from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.llm.usage import list_llm_usage_summary
@@ -360,6 +363,111 @@ def stop_authoring_run_endpoint(
         # request is still durable: it takes effect at the next checkpoint.
         return {"ok": True, "status": "stopping"}
     return {"ok": True}
+
+
+@app.get("/recordings/{recording_id}/export-for-authoring")
+def export_recording_for_authoring_endpoint(
+    recording_id: str, _user: CurrentUser = Depends(require_job_function("developer")),
+) -> dict:
+    """Everything the authoring pipeline needs to run against this
+    recording, for a remote client (the desktop exe's local scratch
+    environment) to import and author from locally — see
+    atlas_engine.authoring_export and desktop/local_authoring.py."""
+    try:
+        return export_recording_for_authoring(uuid.UUID(recording_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+class SubmitAuthoringResultResponse(BaseModel):
+    golden_script_id: str
+    authoring_run_id: str
+
+
+@app.post("/recordings/{recording_id}/submit-authoring-result", response_model=SubmitAuthoringResultResponse)
+async def submit_authoring_result_endpoint(
+    recording_id: str,
+    golden_status: str = Form(...),
+    script_text: str = Form(...),
+    certification_runs: str = Form(...),
+    events: str = Form(...),
+    repair_attempt: int = Form(0),
+    evidence_files: list[UploadFile] = File(default=[]),
+    _user: CurrentUser = Depends(require_job_function("developer")),
+) -> SubmitAuthoringResultResponse:
+    """Accepts the final result of an authoring run that ran on a remote
+    client's own machine (the desktop exe's local scratch environment,
+    per docs/superpowers/specs/2026-08-17-desktop-exe-packaging-design.md)
+    and persists it exactly as a locally-run authoring run would, on this
+    deployed backend's own database and blob store. The actual
+    replay/brain/certify work already happened on the client's machine —
+    it has to; authoring replays against the real target portal, the same
+    live-network requirement recording has. This endpoint only records
+    the outcome.
+
+    evidence_files are matched to certification runs by filename
+    ("evidence-<run_number>.png") rather than position, since a client
+    only uploads evidence for the runs that actually failed.
+    """
+    with session_scope() as session:
+        recording = session.get(Recording, uuid.UUID(recording_id))
+        if recording is None:
+            raise HTTPException(status_code=404, detail=f"No such recording: {recording_id}")
+        org_id = recording.org_id
+        portal_profile_id = recording.portal_profile_id
+        request_id = recording.request_id
+
+    store = get_store()
+    run_dir = store.new_run_dir(prefix="goldens")
+    script_blob_ref = run_dir.write_text("golden.py", script_text)
+
+    evidence_by_run: dict[int, str] = {}
+    for upload in evidence_files:
+        name = upload.filename or ""
+        try:
+            run_number = int(name.removeprefix("evidence-").removesuffix(".png"))
+        except ValueError:
+            continue
+        evidence_by_run[run_number] = run_dir.write_bytes(name, await upload.read())
+
+    with session_scope() as session:
+        golden = GoldenScript(
+            org_id=org_id, portal_profile_id=portal_profile_id,
+            version=next_golden_script_version(session, portal_profile_id),
+            script_blob_ref=script_blob_ref, status=golden_status,
+            created_from_recording_id=uuid.UUID(recording_id),
+        )
+        session.add(golden)
+        session.flush()
+        golden_script_id = golden.id
+
+        authoring_run = AuthoringRun(
+            org_id=org_id, recording_id=uuid.UUID(recording_id), golden_script_id=golden_script_id,
+            status="completed", current_phase="done", repair_attempt=repair_attempt,
+        )
+        session.add(authoring_run)
+        session.flush()
+        authoring_run_id = authoring_run.id
+
+        for event in json.loads(events):
+            session.add(AuthoringRunEvent(
+                authoring_run_id=authoring_run_id, phase=event["phase"], step_index=event.get("step_index"),
+                level=event.get("level", "info"), message=event["message"],
+            ))
+
+        for run in json.loads(certification_runs):
+            session.add(CertificationRun(
+                authoring_run_id=authoring_run_id, run_number=run["run_number"], status=run["status"],
+                failure_evidence_blob_ref=evidence_by_run.get(run["run_number"]),
+            ))
+
+        if golden_status == "certified" and request_id is not None:
+            request = session.get(RecordingRequest, request_id)
+            if request is not None:
+                request.status = "fulfilled"
+                request.fulfilled_golden_script_id = golden_script_id
+
+    return SubmitAuthoringResultResponse(golden_script_id=str(golden_script_id), authoring_run_id=str(authoring_run_id))
 
 
 class LoginBody(BaseModel):
