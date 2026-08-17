@@ -36,10 +36,14 @@ class _ReusableHTTPServer(HTTPServer):
 
 
 class FixturePortalServer:
-    def __init__(self, port: int = 8731):
-        self.port = port
+    def __init__(self, port: int = 0):
+        """port=0 (the default) binds an OS-assigned free port instead of a
+        fixed one — required for pytest-xdist, where each worker process
+        creates its own instance of this session-scoped fixture and a fixed
+        port would collide across workers."""
         self._httpd = _ReusableHTTPServer(("127.0.0.1", port), _Handler)
         self._httpd.drift_mode = False
+        self.port = self._httpd.server_address[1]
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
     @property
