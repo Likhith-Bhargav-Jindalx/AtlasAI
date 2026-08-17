@@ -15,6 +15,16 @@ os.environ.setdefault(
 )
 os.environ.setdefault("ATLAS_RUN_ROOT", "/tmp/atlas-engine-test-runs")
 
+# Force-override (not setdefault) — a developer's real engine/.env may
+# legitimately point ATLAS_AZURE_STORAGE_CONNECTION_STRING at a real
+# production storage account for manual local runs against prod. The test
+# suite must NEVER pick that up: individual tests that actually want to
+# exercise Azure storage (test_storage_get_store.py,
+# test_storage_azure_blob.py) monkeypatch their own fake/Azurite
+# connection string, so nothing here needs the real one.
+os.environ["ATLAS_AZURE_STORAGE_CONNECTION_STRING"] = ""
+os.environ["ATLAS_REQUIRE_AZURE_STORAGE"] = "false"
+
 import pytest  # noqa: E402
 
 from tests.fixtures.fixture_portal.server import FixturePortalServer  # noqa: E402

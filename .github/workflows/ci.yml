@@ -16,10 +16,11 @@ jobs:
         # separate matrix JOBS multiplies that by however many shards run
         # concurrently (each gets its own isolated 4-core runner + Postgres
         # service), instead of everything fighting over one runner's cores.
-        # pytest-split divides the collected tests into `group` of `splits`
-        # roughly evenly by count (no recorded durations file committed
-        # yet, so it can't balance by actual runtime — still a ~3x win).
-        group: [1, 2, 3]
+        # pytest-split divides tests using engine/.test_durations (recorded
+        # via `pytest --store-durations`) so groups are balanced by actual
+        # runtime, not just test count -- the heavy real-browser/certify
+        # tests don't all land in one shard.
+        group: [1, 2, 3, 4]
     services:
       postgres:
         image: postgres:16-alpine
@@ -69,7 +70,7 @@ jobs:
         # --splits/--group sharding above; the fixture portal server binds
         # an OS-assigned port specifically so each worker's own instance
         # doesn't collide with the others.
-        run: xvfb-run -a pytest --splits 3 --group ${{ matrix.group }} -n auto -v
+        run: xvfb-run -a pytest --splits 4 --group ${{ matrix.group }} -n auto -v
 
   frontend-tests:
     runs-on: ubuntu-latest
