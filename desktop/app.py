@@ -53,7 +53,13 @@ def main() -> None:
     threading.Thread(target=_run_server, daemon=True).start()
     time.sleep(1.5)
 
-    webview.create_window("Atlas AI", f"http://127.0.0.1:{PORT}/", width=1280, height=800)
+    # "localhost", not "127.0.0.1" — the frontend's compiled JS calls
+    # http://localhost:8000 by default (VITE_API_BASE_URL's fallback), and
+    # browsers treat 127.0.0.1 and localhost as different origins even
+    # though they resolve to the same machine. Loading the window from a
+    # different origin than the frontend's own fetch calls turns every API
+    # request into a cross-origin one the CORS allowlist doesn't cover.
+    webview.create_window("Atlas AI", f"http://localhost:{PORT}/", width=1280, height=800)
     webview.start()
 
 
