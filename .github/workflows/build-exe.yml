@@ -71,3 +71,8 @@ jobs:
         with:
           name: atlas-desktop-windows
           path: dist/atlas-desktop/
+          # The vendored browser lives under a dot-prefixed .local-browsers
+          # directory (Playwright's own naming convention for
+          # PLAYWRIGHT_BROWSERS_PATH=0) — upload-artifact excludes hidden
+          # files by default, which silently dropped it from earlier builds.
+          include-hidden-files: true
