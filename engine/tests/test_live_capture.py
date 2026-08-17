@@ -90,6 +90,37 @@ def test_stop_live_capture_raises_for_an_unknown_session():
         stop_live_capture(uuid.uuid4())
 
 
+def test_stop_live_capture_stays_retryable_after_a_timeout(fixture_portal_url):
+    """Regression: a slow persist_fn (e.g. a real Azure Blob upload over a
+    real network) can legitimately outlast a short /stop timeout. The first
+    call must time out WITHOUT losing the session, so a second /stop call
+    for the same capture_session_id (the user clicking "Stop and review"
+    again after seeing an error) finds it still registered and just keeps
+    waiting, instead of raising "No active capture session" for a recording
+    that was never actually lost -- the exact bug this reproduces."""
+    with session_scope() as session:
+        org = Organization(name="Retry Capture Org", slug=f"retry-capture-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    release_persist = threading.Event()
+
+    def slow_persist(org_id_arg, start_url_arg, actions, **kwargs):
+        release_persist.wait(timeout=10)
+        return uuid.uuid4()
+
+    capture_session_id = start_live_capture(org_id, start_url, persist_fn=slow_persist)
+
+    with pytest.raises(TimeoutError):
+        stop_live_capture(capture_session_id, timeout=0.5)
+
+    release_persist.set()
+    recording_id = stop_live_capture(capture_session_id, timeout=10)
+    assert recording_id is not None
+
+
 def test_wait_for_stop_or_disconnect_detects_a_dead_page():
     from atlas_engine.live_capture import _wait_for_stop_or_disconnect
 

@@ -232,9 +232,29 @@ def start_live_capture(
     return session_id
 
 
-def stop_live_capture(capture_session_id: uuid.UUID, *, timeout: float = 30.0) -> uuid.UUID:
+def stop_live_capture(capture_session_id: uuid.UUID, *, timeout: float = 120.0) -> uuid.UUID:
+    """Persisting a recording uploads video/trace/har/actions to whatever
+    store is configured — real Azure Blob uploads over a real network can
+    legitimately take much longer than a local disk write, so a single
+    /stop call can time out even though the capture thread is still
+    working, not stuck. The session is only removed from the registry
+    once stop() actually completes (success or a real persist error) —
+    NOT on a timeout — so a second /stop call (e.g. the user clicking
+    "Stop and review" again after seeing an error) finds the same
+    still-running session and just keeps waiting on the same done_event,
+    instead of getting "No active capture session" for a recording that
+    was never actually lost."""
     with _registry_lock:
-        session = _sessions.pop(capture_session_id, None)
+        session = _sessions.get(capture_session_id)
     if session is None:
         raise ValueError(f"No active capture session: {capture_session_id}")
-    return session.stop(timeout=timeout)
+    try:
+        return session.stop(timeout=timeout)
+    finally:
+        # Only deregister once actually done (success or a real persist
+        # error) -- a TimeoutError means it's still running (most likely
+        # still uploading), so leave it registered for a retried /stop
+        # call to keep waiting on instead of erroring.
+        if session.done_event.is_set():
+            with _registry_lock:
+                _sessions.pop(capture_session_id, None)
