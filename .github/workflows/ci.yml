@@ -38,9 +38,15 @@ jobs:
       - name: Run migrations
         working-directory: engine
         run: alembic upgrade head
+      - name: Install Xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Run tests
         working-directory: engine
-        run: pytest -v
+        # Several tests exercise the real headed-browser recording path
+        # (headless=False is deliberate there — an agent watches their own
+        # actions while recording) — ubuntu-latest has no display server by
+        # default, so xvfb-run provides a virtual one.
+        run: xvfb-run -a pytest -v
 
   frontend-tests:
     runs-on: ubuntu-latest
