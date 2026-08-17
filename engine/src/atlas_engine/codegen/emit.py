@@ -56,7 +56,7 @@ def _settle_frames(pg, timeout_ms=15000):
     # "hidden" almost instantly.
     for _overlay_sel in ("#load", ".buildingUX", "#dvLoading"):
         try:
-            pg.locator(_overlay_sel).first.wait_for(state="hidden", timeout=8000)
+            pg.locator(_overlay_sel).first.wait_for(state="hidden", timeout=60000)
         except Exception:
             pass
     import time as _t
