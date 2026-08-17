@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
+from atlas_engine.observability import RequestIdMiddleware, configure_logging
+
 from atlas_engine.auth.deps import CurrentUser, get_current_user, require_job_function
 from atlas_engine.auth.passwords import verify_password
 from atlas_engine.auth.session import create_session_token, verify_session_token
@@ -40,6 +42,9 @@ from atlas_engine.storage import get_store
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, list_heal_events, reject_heal_event
 
 app = FastAPI(title="Atlas Engine Local API")
+
+configure_logging()
+app.add_middleware(RequestIdMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
