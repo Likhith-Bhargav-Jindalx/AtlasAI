@@ -1,0 +1,48 @@
+name: Build desktop exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "desktop/**"
+      - "engine/src/**"
+      - "frontend/src/**"
+      - ".github/workflows/build-exe.yml"
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install engine
+        working-directory: engine
+        run: pip install -e ".[dev]"
+
+      - name: Install desktop packaging deps
+        run: pip install -r desktop/requirements-desktop.txt
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build desktop exe
+        run: |
+          pyinstaller --onedir --windowed --name atlas-desktop --add-data "frontend/dist;frontend_dist" --paths engine/src desktop/app.py
+
+      - name: Upload exe artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-desktop-windows
+          path: dist/atlas-desktop/
