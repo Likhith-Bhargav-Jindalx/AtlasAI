@@ -1,3 +1,4 @@
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,8 @@ from atlas_engine.db.repo import get_or_create_portal_profile
 from atlas_engine.portal_profile.infer import infer_portal_profile
 from atlas_engine.storage import get_store
 from atlas_engine.trajectory.extract import extract_trajectory
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,25 +59,16 @@ def persist_recording(
     running any authoring. This is the recording module's one entrypoint;
     authoring_service.author_from_recording is the only thing that
     consumes what this produces.
+
+    The Recording row is created (status="capturing") before any artifact
+    upload is attempted, and is updated to status="captured" on success or
+    status="failed" on an unrecoverable upload error (after Task 3's
+    retries are exhausted) — so a network blip during upload leaves a
+    visibly-failed row behind instead of silently discarding a completed
+    recording session.
     """
     store = get_store()
     run_dir = store.new_run_dir(prefix="recordings")
-    run_dir.write_json("actions.json", [vars(a) for a in actions])
-
-    trajectory = extract_trajectory(actions)
-    trajectory_blob_ref = run_dir.write_json("trajectory.json", trajectory_to_dict(trajectory))
-
-    if codegen_script is not None:
-        run_dir.write_text("codegen.py", codegen_script)
-
-    # Rich reference evidence captured in the same browser session as the
-    # operator's actions. Keep it alongside codegen/actions rather than adding
-    # a second persistence model: authoring can resolve these stable blob refs
-    # under `recording.capture_blob_prefix` exactly as it does trajectory.json.
-    for filename, artifact_path in capture_artifacts or []:
-        if artifact_path.exists() and artifact_path.is_file() and artifact_path.stat().st_size > 0:
-            run_dir.write_bytes(filename, artifact_path.read_bytes())
-
     profile_data = infer_portal_profile(start_url, actions)
 
     with session_scope() as session:
@@ -89,7 +83,7 @@ def persist_recording(
         recording = Recording(
             org_id=uuid.UUID(org_id),
             portal_profile_id=profile.id,
-            status="captured",
+            status="capturing",
             capture_blob_prefix=run_dir.blob_ref,
             request_id=request_id,
             role=role,
@@ -97,44 +91,70 @@ def persist_recording(
         )
         session.add(recording)
         session.flush()
+        recording_id = recording.id
 
-        session.add(
-            ReferenceTrajectory(
-                recording_id=recording.id,
-                trajectory_blob_ref=trajectory_blob_ref,
-                step_count=len(trajectory.steps),
-            )
-        )
+    try:
+        run_dir.write_json("actions.json", [vars(a) for a in actions])
 
-        recording.duration_seconds = _persist_video_asset(
-            session, org_id, recording.id, run_dir, "video.webm", 0,
-            video_path, video_started_at_ms, video_ended_at_ms, actions,
-        )
+        trajectory = extract_trajectory(actions)
+        trajectory_blob_ref = run_dir.write_json("trajectory.json", trajectory_to_dict(trajectory))
 
-        for page_capture in (additional_pages or []):
-            _persist_video_asset(
-                session, org_id, recording.id, run_dir, f"video-page{page_capture.page_index}.webm",
-                page_capture.page_index, page_capture.video_path,
-                page_capture.video_started_at_ms, page_capture.video_ended_at_ms, page_capture.actions,
-            )
+        if codegen_script is not None:
+            run_dir.write_text("codegen.py", codegen_script)
 
-        for extraction in (page_extractions or []):
+        for filename, artifact_path in capture_artifacts or []:
+            if artifact_path.exists() and artifact_path.is_file() and artifact_path.stat().st_size > 0:
+                run_dir.write_bytes(filename, artifact_path.read_bytes())
+
+        with session_scope() as session:
+            recording = session.get(Recording, recording_id)
+
             session.add(
-                PageExtraction(
+                ReferenceTrajectory(
                     recording_id=recording.id,
-                    page_index=extraction["page_index"],
-                    url=extraction["url"],
-                    data=extraction["data"],
-                    extracted_at=datetime.now(timezone.utc),
+                    trajectory_blob_ref=trajectory_blob_ref,
+                    step_count=len(trajectory.steps),
                 )
             )
 
-        if request_id is not None:
-            request = session.get(RecordingRequest, request_id)
-            if request is not None and request.status == "open":
-                request.status = "submitted"
+            recording.duration_seconds = _persist_video_asset(
+                session, org_id, recording.id, run_dir, "video.webm", 0,
+                video_path, video_started_at_ms, video_ended_at_ms, actions,
+            )
 
-        recording_id = recording.id
+            for page_capture in (additional_pages or []):
+                _persist_video_asset(
+                    session, org_id, recording.id, run_dir, f"video-page{page_capture.page_index}.webm",
+                    page_capture.page_index, page_capture.video_path,
+                    page_capture.video_started_at_ms, page_capture.video_ended_at_ms, page_capture.actions,
+                )
+
+            for extraction in (page_extractions or []):
+                session.add(
+                    PageExtraction(
+                        recording_id=recording.id,
+                        page_index=extraction["page_index"],
+                        url=extraction["url"],
+                        data=extraction["data"],
+                        extracted_at=datetime.now(timezone.utc),
+                    )
+                )
+
+            if request_id is not None:
+                request = session.get(RecordingRequest, request_id)
+                if request is not None and request.status == "open":
+                    request.status = "submitted"
+
+            recording.status = "captured"
+    except Exception:
+        logger.exception(
+            "Failed to persist recording %s after it was created — marking it failed", recording_id
+        )
+        with session_scope() as session:
+            recording = session.get(Recording, recording_id)
+            if recording is not None:
+                recording.status = "failed"
+        raise
 
     return recording_id
 
