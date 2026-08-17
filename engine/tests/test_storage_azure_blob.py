@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from atlas_engine.storage.azure_blob import AzureBlobRunStore
+from atlas_engine.storage.azure_blob import AzureBlobRunStore, _with_retry
 
 _AZURITE_CONNECTION_STRING = (
     "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;"
@@ -119,3 +119,49 @@ def test_url_for_returns_a_sas_url():
     assert url is not None
     assert ref.split("/")[-1] in url
     assert "sig=" in url
+
+
+def test_with_retry_succeeds_after_transient_failures(monkeypatch):
+    monkeypatch.setattr("atlas_engine.storage.azure_blob.time.sleep", lambda _seconds: None)
+    calls = {"count": 0}
+
+    def flaky():
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise ConnectionError("transient")
+        return "ok"
+
+    result = _with_retry(flaky)
+
+    assert result == "ok"
+    assert calls["count"] == 3
+
+
+def test_with_retry_raises_after_exhausting_attempts(monkeypatch):
+    monkeypatch.setattr("atlas_engine.storage.azure_blob.time.sleep", lambda _seconds: None)
+
+    def always_fails():
+        raise ConnectionError("still broken")
+
+    with pytest.raises(ConnectionError, match="still broken"):
+        _with_retry(always_fails, attempts=3)
+
+
+def test_run_dir_upload_goes_through_with_retry(monkeypatch):
+    import atlas_engine.storage.azure_blob as azure_blob_module
+
+    store = _store()
+    calls = []
+    original = azure_blob_module._with_retry
+
+    def spy(func, **kwargs):
+        calls.append(1)
+        return original(func, **kwargs)
+
+    monkeypatch.setattr(azure_blob_module, "_with_retry", spy)
+
+    run = store.new_run_dir(prefix="goldens")
+    (run.path / "golden.py").write_text("print('golden')")
+    run.upload("golden.py")
+
+    assert calls == [1]
