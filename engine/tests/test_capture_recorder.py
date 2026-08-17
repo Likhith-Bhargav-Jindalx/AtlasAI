@@ -1,3 +1,5 @@
+import time
+
 from playwright.sync_api import sync_playwright
 
 from atlas_engine.capture.extraction import attach_extraction_button
@@ -55,7 +57,23 @@ def test_exit_after_browser_disconnected_finalizes_without_querying_the_page(fix
 
         capture = CaptureSession(page)
         capture.__enter__()
-        page.fill("#username", "demo")  # leaves one action pending
+        page.fill("#username", "demo")
+
+        # The fill's "input" event is captured client-side and relayed to
+        # _on_event via an exposed binding — a real CDP round-trip that
+        # page.fill() itself does not wait for (it only waits for the DOM
+        # value to be set and the in-browser event to dispatch). Every other
+        # test in this file reads capture.actions only after __exit__'s
+        # NORMAL path, whose wait_for_load_state call incidentally flushes
+        # that round-trip first — this test takes the disconnected-path
+        # branch instead, which has no such synchronization, so it must
+        # poll for the pending action to actually land or it flakes under
+        # load (observed in CI) rather than reliably "leaving one action
+        # pending" the instant fill() returns.
+        deadline = time.time() + 5
+        while capture._pending is None and time.time() < deadline:
+            page.wait_for_timeout(50)
+        assert capture._pending is not None  # leaves one action pending
 
         capture.mark_browser_disconnected()
         assert capture.browser_disconnected is True
