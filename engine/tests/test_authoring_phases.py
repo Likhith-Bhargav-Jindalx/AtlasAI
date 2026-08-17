@@ -199,12 +199,11 @@ def test_run_golden_phase_passes_portal_info_to_emit_golden_script(fixture_porta
 
 
 def _write_script_under_run_root(text: str) -> "Path":
-    """run_certify_phase computes failure-evidence blob_refs as paths
-    relative to settings.run_root (matching every other blob_ref in this
-    codebase) — so, like production's run_golden_phase, tests must place
-    the script under a real LocalRunStore run_dir, not an arbitrary tmp
-    directory, or a failing run would raise ValueError computing that
-    relative path."""
+    """Mirrors production's run_golden_phase by placing the script under a
+    real LocalRunStore run_dir rather than an arbitrary tmp directory —
+    not strictly required anymore (run_certify_phase's failure-evidence
+    writes go through get_store() independently of where script_path
+    lives), but keeps this test's setup representative of the real thing."""
     from pathlib import Path
 
     from atlas_engine.config import settings
@@ -266,6 +265,31 @@ def test_run_certify_phase_records_failure_evidence_for_a_broken_script(fixture_
         assert all(c.failure_evidence_blob_ref is not None for c in cert_runs)
         evidence_path = settings.run_root / cert_runs[0].failure_evidence_blob_ref
         assert "boom" in evidence_path.read_text()
+
+
+def test_run_certify_phase_records_failure_evidence_when_script_lives_outside_run_root(fixture_portal_url, tmp_path):
+    """Regression: production's golden scripts live under a LocalRunStore
+    run_dir (itself under settings.run_root) or, when Azure Blob storage
+    is configured, under a completely separate staging temp directory --
+    AzureBlobRunStore's local files are never actually under run_root at
+    all. The failure-evidence write must not assume script_path.relative_to
+    (settings.run_root) succeeds; tmp_path here stands in for that
+    Azure-staging case (some path with no relation to run_root)."""
+    _org_id, _profile_id, _recording_id, authoring_run_id = _make_authoring_run_for_golden(fixture_portal_url)
+    script_path = tmp_path / "golden.py"
+    script_path.write_text("import sys\nprint('boom', file=sys.stderr)\nsys.exit(1)\n")
+
+    passed, total, _persisted = run_certify_phase(script_path, authoring_run_id, runs=1)
+
+    assert passed == 0
+    assert total == 1
+    with session_scope() as session:
+        cert_runs = session.query(CertificationRun).filter_by(authoring_run_id=authoring_run_id).all()
+        assert cert_runs[0].failure_evidence_blob_ref is not None
+        blob_ref = cert_runs[0].failure_evidence_blob_ref
+
+    assert get_store().read_text(blob_ref) is not None
+    assert "boom" in get_store().read_text(blob_ref)
 
 
 def test_run_certify_phase_persists_extractions_and_uploads_downloads_on_first_success(

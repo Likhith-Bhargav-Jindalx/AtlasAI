@@ -134,9 +134,17 @@ def run_certify_phase(
 
         failure_ref = None
         if not ok:
-            evidence_path = script_path.parent / f"certify-{run_number}-failure.txt"
-            evidence_path.write_text(failure_output or "")
-            failure_ref = str(evidence_path.relative_to(settings.run_root))
+            # Goes through the store's own write_text (same as
+            # _persist_certify_result's authoring/<run_id>/results/ files
+            # below) rather than a raw Path.write_text +
+            # relative_to(settings.run_root) — that assumed every run_dir
+            # lives under settings.run_root, true for LocalRunStore but not
+            # AzureBlobRunStore, whose local staging files live under a
+            # separate temp directory and are never actually uploaded by a
+            # bare filesystem write.
+            failure_ref = get_store().write_text(
+                f"authoring/{authoring_run_id}/certify-{run_number}-failure.txt", failure_output or "",
+            )
 
         # C2: the CertificationRun row is recorded FIRST — a persistence
         # failure below must never leave a passing run without its row, and
