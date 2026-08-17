@@ -40,7 +40,23 @@ def _settle_frames(pg, timeout_ms: int = 3000) -> None:
     navigation, and resolving before they load fails. Signal = the set of frame
     URLs unchanged for 3 consecutive 500ms polls (~1.5s) — matches the previous
     app's runnerEmit.ts::_settle_frames exactly; settling on fewer/faster polls
-    declares a still-reloading frame tree stable too early."""
+    declares a still-reloading frame tree stable too early.
+
+    Also waits out common transient loading-overlay patterns (eCW's
+    "Building your user experience" spinner and similar) before every step
+    — mirrors the same check the emitted golden script's own _settle_frames
+    does (codegen/emit.py's _SETTLE_FRAMES_HELPER). These overlays live in
+    the top-level document, not an iframe, so the frame-URL-stability check
+    below can't see them; without this, brain-loop replay can time out
+    clicking an element the overlay is still covering, on any in-app
+    navigation — not just right after login. Best-effort and cheap when
+    absent: a selector matching nothing on this portal resolves as already
+    "hidden" almost instantly."""
+    for overlay_sel in ("#load", ".buildingUX", "#dvLoading"):
+        try:
+            pg.locator(overlay_sel).first.wait_for(state="hidden", timeout=8000)
+        except Exception:
+            pass
     deadline = time.monotonic() + timeout_ms / 1000.0
     prev = None
     stable = 0

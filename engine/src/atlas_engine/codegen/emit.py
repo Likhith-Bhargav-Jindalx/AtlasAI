@@ -44,6 +44,21 @@ def _settle_frames(pg, timeout_ms=15000):
     # reloads/attaches them on navigation) must finish loading before we act,
     # or a click/wait lands on an about:blank frame and times out. Signal = the
     # set of frame URLs unchanged for ~1.5s. Fast when idle; never hangs.
+    #
+    # Also waits out common transient loading-overlay patterns (eCW's
+    # "Building your user experience" spinner and similar) before every
+    # step, not just right after login — these can reappear on ANY in-app
+    # navigation and silently intercept pointer events on an otherwise
+    # visible, otherwise-clickable element underneath, which is what a bare
+    # frame-settle can't detect (the overlay lives in the top-level
+    # document, not an iframe). Best-effort and cheap when absent: a
+    # selector matching nothing on this portal resolves as already
+    # "hidden" almost instantly.
+    for _overlay_sel in ("#load", ".buildingUX", "#dvLoading"):
+        try:
+            pg.locator(_overlay_sel).first.wait_for(state="hidden", timeout=8000)
+        except Exception:
+            pass
     import time as _t
     deadline = _t.time() + timeout_ms / 1000.0
     prev = None; stable = 0
