@@ -11,6 +11,16 @@ import threading
 import time
 from pathlib import Path
 
+# Must be set before Playwright is imported anywhere in the process (the
+# atlas_engine import below pulls it in transitively). "0" tells Playwright
+# to look for its browsers inside its own package installation instead of
+# the machine's global cache (~/.cache/ms-playwright or platform equivalent)
+# — the browser was installed there for exactly this reason (see the
+# desktop exe packaging design doc), so a packaged build is fully
+# self-contained and doesn't depend on the target machine already having
+# Chromium installed.
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
+
 import uvicorn
 import webview
 from fastapi.staticfiles import StaticFiles

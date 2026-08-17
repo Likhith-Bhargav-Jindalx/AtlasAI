@@ -37,9 +37,34 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build desktop exe
+      # Vendors Chromium inside the playwright package (PLAYWRIGHT_BROWSERS_PATH=0)
+      # instead of the OS-level cache, so the built exe doesn't depend on the
+      # machine running it already having Chromium installed. Moved aside
+      # before the PyInstaller build and copied back into the frozen bundle
+      # afterward — PyInstaller's binary-processing step can't handle a
+      # vendored browser's nested app-bundle structure directly in the build
+      # (see desktop/build.sh, the equivalent local/macOS build script, for
+      # the full explanation).
+      - name: Vendor Chromium inside the playwright package
+        shell: bash
+        run: PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium
+
+      - name: Move the vendored browser aside for a clean build
+        shell: bash
         run: |
+          pkg_dir=$(python -c "import playwright, os; print(os.path.dirname(playwright.__file__))")
+          echo "PLAYWRIGHT_PKG_DIR=$pkg_dir" >> "$GITHUB_ENV"
+          mv "$pkg_dir/driver/package/.local-browsers" "$RUNNER_TEMP/local-browsers"
+
+      - name: Build desktop exe
+        shell: bash
+        run: |
+          rm -rf build dist atlas-desktop.spec
           pyinstaller --onedir --windowed --name atlas-desktop --add-data "frontend/dist;frontend_dist" --paths engine/src desktop/app.py
+
+      - name: Copy the vendored browser into the frozen bundle
+        shell: bash
+        run: cp -R "$RUNNER_TEMP/local-browsers" "dist/atlas-desktop/_internal/playwright/driver/package/.local-browsers"
 
       - name: Upload exe artifact
         uses: actions/upload-artifact@v4
