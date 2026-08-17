@@ -177,7 +177,7 @@ def parse_codegen_actions(codegen: str) -> list[CodegenAction]:
         if not line or line.startswith("#"):
             continue
 
-        with_block = re.match(r"^with \w+\.(expect_popup|expect_download)\(\)", line)
+        with_block = re.match(r"^with \w+\.(expect_popup|expect_download)\b", line)
         if with_block:
             expect_stack.append((indent, "popup" if with_block.group(1) == "expect_popup" else "download"))
             continue

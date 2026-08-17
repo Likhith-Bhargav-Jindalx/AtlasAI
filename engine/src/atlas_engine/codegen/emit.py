@@ -1074,13 +1074,36 @@ def _build_login_block(
     if submit_index in steps_by_index:
         body.append(_reindent_for_login_body(_emit_step(steps_by_index[submit_index])))
         consumed.add(submit_index)
+        post_idx = submit_index + 1
+        while post_idx in steps_by_index:
+            post_step = steps_by_index[post_idx]
+            post_sel = _best_selector(post_step).lower()
+            if any(term in post_sel for term in ["providerlicense", "modal", "dismiss", "skip", "later", "close", "cancel", "×", "\\u00d7"]):
+                consumed.add(post_idx)
+                post_idx += 1
+            else:
+                break
     body.append("    page.wait_for_timeout(5000)")
     body.append("")
     body.append("")
 
     body.append("def dismiss_post_login_continue(page):")
+    body.append("    for sel in [\"#load\", \".buildingUX\", \"#dvLoading\"]:")
+    body.append("        try:")
+    body.append('            page.locator(sel).first.wait_for(state="hidden", timeout=30000)')
+    body.append("        except Exception:")
+    body.append("            pass")
     body.append("    for _ in range(10):")
-    body.append('        candidates = ["role=button[name=\\"\\u00d7\\"]", "role=button[name=\\"Cancel\\"]"]')
+    body.append('        candidates = [')
+    body.append('            "role=button[name=\\"\\u00d7\\"]",')
+    body.append('            "role=button[name=\\"Cancel\\"]",')
+    body.append('            "role=button[name=\\"Skip\\"]",')
+    body.append('            "role=button[name=\\"Later\\"]",')
+    body.append('            "role=button[name=\\"Close\\"]",')
+    body.append('            "role=button[name=\\"OK\\"]",')
+    body.append('            "#providerLicense button",')
+    body.append('            ".modal button.close",')
+    body.append('        ]')
     body.append("        clicked = False")
     body.append("        for sel in candidates:")
     body.append("            loc = page.locator(sel).first")
@@ -1121,7 +1144,6 @@ def _build_login_block(
     body.append("            attempt_login_once(page, params)")
     if has_security:
         body.append("            handle_security_question(page, params, sec_state)")
-    body.append("            dismiss_post_login_continue(page)")
     if mfa_type == "manual":
         timeout_ms = mfa_cfg.get("timeout_ms") or 300000
         signal_selector = ""
@@ -1142,6 +1164,14 @@ def _build_login_block(
         body.append("                page.wait_for_timeout(500)")
         body.append(f"            if not ({signal_check}):")
         body.append('                raise Exception("login success signal never appeared")')
+    body.append("            for sel in [\"#load\", \".buildingUX\", \"#dvLoading\"]:")
+    body.append("                try:")
+    body.append('                    page.locator(sel).first.wait_for(state="hidden", timeout=30000)')
+    body.append("                except Exception:")
+    body.append("                    pass")
+    body.append("            page.wait_for_timeout(2000)")
+    body.append("            dismiss_post_login_continue(page)")
+    body.append("            _settle_frames(page)")
     body.append("            return")
     body.append("        except Exception as e:")
     if has_security:
@@ -1401,9 +1431,10 @@ def _emit_extract_checkpoint(name: str) -> list[str]:
 
 
 def _emit_download_step(action_lines: list[str]) -> list[str]:
-    """Wraps a download-triggering step's action lines in a page-scoped
-    `page.expect_download` wait, matching the previous app's golden emission."""
-    lines = ["with page.expect_download(timeout=300000) as _dl_info:"]
+    """Wraps a download-triggering step's action lines in a context-scoped
+    `page.context.expect_event("download")` wait so downloads from popups/frames
+    are captured reliably."""
+    lines = ["with page.context.expect_event(\"download\", timeout=300000) as _dl_info:"]
     lines.extend(f"    {line}" for line in action_lines)
     lines.append("_download = _dl_info.value")
     lines.append('_dl_dir = os.path.join(diagnostics_dir, "..", "results")')
@@ -1555,7 +1586,6 @@ def emit_golden_script(
         + "                _r[\"filesTransferred\"] = [f[\"filename\"] for f in _r[\"downloaded_files\"]]\n"
         + "                _r[\"inputs\"] = _row\n"
         + "                _results.append(_r)\n"
-        + "                _post_login_url = page.url\n"
         + "            return {\"batch\": _results}\n"
         + "        else:\n"
         + "            _r = run_flow(playwright, page, params, diagnostics_dir)\n"

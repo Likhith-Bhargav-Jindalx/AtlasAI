@@ -1095,8 +1095,7 @@ def test_download_step_emission_uses_page_scoped_expect_download():
     from atlas_engine.codegen.emit import _emit_download_step
     lines = _emit_download_step(["page1.get_by_role(\"link\", name=\"Excel data\").click()"])
     text = "\n".join(lines)
-    assert "with page.expect_download(timeout=300000)" in text
-    assert "expect_event(" not in text
+    assert 'with page.context.expect_event("download", timeout=300000)' in text
     assert 'result["downloaded_files"].append(' in text
     body = "\n".join(f"    {l}" for l in lines)
     script = "def run():\n" + body + "\n"
@@ -1104,11 +1103,9 @@ def test_download_step_emission_uses_page_scoped_expect_download():
 
 
 def test_download_step_emission_is_page_scoped():
-    """The download wait is page-scoped via `page.expect_download` (matching the
-    previous app's golden emission). It must never reference a bare `context`
-    binding — run_flow() receives (playwright, page, params, diagnostics_dir)
-    and has no `context` variable, a NameError the moment a download step
-    executed during certification."""
+    """The download wait is context-scoped via `page.context.expect_event` so
+    downloads across popups/frames are captured, while accessing context safely
+    via `page.context` without a bare `context` NameError."""
     from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
     from atlas_engine.codegen.emit import emit_golden_script
     trajectory = ReferenceTrajectory(steps=(
@@ -1119,8 +1116,7 @@ def test_download_step_emission_is_page_scoped():
         ),
     ))
     script = emit_golden_script(trajectory, start_url="https://x.com")
-    assert "with page.expect_download(timeout=300000)" in script
-    assert "expect_event(" not in script
+    assert 'with page.context.expect_event("download", timeout=300000)' in script
     compile(script, "<golden>", "exec")
 
 
