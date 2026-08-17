@@ -19,11 +19,11 @@ def _certify_env() -> dict[str, str]:
     already carry SECRET_* vars if create_llm_client ran) merged with the
     engine's .env file, found deterministically from the package root rather
     than the CWD. Real exported env vars win (dotenv_values only fills keys
-    that aren't already set). This is what guarantees a golden's
-    os.environ.get("SECRET_<DOMAIN>_USERNAME")/PASSWORD actually resolves —
-    a missing credential renders the username fill empty, eCW's "Next" never
-    advances, and the password field never appears (the exact certification
-    failure observed)."""
+    that aren't already set). Login username/password are baked into the
+    script itself now (as --username/--password argparse defaults), not
+    read from the environment — this still matters for the optional
+    email-OTP and security-question handlers, which do read their
+    credentials/answers via os.environ.get(...) at runtime."""
     env = dict(os.environ)
     dotenv_path = find_dotenv(usecwd=True)
     if not dotenv_path:

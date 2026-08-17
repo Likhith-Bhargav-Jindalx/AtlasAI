@@ -596,8 +596,20 @@ def _wrap_step_with_diagnostics(step_lines: list[str], step_index: int, label: s
 
 
 def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config: dict | None = None) -> str:
-    """Generates the argparse setup + params-dict construction."""
+    """Generates the argparse setup + params-dict construction. Secrets
+    (username/password) are baked in as --flag defaults exactly like every
+    other CLI param — the only difference from a plain CliParam is which
+    login-block generation path emit.py takes for that step, not how its
+    value reaches the script. Multiple password-matching steps (e.g. a
+    "confirm password" field) share a single --password flag, so only the
+    first is registered with argparse."""
     lines = ["    parser = argparse.ArgumentParser()"]
+    seen_secret_labels: set[str] = set()
+    for s in classified.secrets:
+        if s.label in seen_secret_labels:
+            continue
+        seen_secret_labels.add(s.label)
+        lines.append(f'    parser.add_argument("--{s.cli_name}", default={s.default_value!r})')
     for p in classified.params:
         lines.append(f'    parser.add_argument("--{p.cli_name}", default={p.default_value!r})')
     lines.append('    parser.add_argument("--headless", action="store_true", default=True)')
@@ -607,11 +619,16 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config:
     lines.append("    args = parser.parse_args()")
     lines.append("")
     lines.append("    params = {")
-    for s in classified.secrets:
-        lines.append(f'        "{s.label}": os.environ.get("{s.env_var}", ""),')
     lines.append('        "headless": args.headless,')
     lines.append('        "diagnostics_dir": args.diagnostics_dir,')
     lines.append("    }")
+    seen_secret_labels = set()
+    for s in classified.secrets:
+        if s.label in seen_secret_labels:
+            continue
+        seen_secret_labels.add(s.label)
+        attr = s.cli_name.replace("-", "_")
+        lines.append(f'    params["{s.label}"] = args.{attr}')
     for p in classified.params:
         attr = p.cli_name.replace("-", "_")
         lines.append(f'    params["{attr}"] = args.{attr}')

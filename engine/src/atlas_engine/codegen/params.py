@@ -8,7 +8,8 @@ from atlas_engine.brain.models import ReferenceTrajectory
 class SecretParam:
     step_index: int
     label: str
-    env_var: str
+    cli_name: str
+    default_value: str
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,6 @@ def _is_password_step(step) -> bool:
     )
 
 
-def _env_var(portal_domain: str, label: str) -> str:
-    sanitized = re.sub(r"[^A-Za-z0-9]+", "_", portal_domain).strip("_").upper()
-    return f"SECRET_{sanitized}_{label.upper()}"
-
-
 def _cli_name(step) -> str:
     """Derives a kebab-case CLI flag name from a step's selector — strips
     the leading '#'/'.', splits camelCase, replaces non-alphanumerics."""
@@ -54,12 +50,14 @@ def _cli_name(step) -> str:
 
 def classify_step_values(trajectory: ReferenceTrajectory, portal_domain: str) -> ClassifiedParams:
     """Decides, for every fill/type step in the trajectory, whether its
-    recorded value should be (a) a secret — never baked into the generated
-    script, read from an env var at runtime — or (b) a plain CLI parameter
-    — baked in as an overridable default. EVERY password-matching step
-    (fill or type) is classified "password", all sharing the identical env
-    var (a "confirm password" field should get the same value as the
-    first); the fill/type immediately preceding the FIRST password step —
+    recorded value should be (a) a secret — username/password — or (b) a
+    plain CLI parameter. Both are baked in as an overridable --flag default,
+    exactly the same mechanism; "secret" only affects which login-block
+    generation path emit.py takes for a step, not how its value reaches the
+    script. EVERY password-matching step (fill or type) is classified
+    "password", all sharing the identical --password flag (a "confirm
+    password" field should get the same value as the first); the fill/type
+    immediately preceding the FIRST password step —
     walking back over any intervening non-fill steps (focus clicks on the
     username/password fields, "Next" buttons on two-screen logins) — is
     classified "username". That special case is scoped to exactly the
@@ -71,12 +69,11 @@ def classify_step_values(trajectory: ReferenceTrajectory, portal_domain: str) ->
     secrets: list[SecretParam] = []
     secret_indices: set[int] = set()
     if password_indices:
-        password_env_var = _env_var(portal_domain, "password")
         for password_index in password_indices:
             password_step = steps[password_index]
             secrets.append(SecretParam(
                 step_index=password_step.index, label="password",
-                env_var=password_env_var,
+                cli_name="password", default_value=password_step.value or "",
             ))
             secret_indices.add(password_index)
 
@@ -110,7 +107,7 @@ def classify_step_values(trajectory: ReferenceTrajectory, portal_domain: str) ->
             username_step = steps[username_index]
             secrets.append(SecretParam(
                 step_index=username_step.index, label="username",
-                env_var=_env_var(portal_domain, "username"),
+                cli_name="username", default_value=username_step.value or "",
             ))
             secret_indices.add(username_index)
 

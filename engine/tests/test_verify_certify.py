@@ -24,18 +24,11 @@ def _write_fixture_golden(tmp_path: Path, fixture_portal_url: str) -> Path:
     return path
 
 
-def test_certify_golden_script_succeeds_when_every_run_succeeds(tmp_path, fixture_portal_url, monkeypatch):
-    # emit_golden_script now genuinely requires SECRET_* env vars at runtime
-    # for the login block (Task 11) — _write_fixture_golden doesn't pass
-    # portal_domain explicitly, so it gets the default "unknown", making the
-    # required names SECRET_UNKNOWN_USERNAME/SECRET_UNKNOWN_PASSWORD. The
-    # subprocess certify_golden_script_once launches inherits the current
-    # process's environment, so setting these here (matching the
-    # trajectory's own recorded fill values) lets the fixture portal's
-    # login.html accept them exactly as it did before Task 11.
-    monkeypatch.setenv("SECRET_UNKNOWN_USERNAME", "demo")
-    monkeypatch.setenv("SECRET_UNKNOWN_PASSWORD", "demo-pass")
-
+def test_certify_golden_script_succeeds_when_every_run_succeeds(tmp_path, fixture_portal_url):
+    # The login block's username/password are baked in as --username/
+    # --password argparse defaults (the recorded "demo"/"demo-pass" fill
+    # values), exactly like any other CLI param — no env var needed for the
+    # certify subprocess to log in.
     script_path = _write_fixture_golden(tmp_path, fixture_portal_url)
 
     result = certify_golden_script(script_path, runs=2)
@@ -55,15 +48,8 @@ def test_certify_golden_script_fails_when_a_run_fails(tmp_path):
     assert result.is_certified is False
 
 
-def test_certify_golden_script_once_returns_true_and_no_evidence_on_success(tmp_path, fixture_portal_url, monkeypatch):
+def test_certify_golden_script_once_returns_true_and_no_evidence_on_success(tmp_path, fixture_portal_url):
     from atlas_engine.verify.certify import certify_golden_script_once
-
-    # See the comment in test_certify_golden_script_succeeds_when_every_run_succeeds:
-    # emit_golden_script's login block now reads SECRET_UNKNOWN_USERNAME/
-    # SECRET_UNKNOWN_PASSWORD from the environment at runtime instead of
-    # baking in the recorded literal values.
-    monkeypatch.setenv("SECRET_UNKNOWN_USERNAME", "demo")
-    monkeypatch.setenv("SECRET_UNKNOWN_PASSWORD", "demo-pass")
 
     script_path = _write_fixture_golden(tmp_path, fixture_portal_url)
 

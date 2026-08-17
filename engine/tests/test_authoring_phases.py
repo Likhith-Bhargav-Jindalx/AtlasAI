@@ -217,18 +217,10 @@ def _write_script_under_run_root(text: str) -> "Path":
     return script_path
 
 
-def test_run_certify_phase_records_one_row_per_run_and_counts_passes(fixture_portal_url, monkeypatch):
-    # emit_golden_script now genuinely requires SECRET_* env vars at runtime
-    # for the login block (Task 11) — this test doesn't pass portal_domain
-    # explicitly, so it gets the default "unknown", making the required
-    # names SECRET_UNKNOWN_USERNAME/SECRET_UNKNOWN_PASSWORD. The subprocess
-    # certify_golden_script_once launches inherits the current process's
-    # environment, so setting these here (matching the trajectory's own
-    # recorded fill values) lets the fixture portal's login.html accept
-    # them exactly as it did before Task 11.
-    monkeypatch.setenv("SECRET_UNKNOWN_USERNAME", "demo")
-    monkeypatch.setenv("SECRET_UNKNOWN_PASSWORD", "demo-pass")
-
+def test_run_certify_phase_records_one_row_per_run_and_counts_passes(fixture_portal_url):
+    # The recorded username/password are baked in as --username/--password
+    # argparse defaults — no env var needed for the certify subprocess to
+    # log in.
     _org_id, _profile_id, _recording_id, authoring_run_id = _make_authoring_run_for_golden(fixture_portal_url)
     trajectory = ReferenceTrajectory(
         steps=(

@@ -1,8 +1,8 @@
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
-from atlas_engine.codegen.params import classify_step_values, _env_var, _cli_name
+from atlas_engine.codegen.params import classify_step_values, _cli_name
 
 
-def test_password_step_becomes_a_secret_with_a_domain_derived_env_var():
+def test_password_step_becomes_a_secret_baked_in_like_a_cli_param():
     trajectory = ReferenceTrajectory(steps=(
         TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
         TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
@@ -13,9 +13,11 @@ def test_password_step_becomes_a_secret_with_a_domain_derived_env_var():
 
     secrets_by_label = {s.label: s for s in result.secrets}
     assert secrets_by_label["password"].step_index == 1
-    assert secrets_by_label["password"].env_var == "SECRET_PORTAL_EXAMPLE_COM_PASSWORD"
+    assert secrets_by_label["password"].cli_name == "password"
+    assert secrets_by_label["password"].default_value == "hunter2"
     assert secrets_by_label["username"].step_index == 0
-    assert secrets_by_label["username"].env_var == "SECRET_PORTAL_EXAMPLE_COM_USERNAME"
+    assert secrets_by_label["username"].cli_name == "username"
+    assert secrets_by_label["username"].default_value == "demo"
 
 
 def test_username_is_not_classified_when_a_navigation_separates_fill_and_password():
@@ -103,18 +105,6 @@ def test_cli_name_derivation_strips_non_alphanumerics_and_camel_case():
 
 # Direct unit tests for helper functions
 
-def test_env_var_sanitizes_domain_with_dots():
-    """Verify _env_var converts dots to underscores and uppercases the label."""
-    assert _env_var("portal.example.com", "password") == "SECRET_PORTAL_EXAMPLE_COM_PASSWORD"
-    assert _env_var("portal.example.com", "username") == "SECRET_PORTAL_EXAMPLE_COM_USERNAME"
-
-
-def test_env_var_sanitizes_domain_with_hyphens_and_other_special_chars():
-    """Verify _env_var converts non-alphanumeric characters to underscores."""
-    assert _env_var("my-portal.site-name.org", "password") == "SECRET_MY_PORTAL_SITE_NAME_ORG_PASSWORD"
-    assert _env_var("portal@example_site.com", "username") == "SECRET_PORTAL_EXAMPLE_SITE_COM_USERNAME"
-
-
 def test_cli_name_plain_lowercase_selector():
     """Verify _cli_name handles plain lowercase selectors."""
     step = TrajectoryStep(0, "fill", [{"selector": "#search", "rank": 0}], "x", "none")
@@ -153,11 +143,11 @@ def test_type_kind_password_step_is_classified_as_a_secret_not_a_literal():
     assert 1 not in {p.step_index for p in result.params}
 
 
-def test_two_password_matching_steps_both_become_secrets_sharing_the_same_env_var():
+def test_two_password_matching_steps_both_become_secrets_sharing_the_same_cli_flag():
     """A flow with a second password field (re-auth/confirm-password) must
-    have BOTH steps classified as secrets, reading the identical env var —
-    not just the first one found, and not leaking the second as a literal
-    CliParam."""
+    have BOTH steps classified as secrets, sharing the identical --password
+    flag — not just the first one found, and not leaking the second as a
+    literal CliParam."""
     trajectory = ReferenceTrajectory(steps=(
         TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "demo", "none"),
         TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
@@ -168,8 +158,9 @@ def test_two_password_matching_steps_both_become_secrets_sharing_the_same_env_va
 
     password_secrets = [s for s in result.secrets if s.label == "password"]
     assert {s.step_index for s in password_secrets} == {1, 2}
-    assert len({s.env_var for s in password_secrets}) == 1
-    assert password_secrets[0].env_var == "SECRET_PORTAL_EXAMPLE_COM_PASSWORD"
+    assert len({s.cli_name for s in password_secrets}) == 1
+    assert password_secrets[0].cli_name == "password"
+    assert password_secrets[0].default_value == "hunter2"
     # Neither password step should leak through as a CliParam
     assert {p.step_index for p in result.params} == set()
     # The username special-case is still scoped to only the FIRST password step

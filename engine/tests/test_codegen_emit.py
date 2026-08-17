@@ -76,19 +76,11 @@ def test_emitted_golden_script_actually_runs_against_the_fixture_portal(fixture_
     script_path = tmp_path / "golden.py"
     script_path.write_text(script)
 
-    # This trajectory has fill/password steps, so (per Task 11) the
-    # username/password steps are now swept into the login() block, which
-    # reads credentials from env vars (portal_domain defaults to "unknown"
-    # here, so SECRET_UNKNOWN_USERNAME/SECRET_UNKNOWN_PASSWORD) rather than
-    # baking the recorded literal values into the script — supply them so
-    # login actually succeeds and the flow reaches the dashboard, exactly
-    # as it did when the values were baked in literally before this task.
-    import os
-    env = dict(os.environ)
-    env["SECRET_UNKNOWN_USERNAME"] = "demo"
-    env["SECRET_UNKNOWN_PASSWORD"] = "demo-pass"
+    # The username/password steps are swept into the login() block, whose
+    # main() bakes the recorded "demo"/"demo-pass" values in as --username/
+    # --password defaults — no env vars needed for login to succeed.
     result = subprocess.run(
-        [sys.executable, str(script_path)], capture_output=True, text=True, timeout=30, env=env,
+        [sys.executable, str(script_path)], capture_output=True, text=True, timeout=30,
     )
 
     assert result.returncode == 0, result.stderr
@@ -423,18 +415,43 @@ def test_argparse_block_declares_one_cli_flag_per_param_with_recorded_default():
     assert 'params["start_date"] = args.start_date' in block
 
 
-def test_argparse_block_reads_secrets_from_env_not_cli():
+def test_argparse_block_declares_secrets_as_cli_flags_with_recorded_defaults():
     from atlas_engine.codegen.emit import _build_argparse_and_main_params
     from atlas_engine.codegen.params import ClassifiedParams, SecretParam
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        secrets=(
+            SecretParam(0, "username", "username", "demo"),
+            SecretParam(1, "password", "password", "hunter2"),
+        ),
         params=(),
     )
     block = _build_argparse_and_main_params(classified)
-    assert 'os.environ.get("SECRET_X_USERNAME"' in block
-    assert 'os.environ.get("SECRET_X_PASSWORD"' in block
-    assert '"--username"' not in block
-    assert '"--password"' not in block
+    assert '"--username"' in block
+    assert "default='demo'" in block
+    assert '"--password"' in block
+    assert "default='hunter2'" in block
+    assert 'params["username"] = args.username' in block
+    assert 'params["password"] = args.password' in block
+    assert "os.environ.get" not in block
+
+
+def test_argparse_block_registers_one_flag_per_duplicated_password_secret():
+    """A confirm-password field shares the SAME --password flag as the first
+    password step — argparse would error on a duplicate --password
+    registration, so the second SecretParam with the same label must be
+    skipped, not re-registered."""
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    classified = ClassifiedParams(
+        secrets=(
+            SecretParam(0, "password", "password", "hunter2"),
+            SecretParam(1, "password", "password", "hunter2"),
+        ),
+        params=(),
+    )
+    block = _build_argparse_and_main_params(classified)
+    assert block.count('"--password"') == 1
+    assert block.count('params["password"] = args.password') == 1
 
 
 def test_argparse_block_always_declares_headless_and_diagnostics_dir():
@@ -491,7 +508,7 @@ def test_login_block_emits_retry_wrapper_and_success_signal_wait():
         TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(0, "username", "username", "demo"), SecretParam(1, "password", "password", "hunter2")),
         params=(),
     )
     block, consumed = _build_login_block(
@@ -514,7 +531,7 @@ def test_login_block_verifies_via_url_contains_when_no_locator_signal_given():
         TrajectoryStep(0, "fill", [{"selector": "#password", "rank": 0}], "hunter2", "none"),
         TrajectoryStep(1, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
-    classified = ClassifiedParams(secrets=(SecretParam(0, "password", "SECRET_X_PASSWORD"),), params=())
+    classified = ClassifiedParams(secrets=(SecretParam(0, "password", "password", "hunter2"),), params=())
     block, _consumed = _build_login_block(
         trajectory, classified, success_signal={"url_contains": "/dashboard"},
     )
@@ -523,9 +540,11 @@ def test_login_block_verifies_via_url_contains_when_no_locator_signal_given():
 
 
 def test_login_block_never_embeds_the_recorded_secret_literal():
-    """The generated login block must read params[...] at runtime, never bake
-    in the actual recorded credential text — that's the whole point of this
-    feature (a real recording previously hardcoded a real username/password)."""
+    """The generated login block itself must read params[...] at runtime,
+    never splice the recorded credential text directly into its body — the
+    literal value lives only in main()'s argparse default (see
+    _build_argparse_and_main_params), not duplicated into the login
+    function."""
     from atlas_engine.codegen.emit import _build_login_block
     from atlas_engine.codegen.params import ClassifiedParams, SecretParam
     trajectory = ReferenceTrajectory(steps=(
@@ -534,7 +553,7 @@ def test_login_block_never_embeds_the_recorded_secret_literal():
         TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(0, "username", "username", "demo"), SecretParam(1, "password", "password", "hunter2")),
         params=(),
     )
     block, _consumed = _build_login_block(trajectory, classified, success_signal=None)
@@ -558,7 +577,7 @@ def test_login_block_replays_a_next_click_between_username_and_password():
         TrajectoryStep(3, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(2, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(0, "username", "username", "demo"), SecretParam(2, "password", "password", "hunter2")),
         params=(),
     )
     block, consumed = _build_login_block(trajectory, classified, success_signal=None)
@@ -584,7 +603,7 @@ def test_login_block_renavigates_on_every_attempt_and_guards_the_next_click():
         TrajectoryStep(3, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(2, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(0, "username", "username", "demo"), SecretParam(2, "password", "password", "hunter2")),
         params=(),
     )
     block, consumed = _build_login_block(
@@ -616,7 +635,7 @@ def test_login_block_emits_single_screen_login_without_guard_when_no_next_step()
         TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(0, "username", "username", "demo"), SecretParam(1, "password", "password", "hunter2")),
         params=(),
     )
     block, consumed = _build_login_block(
@@ -648,7 +667,7 @@ def test_login_block_consumes_the_focus_click_on_the_username_field():
         TrajectoryStep(5, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(1, "username", "SECRET_X_USERNAME"), SecretParam(4, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(1, "username", "username", "demo"), SecretParam(4, "password", "password", "hunter2")),
         params=(),
     )
     block, consumed = _build_login_block(trajectory, classified, success_signal=None)
@@ -678,7 +697,7 @@ def test_login_block_reindents_hover_click_steps_without_indentation_errors():
         TrajectoryStep(2, "hover_click", [{"selector": "#login-btn", "rank": 0}], None, "none"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(0, "username", "username", "demo"), SecretParam(1, "password", "password", "hunter2")),
         params=(),
     )
     block, consumed = _build_login_block(trajectory, classified, success_signal=None)
@@ -1168,19 +1187,17 @@ def test_emit_golden_script_produces_a_runnable_script_with_login_and_result_con
     script_path = tmp_path / "golden.py"
     script_path.write_text(script)
 
-    import os
-    env = dict(os.environ)
-    env["SECRET_FIXTURE_TEST_USERNAME"] = "demo"
-    env["SECRET_FIXTURE_TEST_PASSWORD"] = "demo-pass"
     result = subprocess.run(
         [sys.executable, str(script_path), "--diagnostics-dir", str(tmp_path / "diag")],
-        capture_output=True, text=True, timeout=30, env=env,
+        capture_output=True, text=True, timeout=30,
     )
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout.strip().splitlines()[-1])
     assert "fileCount" in payload
-    assert "demo-pass" not in script  # the real secret is never in the file text
+    # The recorded credential is baked in as the --password default (same
+    # mechanism as every other CLI param) — no env var needed to log in.
+    assert "demo-pass" in script
 
 
 def test_emit_golden_script_omits_login_and_secrets_with_no_password_step():
@@ -1449,7 +1466,7 @@ def _login_trajectory():
         TrajectoryStep(2, "click", [{"selector": "#login-btn", "rank": 0}], None, "url_changed"),
     ))
     classified = ClassifiedParams(
-        secrets=(SecretParam(0, "username", "SECRET_X_USERNAME"), SecretParam(1, "password", "SECRET_X_PASSWORD")),
+        secrets=(SecretParam(0, "username", "username", "demo"), SecretParam(1, "password", "password", "hunter2")),
         params=(),
     )
     return trajectory, classified
