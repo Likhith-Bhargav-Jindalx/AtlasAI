@@ -1,15 +1,15 @@
 """Desktop shell entrypoint: runs a FastAPI app locally and shows the built
 frontend in a native pywebview window instead of a browser tab.
 
-Two modes, chosen by whether ATLAS_REMOTE_BACKEND_URL is set:
-- Unset (default): runs the full atlas_engine FastAPI app locally, exactly
-  like `npm run dev` + `uvicorn` do today, targeting local Postgres/storage.
-- Set: runs remote_app's thin local server instead — it drives the browser
-  capture on this machine (that part is inherently local) but submits
-  finished recordings to the deployed backend over HTTPS and proxies
-  everything else there too, so this machine never needs direct database
-  or blob storage credentials. See docs/superpowers/specs/
-  2026-08-17-desktop-exe-packaging-design.md for the full design.
+Always runs the full atlas_engine FastAPI app in-process — this exe talks
+directly to Postgres and Azure Blob Storage, with no deployed backend in
+between. In dev (unfrozen), that means whatever engine/.env points at
+(local Postgres/disk, same as `npm run dev` + `uvicorn` today). In a
+packaged build, desktop/production.env is baked into the bundle at build
+time (see desktop/build.sh) and loaded here before atlas_engine.config's
+Settings singleton is constructed, so every double-clicked copy of the exe
+connects straight to the real production database and blob storage —
+no server to deploy, no setup step for whoever runs it.
 """
 
 import os
@@ -28,12 +28,7 @@ from pathlib import Path
 # Chromium installed.
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
 
-import uvicorn
-import webview
-from fastapi.staticfiles import StaticFiles
-
 PORT = int(os.environ.get("ATLAS_DESKTOP_PORT", "8000"))
-REMOTE_BACKEND_URL = os.environ.get("ATLAS_REMOTE_BACKEND_URL")
 
 
 def _resource_path(relative: str) -> Path:
@@ -44,37 +39,52 @@ def _resource_path(relative: str) -> Path:
     return base / relative
 
 
-def _build_fastapi_app():
-    if REMOTE_BACKEND_URL:
-        # A plain sibling-module import, not desktop.remote_app: app.py
-        # runs as a script (unfrozen: python's own directory-of-the-script
-        # rule adds desktop/ to sys.path; frozen: PyInstaller's Analysis
-        # bundles it the same way), so remote_app is importable by its own
-        # name, not as a package attribute.
-        from remote_app import build_app
+def _load_production_env() -> None:
+    """Only runs in a frozen (packaged) build. Reads the production.env
+    baked into the bundle by desktop/build.sh and sets each key via
+    setdefault — so a developer's own real environment variables (there
+    shouldn't be any in a frozen build, but just in case) always win."""
+    if not getattr(sys, "frozen", False):
+        return
 
-        return build_app(REMOTE_BACKEND_URL)
+    env_path = _resource_path("production.env")
+    if not env_path.exists():
+        raise RuntimeError(
+            f"Packaged build is missing {env_path} — this exe was built without baked-in "
+            "production credentials (desktop/production.env). Rebuild via desktop/build.sh "
+            "after creating that file; see desktop/production.env.example."
+        )
 
-    from atlas_engine.api import app as local_app
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
 
-    return local_app
+
+_load_production_env()
+
+import uvicorn
+import webview
+from fastapi.staticfiles import StaticFiles
+
+from atlas_engine.api import app as fastapi_app
 
 
-def _run_server(fastapi_app) -> None:
+def _run_server() -> None:
     uvicorn.run(fastapi_app, host="127.0.0.1", port=PORT, log_level="info")
 
 
 def main() -> None:
-    fastapi_app = _build_fastapi_app()
     frontend_dist = _resource_path("frontend_dist")
 
     # Mounted after the app's own routes are already registered at import
-    # time, so /health, /auth/login, etc. (whether served locally or
-    # proxied) still win — this / mount only catches what no route matched
-    # (the SPA's static assets).
+    # time, so /health, /auth/login, etc. still win — this / mount only
+    # catches what no route matched (the SPA's static assets).
     fastapi_app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
 
-    threading.Thread(target=_run_server, args=(fastapi_app,), daemon=True).start()
+    threading.Thread(target=_run_server, daemon=True).start()
     time.sleep(1.5)
 
     # "localhost", not "127.0.0.1" — the frontend's compiled JS calls

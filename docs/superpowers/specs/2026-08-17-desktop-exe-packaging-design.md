@@ -1,6 +1,6 @@
 # Desktop Exe Packaging — Design Note
 
-**Status:** Self-contained local-mode exe built and verified (macOS + a real Windows CI build); remote-submit mode (exe → shared deployed backend over HTTPS) now built and verified against a simulated remote backend — real Azure deployment still pending, see sub-project 1
+**Status:** SUPERSEDED (2026-08-17, later same day). The remote-submit mode described below was ripped out — the exe now always connects directly to production Postgres and Blob Storage with credentials baked into the build (see desktop/production.env.example); there is no deployed backend at all. Kept for historical context on how local-mode packaging (Chromium bundling, pywebview, PyInstaller) works, since that part is unchanged.
 **Date:** 2026-08-17
 **Author:** Likhith Bhargav (Anka Health), designed with Claude
 

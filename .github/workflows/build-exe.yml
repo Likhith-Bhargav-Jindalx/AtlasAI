@@ -56,11 +56,27 @@ jobs:
           echo "PLAYWRIGHT_PKG_DIR=$pkg_dir" >> "$GITHUB_ENV"
           mv "$pkg_dir/driver/package/.local-browsers" "$RUNNER_TEMP/local-browsers"
 
+      - name: Write baked-in production credentials
+        shell: bash
+        # This exe talks directly to production Postgres and Blob Storage —
+        # no deployed backend in between — so the credentials it needs at
+        # runtime are baked into the bundle at build time instead of being
+        # supplied by whoever runs it. Written from repo secrets, never
+        # committed (desktop/production.env is gitignored).
+        run: |
+          cat > desktop/production.env <<EOF
+          ATLAS_DATABASE_URL=${{ secrets.ATLAS_DATABASE_URL }}
+          ATLAS_SESSION_SECRET=${{ secrets.ATLAS_SESSION_SECRET }}
+          ATLAS_AZURE_STORAGE_CONNECTION_STRING=${{ secrets.ATLAS_AZURE_STORAGE_CONNECTION_STRING }}
+          ATLAS_AZURE_STORAGE_CONTAINER=atlas-runs
+          ATLAS_REQUIRE_AZURE_STORAGE=true
+          EOF
+
       - name: Build desktop exe
         shell: bash
         run: |
           rm -rf build dist atlas-desktop.spec
-          pyinstaller --onedir --windowed --name atlas-desktop --add-data "frontend/dist;frontend_dist" --paths engine/src desktop/app.py
+          pyinstaller --onedir --windowed --name atlas-desktop --add-data "frontend/dist;frontend_dist" --add-data "desktop/production.env;." --paths engine/src desktop/app.py
 
       - name: Copy the vendored browser into the frozen bundle
         shell: bash

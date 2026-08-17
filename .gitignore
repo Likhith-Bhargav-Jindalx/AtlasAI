@@ -7,6 +7,7 @@ engine/.pytest_cache/
 engine/htmlcov/
 .env
 .env.local
+desktop/production.env
 *.log
 node_modules/
 dist/

@@ -23,6 +23,15 @@ cd "$(dirname "$0")/.."
 VENV=engine/.venv
 PLAYWRIGHT_PKG_DIR="$VENV/lib/"*"/site-packages/playwright/driver/package"
 LOCAL_BROWSERS_STASH="$(mktemp -d)/local-browsers"
+PRODUCTION_ENV=desktop/production.env
+
+if [ ! -f "$PRODUCTION_ENV" ]; then
+  echo "Missing $PRODUCTION_ENV — this exe connects directly to production" >&2
+  echo "Postgres and Blob Storage, so it can't be built without real credentials" >&2
+  echo "baked in. Copy desktop/production.env.example to $PRODUCTION_ENV and fill" >&2
+  echo "in the real values, then re-run this script." >&2
+  exit 1
+fi
 
 echo "Building frontend..."
 (cd frontend && npm ci --silent && npm run build)
@@ -41,7 +50,8 @@ mv "$local_browsers" "$LOCAL_BROWSERS_STASH"
 echo "Building with PyInstaller..."
 rm -rf build dist atlas-desktop.spec
 "$VENV/bin/pyinstaller" --onedir --windowed --name atlas-desktop \
-  --add-data "frontend/dist:frontend_dist" --paths engine/src desktop/app.py
+  --add-data "frontend/dist:frontend_dist" --add-data "$PRODUCTION_ENV:." \
+  --paths engine/src desktop/app.py
 
 echo "Copying the vendored browser into the frozen bundle..."
 cp -R "$LOCAL_BROWSERS_STASH" "dist/atlas-desktop/_internal/playwright/driver/package/.local-browsers"
