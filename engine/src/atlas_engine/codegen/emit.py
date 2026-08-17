@@ -751,6 +751,7 @@ def _emit_email_otp_handler(cfg: dict) -> list[str]:
         input_hints = cfg["otp_input_hints"]
     if cfg.get("otp_submit_hints"):
         submit_hints = cfg["otp_submit_hints"]
+    code_regex = im.get("code_regex") or r"\b(\d{4,8})\b"
     return [
         "def handle_email_otp(page, params):",
         "    import imaplib, email, re, time as _t",
@@ -764,7 +765,7 @@ def _emit_email_otp_handler(cfg: dict) -> list[str]:
         f"    PW = os.environ.get({_py_str(pass_env)}, '')",
         f"    SENDER = {_py_str((im.get('sender_contains') or '').lower())}",
         f"    SUBJECT = {_py_str((im.get('subject_contains') or '').lower())}",
-        f"    PATTERN = {_py_str(im.get('code_regex') or '\\b(\\d{4,8})\\b')}",
+        f"    PATTERN = {_py_str(code_regex)}",
         f"    TIMEOUT_MS = {im.get('timeout_ms') or 120000}",
         f"    POLL_MS = {im.get('poll_ms') or 4000}",
         "    OTP_INPUT_HINTS = " + repr(list(input_hints)),
