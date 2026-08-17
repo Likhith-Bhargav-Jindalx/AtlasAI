@@ -1065,6 +1065,45 @@ def test_spec_driven_extract_emits_compiled_reads_not_dom_walk():
     compile(script, "<golden-spec>", "exec")
 
 
+def test_extract_step_after_a_popup_click_scopes_to_the_popup_not_the_top_level_page():
+    """Regression: an extract step has no selector/locator of its own (it
+    captures whatever's on screen, not a specific element), so it can't
+    resolve its own page the way every other step does. It must reuse
+    whichever page the most recently emitted real step actually acted on
+    -- a flow that opens a report in a popup (recorded as a
+    codegen_expr:page1... selector) and then extracts from it must scope
+    that extraction to _page(page, 1), not the literal top-level page, or
+    the extractor silently scans an unrelated/empty page and returns
+    nothing every time."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+    from atlas_engine.codegen.emit import emit_golden_script
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(
+            0, "click", [{"selector": 'codegen_expr:page1.get_by_role("link", name="Open report")', "rank": 0}],
+            None, "none",
+        ),
+        TrajectoryStep(1, "extract", [], None, "none"),
+    ))
+    spec = {"name": "report_data", "fields": [{"name": "total", "selector": "#total", "read": "text"}]}
+    script = emit_golden_script(trajectory, start_url="https://x.com", extraction_specs={1: spec})
+    assert 'result["extractions"][\'report_data\'] = {"url": _page(page, 1).url, "data": _extract_report_data(_page(page, 1))}' in script
+    compile(script, "<golden-popup-extract>", "exec")
+
+
+def test_extract_step_with_no_prior_step_defaults_to_the_top_level_page():
+    """The very first step in a trajectory being an extract (no preceding
+    real step to inherit a page from) must fall back to the top-level
+    page, not crash -- an extract step's own selector_candidates is always
+    empty, so it can never resolve a page via _step_page_expr itself."""
+    from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
+    from atlas_engine.codegen.emit import emit_golden_script
+    trajectory = ReferenceTrajectory(steps=(TrajectoryStep(0, "extract", [], None, "none"),))
+    spec = {"name": "report_data", "fields": [{"name": "total", "selector": "#total", "read": "text"}]}
+    script = emit_golden_script(trajectory, start_url="https://x.com", extraction_specs={0: spec})
+    assert 'result["extractions"][\'report_data\'] = {"url": page.url, "data": _extract_report_data(page)}' in script
+    compile(script, "<golden-first-extract>", "exec")
+
+
 def test_spec_driven_report_frame_extraction_emits_report_dump():
     """reportFrame.urlContains mode compiles to _ex_report_frame with the
     base64-embedded REPORT_DUMP_JS — no field-level reads, no DOM-walk."""

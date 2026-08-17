@@ -1242,12 +1242,15 @@ def _build_login_block(
     return "\n".join(body) + "\n", consumed
 
 
-def _emit_extract_step() -> list[str]:
-    """Runs the DOM-walking heuristic serializer across every frame."""
+def _emit_extract_step(page_expr: str = "page") -> list[str]:
+    """Runs the DOM-walking heuristic serializer across every frame of
+    page_expr — the page the extract step was actually recorded on, which
+    is a popup (`_page(page, N)`) for any flow that opens a report in a
+    new tab, not necessarily the top-level `page`."""
     return [
         "_extract_n += 1",
         "_merged = {'fields': {}, 'tables': []}",
-        "for _fr in page.frames:",
+        f"for _fr in {page_expr}.frames:",
         "    try:",
         f"        _res = _fr.evaluate({_SERIALIZER_JS!r})",
         "    except Exception:",
@@ -1255,7 +1258,7 @@ def _emit_extract_step() -> list[str]:
         "    _data = (_res or {}).get('data') or {}",
         "    _merged['fields'].update(_data.get('fields') or {})",
         "    _merged['tables'].extend(_data.get('tables') or [])",
-        'result["extractions"][f"click_{_extract_n}"] = {"url": page.url, "data": _merged}',
+        f'result["extractions"][f"click_{{_extract_n}}"] = {{"url": {page_expr}.url, "data": _merged}}',
     ]
 
 
@@ -1456,10 +1459,15 @@ def _extraction_helpers_header() -> str:
     return _EXTRACTION_HELPERS.replace("_B64_REPORT_DUMP_JS", b64)
 
 
-def _emit_extract_checkpoint(name: str) -> list[str]:
-    """Body lines that run a compiled extractor at its mid-flow checkpoint."""
+def _emit_extract_checkpoint(name: str, page_expr: str = "page") -> list[str]:
+    """Body lines that run a compiled extractor at its mid-flow checkpoint,
+    against page_expr — the page the extract step was actually recorded
+    on. A flow that opens a report in a popup records its extract step
+    there too, so this must scope to that popup (`_page(page, N)`), not
+    always the top-level `page`, or the extractor silently scans an empty
+    unrelated page and returns nothing."""
     return [
-        f"result[\"extractions\"][{_py_str(name)}] = {{\"url\": page.url, \"data\": {_extract_fn_name(name)}(page)}}",
+        f"result[\"extractions\"][{_py_str(name)}] = {{\"url\": {page_expr}.url, \"data\": {_extract_fn_name(name)}({page_expr})}}",
     ]
 
 
@@ -1524,15 +1532,25 @@ def emit_golden_script(
     ]
 
     body_lines: list[str] = []
+    # An "extract" step has no selector/locator of its own (it captures
+    # whatever's currently on screen, not a specific element) so it can't
+    # resolve its own page like every other step does via
+    # _step_page_expr(step) — it must reuse whichever page the most
+    # recently emitted real step actually acted on. Without this, an
+    # extract step recorded on a popup (any flow that opens a report in a
+    # new tab) always resolved to the literal top-level `page`, silently
+    # scanning an unrelated/empty page and returning nothing.
+    current_page_expr = "page"
     for step in remaining_steps:
         if step.kind == "extract":
             if step.index in extraction_specs:
                 name = extraction_specs[step.index].get("name") or f"extract_{step.index}"
-                body_lines.extend(f"    {line}" for line in _emit_extract_checkpoint(name))
+                body_lines.extend(f"    {line}" for line in _emit_extract_checkpoint(name, current_page_expr))
             else:
-                body_lines.extend(f"    {line}" for line in _emit_extract_step())
+                body_lines.extend(f"    {line}" for line in _emit_extract_step(current_page_expr))
             continue
         page_expr = _step_page_expr(step)
+        current_page_expr = page_expr
         body_lines.append(f"    _settle_frames({page_expr})")
         raw_lines = _emit_step_with_fallback(
             step, pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,

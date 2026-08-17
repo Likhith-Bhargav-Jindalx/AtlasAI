@@ -8,10 +8,15 @@ from pathlib import Path
 from dotenv import dotenv_values, find_dotenv
 
 # Certification timeout per run — real portal golden scripts can take 2-3
-# minutes (report generation, download waits, slow SPAs).  The old app used
-# 120s for download steps; 300s is a conservative upper bound that avoids
-# false failures on legitimately slow portals.
-_CERTIFY_TIMEOUT_SECONDS = 300
+# minutes (report generation, download waits, slow SPAs) for a simple flow,
+# but a real multi-popup eBO/reports-style flow (open report in a new tab,
+# fill a date-range iframe, generate, download) has been observed taking
+# 13-15 real minutes end to end while still completing correctly -- 300s
+# was failing those with a false "timed out" every time, not because
+# anything was actually broken. 1200s (20 min) gives real headroom above
+# the observed worst case while still bounding a genuinely hung/broken
+# script eventually.
+_CERTIFY_TIMEOUT_SECONDS = 1200
 
 
 def _certify_env() -> dict[str, str]:
