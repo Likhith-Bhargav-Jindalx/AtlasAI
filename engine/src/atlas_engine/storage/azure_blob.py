@@ -10,6 +10,14 @@ from typing import Any
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
 
+# get_store() constructs a fresh AzureBlobRunStore on every call (no
+# singleton), so without this, __init__'s create_container() would fire a
+# real create-container request -- and log a noisy 409 ContainerAlreadyExists
+# -- on every single blob read/write in a process's lifetime, not just the
+# first. Keyed by container name since a process could plausibly talk to
+# more than one.
+_confirmed_containers: set[str] = set()
+
 
 def _with_retry(func, *, attempts: int = 3, base_delay: float = 0.5):
     """Retries a transient Azure Blob Storage network call up to `attempts`
@@ -90,10 +98,12 @@ class AzureBlobRunStore:
     def __init__(self, connection_string: str, container: str):
         self._client = BlobServiceClient.from_connection_string(connection_string)
         self._container_client = self._client.get_container_client(container)
-        try:
-            self._container_client.create_container()
-        except ResourceExistsError:
-            pass
+        if container not in _confirmed_containers:
+            try:
+                self._container_client.create_container()
+            except ResourceExistsError:
+                pass
+            _confirmed_containers.add(container)
         self._staging_root = Path(tempfile.mkdtemp(prefix="atlas-azure-staging-"))
 
     def new_run_dir(self, prefix: str) -> AzureRunDir:

@@ -40,6 +40,12 @@ def configure_logging(level: int = logging.INFO) -> None:
     handler.setFormatter(_JsonFormatter())
     root.addHandler(handler)
 
+    # The Azure SDK's HTTP logging policy logs full request/response
+    # headers at INFO for every call -- including one pair per ~4MB chunk
+    # of a large blob upload (video/trace/network.har), which drowns out
+    # everything else at INFO level. WARNING+ still surfaces real problems.
+    logging.getLogger("azure").setLevel(logging.WARNING)
+
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Assigns a fresh request id to every inbound request, exposed to
