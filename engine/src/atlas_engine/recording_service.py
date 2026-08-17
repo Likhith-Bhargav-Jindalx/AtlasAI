@@ -94,7 +94,16 @@ def persist_recording(
         recording_id = recording.id
 
     try:
-        run_dir.write_json("actions.json", [vars(a) for a in actions])
+        # dom_before/dom_after are full-page-HTML snapshots kept on the
+        # in-memory RecordedAction for the brain/replay equality checks
+        # (trajectory/extract.py, brain/evaluate.py, authoring/replay.py,
+        # brain/repair.py all only ever compare them for equality/
+        # truthiness, never read the content) -- excluded here since
+        # nothing reads this blob back and they dominate its size.
+        run_dir.write_json(
+            "actions.json",
+            [{k: v for k, v in vars(a).items() if k not in ("dom_before", "dom_after")} for a in actions],
+        )
 
         trajectory = extract_trajectory(actions)
         trajectory_blob_ref = run_dir.write_json("trajectory.json", trajectory_to_dict(trajectory))

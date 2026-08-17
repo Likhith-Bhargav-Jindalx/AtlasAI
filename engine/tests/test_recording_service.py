@@ -281,6 +281,39 @@ def test_persist_recording_stores_rich_capture_trace_and_har_artifacts(tmp_path,
     assert (prefix / "network.har").read_text() == '{"log": {"entries": []}}'
 
 
+def test_persist_recording_excludes_dom_snapshots_from_actions_json(fixture_portal_url):
+    """actions.json is never read back by anything (confirmed: only
+    trajectory.json, itself derived from the same actions, is) -- dom_before/
+    dom_after are full-page-HTML snapshots that dominate this blob's size for
+    zero benefit. Every other field must still be present."""
+    with session_scope() as session:
+        org = Organization(name="Slim Actions Org", slug=f"slim-actions-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    actions = [
+        RecordedAction(
+            0, "click", [{"selector": "#login-btn", "rank": 0}], None,
+            f"{fixture_portal_url}/login.html", f"{fixture_portal_url}/dashboard.html",
+            "<html>huge before snapshot</html>", "<html>huge after snapshot</html>",
+        ),
+    ]
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", actions)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        prefix = Path(settings.run_root) / recording.capture_blob_prefix
+    stored = json.loads((prefix / "actions.json").read_text())
+    assert len(stored) == 1
+    assert "dom_before" not in stored[0]
+    assert "dom_after" not in stored[0]
+    assert stored[0]["kind"] == "click"
+    assert stored[0]["selector_candidates"] == [{"selector": "#login-btn", "rank": 0}]
+    assert stored[0]["url_after"] == f"{fixture_portal_url}/dashboard.html"
+
+
 def test_persist_recording_without_codegen_writes_no_file(fixture_portal_url):
     with session_scope() as session:
         org = Organization(name="No Codegen Org", slug=f"no-codegen-org-{uuid.uuid4()}")
