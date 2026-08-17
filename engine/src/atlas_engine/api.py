@@ -165,12 +165,15 @@ def get_heal_event_screenshot_endpoint(heal_event_id: str, step_index: int, when
         heal_event = session.get(HealEvent, uuid.UUID(heal_event_id))
         if heal_event is None:
             raise HTTPException(status_code=404, detail=f"No such heal event: {heal_event_id}")
-        entry = next(
-            (c for c in heal_event.diff_summary.get("changes", []) if c["step_index"] == step_index), None,
-        )
-        if entry is None:
-            raise HTTPException(status_code=404, detail="No diff entry for this step index")
-        screenshot_path = entry.get(f"{when}_screenshot")
+        diff_summary_blob_ref = heal_event.diff_summary_blob_ref
+
+    diff_summary = get_store().read_json(diff_summary_blob_ref) if diff_summary_blob_ref else {}
+    entry = next(
+        (c for c in diff_summary.get("changes", []) if c["step_index"] == step_index), None,
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="No diff entry for this step index")
+    screenshot_path = entry.get(f"{when}_screenshot")
 
     if not screenshot_path or not Path(screenshot_path).exists():
         raise HTTPException(status_code=404, detail="Screenshot not available")

@@ -174,13 +174,14 @@ def _persist_certify_result(certify_result: dict, authoring_run_id: uuid.UUID, r
     rows) and uploads its downloaded files to blob storage, under the
     authoring run's own results/ prefix."""
     store = get_store()
-    for extraction in (certify_result.get("extractions") or {}).values():
+    for i, extraction in enumerate((certify_result.get("extractions") or {}).values()):
+        data_blob_ref = store.write_json(f"authoring/{authoring_run_id}/results/extraction-{i}.json", extraction.get("data", {}))
         with session_scope() as session:
             session.add(PageExtraction(
                 recording_id=recording_id,
                 page_index=0,
                 url=extraction.get("url", ""),
-                data=extraction.get("data", {}),
+                data_blob_ref=data_blob_ref,
             ))
     for downloaded in certify_result.get("downloaded_files") or []:
         local_path = Path(downloaded["path"])

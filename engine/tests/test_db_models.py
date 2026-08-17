@@ -160,14 +160,14 @@ def test_page_extraction_belongs_to_recording():
 
         extraction = PageExtraction(
             recording=recording, page_index=0, url="https://portal-extraction.example.com/report",
-            data={"headings": ["Patient Report"], "fields": {"Patient ID": "12345"}},
+            data_blob_ref="recordings/4/extraction-0.json",
         )
         session.add(extraction)
         session.commit()
 
         assert extraction.id is not None
         assert extraction.recording.id == recording.id
-        assert extraction.data["fields"]["Patient ID"] == "12345"
+        assert extraction.data_blob_ref == "recordings/4/extraction-0.json"
         assert extraction.extracted_at is not None
 
 

@@ -46,7 +46,7 @@ def test_get_heal_event_screenshot_404s_when_missing(fixture_portal_url):
         script = GoldenScript(org_id=org.id, portal_profile_id=profile.id, version=1, script_blob_ref="unused", status="active")
         session.add(script)
         session.flush()
-        event = HealEvent(org_id=org.id, golden_script_id=script.id, trigger="on_demand", status="pending_approval", diff_summary={"changes": []})
+        event = HealEvent(org_id=org.id, golden_script_id=script.id, trigger="on_demand", status="pending_approval")
         session.add(event)
         session.flush()
         event_id = event.id

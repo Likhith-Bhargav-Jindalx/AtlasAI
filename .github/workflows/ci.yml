@@ -45,8 +45,12 @@ jobs:
         # Several tests exercise the real headed-browser recording path
         # (headless=False is deliberate there — an agent watches their own
         # actions while recording) — ubuntu-latest has no display server by
-        # default, so xvfb-run provides a virtual one.
-        run: xvfb-run -a pytest -v
+        # default, so xvfb-run provides a virtual one. -n auto (pytest-xdist)
+        # parallelizes across the runner's cores -- cut this suite from
+        # ~45 minutes to ~10 locally; the fixture portal server binds an
+        # OS-assigned port specifically so each worker's own instance
+        # doesn't collide with the others.
+        run: xvfb-run -a pytest -n auto -v
 
   frontend-tests:
     runs-on: ubuntu-latest

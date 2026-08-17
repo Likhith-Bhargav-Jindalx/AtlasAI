@@ -93,6 +93,9 @@ class LocalRunStore:
         path.write_bytes(data)
         return blob_ref
 
+    def write_json(self, blob_ref: str, data: Any) -> str:
+        return self.write_text(blob_ref, json.dumps(data))
+
     def local_path_for(self, blob_ref: str) -> Path:
         """A real local filesystem path with this blob's content — for
         consumers (like certify's subprocess.run) that need an actual

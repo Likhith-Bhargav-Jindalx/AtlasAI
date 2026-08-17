@@ -132,6 +132,9 @@ class AzureBlobRunStore:
     def write_text(self, blob_ref: str, content: str) -> str:
         return self.write_bytes(blob_ref, content.encode("utf-8"))
 
+    def write_json(self, blob_ref: str, data: Any) -> str:
+        return self.write_text(blob_ref, json.dumps(data))
+
     def local_path_for(self, blob_ref: str) -> Path:
         """Downloads the blob to a real local file — for consumers (like
         certify's subprocess.run) that need an actual path, not just

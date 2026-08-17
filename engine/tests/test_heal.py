@@ -11,6 +11,7 @@ from atlas_engine.db import session_scope
 from atlas_engine.db.models import GoldenScript, HealEvent, Organization, PortalProfile
 from atlas_engine.db.repo import get_or_create_portal_profile
 from atlas_engine.llm.client import FakeLlmClient
+from atlas_engine.storage import get_store
 from atlas_engine.verify.heal import heal_golden_script
 
 
@@ -99,12 +100,14 @@ def test_heal_golden_script_records_screenshot_paths_when_a_step_drifts(fixture_
         assert heal_result["status"] == "healed"
         with session_scope() as session:
             heal_event = session.get(HealEvent, uuid.UUID(heal_result["heal_event_id"]))
-            entry = heal_event.diff_summary["changes"][0]
-            assert entry["before_screenshot"] is not None
-            assert entry["after_screenshot"] is not None
-            assert entry["before_screenshot"] != entry["after_screenshot"]
-            assert Path(entry["before_screenshot"]).exists()
-            assert Path(entry["after_screenshot"]).exists()
+            diff_summary_blob_ref = heal_event.diff_summary_blob_ref
+        diff_summary = get_store().read_json(diff_summary_blob_ref)
+        entry = diff_summary["changes"][0]
+        assert entry["before_screenshot"] is not None
+        assert entry["after_screenshot"] is not None
+        assert entry["before_screenshot"] != entry["after_screenshot"]
+        assert Path(entry["before_screenshot"]).exists()
+        assert Path(entry["after_screenshot"]).exists()
     finally:
         fixture_portal_server.set_drift_mode(False)
 

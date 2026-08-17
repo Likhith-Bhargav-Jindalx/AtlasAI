@@ -316,12 +316,13 @@ def test_run_certify_phase_persists_extractions_and_uploads_downloads_on_first_s
 
     run_certify_phase(script_path, authoring_run_id, recording_id=recording_id, runs=1)
 
+    store = get_store()
     with session_scope() as session:
         extractions = session.query(PageExtraction).filter_by(recording_id=recording_id).all()
         assert len(extractions) == 1
-        assert extractions[0].data == {"fields": {"a": "1"}, "tables": []}
+        data_blob_ref = extractions[0].data_blob_ref
 
-    store = get_store()
+    assert store.read_json(data_blob_ref) == {"fields": {"a": "1"}, "tables": []}
     assert store.exists(f"authoring/{authoring_run_id}/results/report.csv")
 
 

@@ -62,7 +62,10 @@ class HealEvent(Base):
     )
     trigger: Mapped[str] = mapped_column(Enum(*HEAL_TRIGGERS, name="heal_trigger"))
     failure_evidence_blob_ref: Mapped[str | None] = mapped_column(default=None)
-    diff_summary: Mapped[dict | None] = mapped_column(PortableJSON, default=None)
+    # A per-step diff (old vs. new selector/gesture/wait) -- stored as a
+    # blob, not inline JSONB, since it's never queried relationally, only
+    # ever read whole. See verify/heal.heal_golden_script.
+    diff_summary_blob_ref: Mapped[str | None] = mapped_column(default=None)
     status: Mapped[str] = mapped_column(Enum(*HEAL_STATUSES, name="heal_status"), default="pending_approval")
     resolved_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())

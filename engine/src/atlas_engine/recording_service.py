@@ -129,13 +129,14 @@ def persist_recording(
                     page_capture.video_started_at_ms, page_capture.video_ended_at_ms, page_capture.actions,
                 )
 
-            for extraction in (page_extractions or []):
+            for i, extraction in enumerate(page_extractions or []):
+                data_blob_ref = run_dir.write_json(f"extraction-{i}.json", extraction["data"])
                 session.add(
                     PageExtraction(
                         recording_id=recording.id,
                         page_index=extraction["page_index"],
                         url=extraction["url"],
-                        data=extraction["data"],
+                        data_blob_ref=data_blob_ref,
                         extracted_at=datetime.now(timezone.utc),
                     )
                 )
@@ -176,6 +177,18 @@ def _persist_video_asset(
     if video_started_at_ms is not None and video_ended_at_ms is not None:
         duration_seconds = max(0, round((video_ended_at_ms - video_started_at_ms) / 1000))
 
+    dom_events_blob_ref = None
+    if actions:
+        dom_events_blob_ref = run_dir.write_json(
+            f"{Path(filename).stem}-dom-events.json",
+            {
+                str(action.index): {
+                    "kind": action.kind, "selector_candidates": action.selector_candidates, "value": action.value,
+                }
+                for action in actions
+            },
+        )
+
     video_asset = VideoAsset(
         org_id=uuid.UUID(org_id),
         recording_id=recording_id,
@@ -185,6 +198,7 @@ def _persist_video_asset(
         started_at_ms=video_started_at_ms,
         duration_seconds=duration_seconds,
         status="ready",
+        dom_events_blob_ref=dom_events_blob_ref,
     )
     session.add(video_asset)
     session.flush()
@@ -197,11 +211,6 @@ def _persist_video_asset(
             VideoStep(
                 video_asset_id=video_asset.id,
                 order_index=action.index,
-                dom_action_event={
-                    "kind": action.kind,
-                    "selector_candidates": action.selector_candidates,
-                    "value": action.value,
-                },
                 caption_text=_caption_for(action),
                 offset_ms=offset_ms,
             )
@@ -370,6 +379,7 @@ def submit_recording_for_authoring(recording_id: uuid.UUID, submitted_by: uuid.U
 
 
 def list_page_extractions(recording_id: uuid.UUID) -> list[dict]:
+    store = get_store()
     with session_scope() as session:
         extractions = (
             session.query(PageExtraction)
@@ -382,7 +392,7 @@ def list_page_extractions(recording_id: uuid.UUID) -> list[dict]:
                 "id": str(e.id),
                 "page_index": e.page_index,
                 "url": e.url,
-                "data": e.data,
+                "data": store.read_json(e.data_blob_ref),
                 "extracted_at": e.extracted_at.isoformat(),
             }
             for e in extractions

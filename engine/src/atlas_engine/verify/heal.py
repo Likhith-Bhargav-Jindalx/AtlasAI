@@ -127,6 +127,8 @@ def heal_golden_script(
     else:
         new_status = "draft"
 
+    diff_summary_blob_ref = run_dir.write_json("diff_summary.json", {"changes": diff})
+
     with session_scope() as session:
         new_golden = GoldenScript(
             org_id=org_id,
@@ -145,7 +147,7 @@ def heal_golden_script(
             golden_script_id=golden_script_id,
             proposed_version_id=new_golden.id,
             trigger=trigger,
-            diff_summary={"changes": diff},
+            diff_summary_blob_ref=diff_summary_blob_ref,
             status="pending_approval",
         )
         session.add(heal_event)
@@ -210,6 +212,7 @@ def reject_heal_event(heal_event_id: uuid.UUID, *, resolved_by: uuid.UUID | None
 
 
 def list_heal_events(org_id: str, status: str | None = None) -> list[dict]:
+    store = get_store()
     with session_scope() as session:
         query = session.query(HealEvent).filter_by(org_id=uuid.UUID(org_id))
         if status is not None:
@@ -219,13 +222,14 @@ def list_heal_events(org_id: str, status: str | None = None) -> list[dict]:
         for event in query.order_by(HealEvent.created_at.desc()).all():
             golden_script = session.get(GoldenScript, event.golden_script_id)
             profile = session.get(PortalProfile, golden_script.portal_profile_id) if golden_script else None
+            diff_summary = store.read_json(event.diff_summary_blob_ref) if event.diff_summary_blob_ref else None
             results.append({
                 "id": str(event.id),
                 "golden_script_id": str(event.golden_script_id),
                 "portal_domain": profile.domain if profile is not None else None,
                 "trigger": event.trigger,
                 "status": event.status,
-                "diff_summary": event.diff_summary,
+                "diff_summary": diff_summary,
                 "created_at": event.created_at.isoformat(),
             })
         return results

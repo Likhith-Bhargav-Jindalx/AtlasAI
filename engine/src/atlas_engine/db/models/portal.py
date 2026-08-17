@@ -95,7 +95,11 @@ class PageExtraction(Base):
     recording_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recordings.id", ondelete="CASCADE"))
     page_index: Mapped[int] = mapped_column(default=0)
     url: Mapped[str]
-    data: Mapped[dict] = mapped_column(PortableJSON)
+    # Extracted table/field data can be genuinely large (a full report's
+    # worth of rows) and is never queried relationally -- stored as a blob,
+    # not inline JSONB. See recording_service.persist_recording and
+    # authoring/phases._persist_certify_result for the two write sites.
+    data_blob_ref: Mapped[str]
     extracted_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     recording: Mapped["Recording"] = relationship()
