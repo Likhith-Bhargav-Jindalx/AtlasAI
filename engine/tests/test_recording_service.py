@@ -552,6 +552,32 @@ def test_submit_recording_for_authoring_creates_a_linked_request(fixture_portal_
         assert request.title == "Check eligibility"
 
 
+def test_persist_recording_marks_status_failed_and_reraises_when_an_upload_fails(monkeypatch, fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Upload Failure Org", slug=f"upload-failure-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    actions = [
+        RecordedAction(0, "click", [{"selector": "#login-btn", "rank": 0}], None, f"{fixture_portal_url}/login.html", f"{fixture_portal_url}/dashboard.html", "", ""),
+    ]
+
+    from atlas_engine.storage.local import RunDir
+
+    def _boom(self, name, data):
+        raise ConnectionError("simulated network failure")
+
+    monkeypatch.setattr(RunDir, "write_json", _boom)
+
+    with pytest.raises(ConnectionError, match="simulated network failure"):
+        persist_recording(org_id, f"{fixture_portal_url}/login.html", actions)
+
+    with session_scope() as session:
+        recording = session.query(Recording).filter_by(org_id=uuid.UUID(org_id)).one()
+        assert recording.status == "failed"
+
+
 def test_submit_recording_for_authoring_rejects_already_linked_recording(fixture_portal_url):
     with session_scope() as session:
         org = Organization(name="Submit Twice Org", slug=f"submit-twice-org-{uuid.uuid4()}")

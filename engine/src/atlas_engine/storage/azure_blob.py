@@ -1,5 +1,6 @@
 import json
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,22 @@ from typing import Any
 
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
+
+
+def _with_retry(func, *, attempts: int = 3, base_delay: float = 0.5):
+    """Retries a transient Azure Blob Storage network call up to `attempts`
+    times with exponential backoff (0.5s, 1s, 2s, ...) before giving up —
+    'a wrong cached action is worse than a slow one' extends to uploads
+    too: a completed-but-slow upload beats a lost recording."""
+    last_exc: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return func()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < attempts - 1:
+                time.sleep(base_delay * (2 ** attempt))
+    raise last_exc
 
 
 def _account_key(blob_service_client: BlobServiceClient) -> str:
@@ -55,8 +72,12 @@ class AzureRunDir:
         blob_ref."""
         blob_ref = f"{self.blob_ref}/{name}"
         blob_client = self._store._container_client.get_blob_client(blob_ref)
-        with open(self.path / name, "rb") as fh:
-            blob_client.upload_blob(fh, overwrite=True)
+
+        def _do_upload():
+            with open(self.path / name, "rb") as fh:
+                blob_client.upload_blob(fh, overwrite=True)
+
+        _with_retry(_do_upload)
         return blob_ref
 
 
@@ -105,7 +126,7 @@ class AzureBlobRunStore:
         return json.loads(self.read_text(blob_ref))
 
     def write_bytes(self, blob_ref: str, data: bytes) -> str:
-        self._container_client.get_blob_client(blob_ref).upload_blob(data, overwrite=True)
+        _with_retry(lambda: self._container_client.get_blob_client(blob_ref).upload_blob(data, overwrite=True))
         return blob_ref
 
     def write_text(self, blob_ref: str, content: str) -> str:

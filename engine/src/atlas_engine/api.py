@@ -1,10 +1,15 @@
+import logging
 import uuid
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
+
+from atlas_engine.observability import RequestIdMiddleware, configure_logging, get_request_id
+
+logger = logging.getLogger(__name__)
 
 from atlas_engine.auth.deps import CurrentUser, get_current_user, require_job_function
 from atlas_engine.auth.passwords import verify_password
@@ -41,6 +46,9 @@ from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, lis
 
 app = FastAPI(title="Atlas Engine Local API")
 
+configure_logging()
+app.add_middleware(RequestIdMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5183"],
@@ -48,6 +56,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    from fastapi.responses import JSONResponse
+
+    request_id = get_request_id()
+    if not request_id:
+        # Fallback to same logic as middleware if context var not available (e.g., sync func in thread)
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+
+    logger.exception("Unhandled exception handling %s %s", request.method, request.url.path)
+    response = JSONResponse(
+        status_code=500,
+        content={"error": "internal_server_error", "request_id": request_id},
+    )
+    response.headers["X-Request-Id"] = request_id
+    return response
+
 
 SESSION_COOKIE_NAME = "atlas_session"
 

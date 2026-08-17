@@ -63,7 +63,7 @@ def _no_leaked_llm_credentials(monkeypatch):
 
 @pytest.fixture(scope="session")
 def fixture_portal_server():
-    server = FixturePortalServer(port=8731)
+    server = FixturePortalServer()
     server.start()
 
     # The golden script's login block now genuinely requires SECRET_* env
