@@ -1,8 +1,10 @@
+import json
 import logging
+import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
@@ -38,6 +40,7 @@ from atlas_engine.recording_service import (
     list_page_extractions,
     list_recording_requests,
     list_recordings,
+    persist_recording,
     submit_recording_for_authoring,
     update_recording_details,
 )
@@ -448,6 +451,73 @@ def start_recording_endpoint(body: StartRecordingBody) -> StartRecordingResponse
 def stop_recording_endpoint(capture_session_id: str) -> StopRecordingResponse:
     recording_id = stop_live_capture(uuid.UUID(capture_session_id))
     return StopRecordingResponse(recording_id=str(recording_id))
+
+
+class SubmitCaptureResponse(BaseModel):
+    recording_id: str
+
+
+@app.post("/recordings/submit-capture", response_model=SubmitCaptureResponse)
+async def submit_capture_endpoint(
+    start_url: str = Form(...),
+    actions: str = Form(...),
+    request_id: str | None = Form(None),
+    role: str = Form("demo"),
+    video_started_at_ms: int | None = Form(None),
+    video_ended_at_ms: int | None = Form(None),
+    codegen_script: str | None = Form(None),
+    page_extractions: str | None = Form(None),
+    video: UploadFile | None = File(None),
+    trace: UploadFile | None = File(None),
+    har: UploadFile | None = File(None),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> SubmitCaptureResponse:
+    """Accepts a recording captured on a remote client's own machine (the
+    desktop exe's local browser-automation step) and persists it exactly
+    as persist_recording does for a capture that ran against this same
+    process — used when the desktop exe submits to this deployed backend
+    instead of writing to a database/blob store directly, so agent
+    machines never need database credentials. org_id and user_id are
+    intentionally NOT accepted from the client; they come from the
+    authenticated session so a client can't submit into another org.
+
+    Multi-tab recordings (additional_pages) aren't supported through this
+    endpoint yet — only the main page's actions/video/artifacts.
+    """
+    parsed_actions = [RecordedAction(**item) for item in json.loads(actions)]
+    parsed_extractions = json.loads(page_extractions) if page_extractions else None
+
+    with tempfile.TemporaryDirectory(prefix="atlas-submit-capture-") as tmp_dir:
+        tmp_path = Path(tmp_dir)
+
+        video_path = None
+        if video is not None:
+            video_path = tmp_path / "video.webm"
+            video_path.write_bytes(await video.read())
+
+        capture_artifacts = []
+        if trace is not None:
+            trace_path = tmp_path / "trace.zip"
+            trace_path.write_bytes(await trace.read())
+            capture_artifacts.append(("trace.zip", trace_path))
+        if har is not None:
+            har_path = tmp_path / "network.har"
+            har_path.write_bytes(await har.read())
+            capture_artifacts.append(("network.har", har_path))
+
+        recording_id = persist_recording(
+            str(current_user.org_id), start_url, parsed_actions,
+            request_id=uuid.UUID(request_id) if request_id else None,
+            role=role, user_id=str(current_user.id),
+            video_path=video_path,
+            video_started_at_ms=video_started_at_ms,
+            video_ended_at_ms=video_ended_at_ms,
+            page_extractions=parsed_extractions,
+            codegen_script=codegen_script,
+            capture_artifacts=capture_artifacts or None,
+        )
+
+    return SubmitCaptureResponse(recording_id=str(recording_id))
 
 
 class RecordingStepResponse(BaseModel):

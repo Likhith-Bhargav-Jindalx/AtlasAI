@@ -33,6 +33,35 @@ def test_start_and_stop_live_capture_persists_a_recording(fixture_portal_url):
         assert (settings.run_root / video_asset.storage_ref).stat().st_size > 0
 
 
+def test_start_live_capture_uses_a_custom_persist_fn(fixture_portal_url):
+    """The desktop exe's remote-submit mode passes submit_capture_to_remote
+    as persist_fn instead of the default persist_recording — this proves
+    the substitution actually takes effect end to end (the real capture
+    still runs; only what happens with the finished artifacts differs),
+    not just that the parameter is accepted."""
+    with session_scope() as session:
+        org = Organization(name="Custom Persist Org", slug=f"custom-persist-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    calls = []
+
+    def fake_persist(org_id_arg, start_url_arg, actions, **kwargs):
+        calls.append((org_id_arg, start_url_arg))
+        return uuid.uuid4()
+
+    capture_session_id = start_live_capture(org_id, start_url, persist_fn=fake_persist)
+    recording_id = stop_live_capture(capture_session_id)
+
+    assert calls == [(org_id, start_url)]
+    with session_scope() as session:
+        # The fake never touched the database — proves the default,
+        # DB-writing persist_recording was genuinely not called.
+        assert session.get(Recording, recording_id) is None
+
+
 def test_stop_live_capture_stores_a_native_codegen_script(fixture_portal_url):
     with session_scope() as session:
         org = Organization(name="Codegen Capture Org", slug=f"codegen-capture-org-{uuid.uuid4()}")

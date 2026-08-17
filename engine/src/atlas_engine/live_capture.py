@@ -72,12 +72,16 @@ class _LiveCaptureSession:
     through stop_event/done_event — never by touching Playwright objects
     from another thread, which is what makes this safe."""
 
-    def __init__(self, org_id: str, start_url: str, request_id: uuid.UUID | None, role: str, user_id: str | None = None):
+    def __init__(
+        self, org_id: str, start_url: str, request_id: uuid.UUID | None, role: str, user_id: str | None = None,
+        persist_fn=persist_recording,
+    ):
         self.org_id = org_id
         self.start_url = start_url
         self.request_id = request_id
         self.role = role
         self.user_id = user_id
+        self.persist_fn = persist_fn
         self.stop_event = threading.Event()
         self.done_event = threading.Event()
         self.recording_id: uuid.UUID | None = None
@@ -180,7 +184,7 @@ class _LiveCaptureSession:
                 # the recording that already happened.
                 logger.exception("Failed to read the native codegen script")
 
-            self.recording_id = persist_recording(
+            self.recording_id = self.persist_fn(
                 self.org_id, self.start_url, actions,
                 request_id=self.request_id, role=self.role, user_id=self.user_id,
                 video_path=video_path,
@@ -218,10 +222,10 @@ class _LiveCaptureSession:
 
 def start_live_capture(
     org_id: str, start_url: str, *, request_id: uuid.UUID | None = None, role: str = "demo",
-    user_id: str | None = None,
+    user_id: str | None = None, persist_fn=persist_recording,
 ) -> uuid.UUID:
     session_id = uuid.uuid4()
-    session = _LiveCaptureSession(org_id, start_url, request_id, role, user_id)
+    session = _LiveCaptureSession(org_id, start_url, request_id, role, user_id, persist_fn=persist_fn)
     with _registry_lock:
         _sessions[session_id] = session
     session.start()
