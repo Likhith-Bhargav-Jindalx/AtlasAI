@@ -2,6 +2,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +19,18 @@ from dotenv import dotenv_values, find_dotenv
 # the observed worst case while still bounding a genuinely hung/broken
 # script eventually.
 _CERTIFY_TIMEOUT_SECONDS = 1200
+
+# How often the Popen-polling loop in certify_golden_script_once checks
+# stop_event while a certify subprocess is running. Small enough that a
+# Stop click takes effect promptly; large enough not to busy-loop.
+_STOP_POLL_INTERVAL_SECONDS = 0.5
+
+
+class CertifyCancelled(Exception):
+    """Raised by certify_golden_script_once when stop_event fires while a
+    certify subprocess is running. Callers (run_certify_phase) must not
+    record this as a failed CertificationRun -- it was stopped on
+    purpose, not broken."""
 
 
 def _certify_env() -> dict[str, str]:
@@ -71,6 +85,7 @@ def certify_golden_script(script_path: Path, *, args: list[str] | None = None, r
 
 def certify_golden_script_once(
     script_path: Path, *, args: list[str] | None = None, diagnostics_dir: Path | None = None,
+    stop_event: threading.Event | None = None,
 ) -> tuple[bool, str | None, dict | None]:
     """Runs a golden script once from a fresh process. Unlike
     certify_golden_script (which only returns an aggregate pass count),
@@ -86,28 +101,56 @@ def certify_golden_script_once(
     also useful for arbitrary Python scripts. The authoring pipeline supplies
     it for generated goldens so every fresh certification process writes its
     step screenshot/HTML evidence to an isolated directory, just as the old
-    app's frozen-run runner did."""
+    app's frozen-run runner did.
+
+    `stop_event`, when given, is polled every _STOP_POLL_INTERVAL_SECONDS
+    while the subprocess runs -- a plain subprocess.run(timeout=...) blocks
+    the calling thread uninterruptibly for up to _CERTIFY_TIMEOUT_SECONDS
+    (20 minutes), during which a Stop click from the UI had no way to take
+    effect until this call returned on its own. Raises CertifyCancelled
+    (not a return value) when stopped this way, so run_certify_phase's
+    loop can distinguish "stopped on purpose" from an actual failure and
+    skip recording a failed CertificationRun for it."""
     command_args = list(args or [])
     if diagnostics_dir is not None and "--diagnostics-dir" not in command_args:
         diagnostics_dir.mkdir(parents=True, exist_ok=True)
         command_args.extend(["--diagnostics-dir", str(diagnostics_dir)])
+
+    process = subprocess.Popen(
+        [sys.executable, str(script_path), *command_args],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_certify_env(),
+    )
+    deadline = time.monotonic() + _CERTIFY_TIMEOUT_SECONDS
+    stdout = stderr = None
     try:
-        result = subprocess.run(
-            [sys.executable, str(script_path), *command_args],
-            capture_output=True,
-            text=True,
-            timeout=_CERTIFY_TIMEOUT_SECONDS,
-            env=_certify_env(),
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-        stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-        return False, f"timed out after {_CERTIFY_TIMEOUT_SECONDS}s\n{stdout}{stderr}", None
-    if result.returncode == 0:
+        while True:
+            if stop_event is not None and stop_event.is_set():
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+                raise CertifyCancelled()
+            try:
+                stdout, stderr = process.communicate(timeout=_STOP_POLL_INTERVAL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    process.kill()
+                    stdout, stderr = process.communicate(timeout=5)
+                    return False, f"timed out after {_CERTIFY_TIMEOUT_SECONDS}s\n{stdout}{stderr}", None
+                continue
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+    if process.returncode == 0:
         parsed = None
         try:
-            parsed = json.loads(result.stdout.strip())
+            parsed = json.loads((stdout or "").strip())
         except Exception:
             pass
         return True, None, parsed
-    return False, (result.stdout or "") + (result.stderr or ""), None
+    return False, (stdout or "") + (stderr or ""), None

@@ -1,8 +1,6 @@
 import json
-import subprocess
 import textwrap
 from pathlib import Path
-from unittest.mock import patch
 
 from atlas_engine.codegen.emit import emit_golden_script
 from atlas_engine.brain.models import ReferenceTrajectory, TrajectoryStep
@@ -72,26 +70,71 @@ def test_certify_golden_script_once_returns_false_and_evidence_on_failure(tmp_pa
     assert result is None
 
 
-def test_certify_golden_script_once_handles_subprocess_timeout(tmp_path):
-    """subprocess.run(..., timeout=60) raises TimeoutExpired on expiry rather
-    than returning — certify_golden_script_once must catch that and report it
-    as an ordinary (False, evidence) failure rather than letting it propagate
-    and hard-fail the whole authoring run. Mocks subprocess.run instead of
-    actually sleeping 60+ seconds in the test suite."""
+def test_certify_golden_script_once_handles_subprocess_timeout(tmp_path, monkeypatch):
+    """A certify subprocess that runs past _CERTIFY_TIMEOUT_SECONDS must be
+    killed and reported as an ordinary (False, evidence) failure rather
+    than left running or allowed to hang the caller. Patches the module's
+    timeout constant to 1s (real default is 1200s) so this test completes
+    quickly while still exercising the actual Popen/poll/kill path, not a
+    mocked one -- certify_golden_script_once no longer calls
+    subprocess.run at all (see the stop_event-interruptible rewrite), so
+    mocking that function wouldn't exercise anything real anymore."""
+    import atlas_engine.verify.certify as certify_module
     from atlas_engine.verify.certify import certify_golden_script_once
 
-    script_path = tmp_path / "slow.py"
-    script_path.write_text("import time\ntime.sleep(120)\n")
+    monkeypatch.setattr(certify_module, "_CERTIFY_TIMEOUT_SECONDS", 1)
 
-    timeout_exc = subprocess.TimeoutExpired(cmd=["python", str(script_path)], timeout=60, output="partial-out", stderr="partial-err")
-    with patch("atlas_engine.verify.certify.subprocess.run", side_effect=timeout_exc):
-        passed, evidence, result = certify_golden_script_once(script_path)
+    script_path = tmp_path / "slow.py"
+    script_path.write_text("import time\ntime.sleep(30)\n")
+
+    passed, evidence, result = certify_golden_script_once(script_path)
 
     assert passed is False
-    assert "timed out" in evidence
-    assert "partial-out" in evidence
-    assert "partial-err" in evidence
+    assert "timed out after 1s" in evidence
     assert result is None
+
+
+def test_certify_golden_script_once_raises_cancelled_when_stop_event_fires(tmp_path):
+    """A Stop click during certifying must interrupt an in-flight certify
+    subprocess promptly, not wait for it (or all `runs` of them) to
+    finish on their own -- a plain subprocess.run(timeout=1200) blocked
+    the calling thread uninterruptibly for up to 20 minutes per run
+    before this fix."""
+    import threading
+    import time
+
+    import pytest
+
+    from atlas_engine.verify.certify import CertifyCancelled, certify_golden_script_once
+
+    script_path = tmp_path / "slow.py"
+    script_path.write_text("import time\ntime.sleep(30)\n")
+
+    stop_event = threading.Event()
+    threading.Timer(0.7, stop_event.set).start()
+
+    start = time.monotonic()
+    with pytest.raises(CertifyCancelled):
+        certify_golden_script_once(script_path, stop_event=stop_event)
+    elapsed = time.monotonic() - start
+
+    # Must return promptly once stop_event fires, not run the full 30s sleep.
+    assert elapsed < 5
+
+
+def test_certify_golden_script_once_does_not_raise_cancelled_if_stop_event_never_fires(tmp_path, fixture_portal_url):
+    """stop_event is polled, not assumed set -- a normal, uninterrupted
+    certification run must still succeed exactly as before."""
+    from atlas_engine.verify.certify import certify_golden_script_once
+    import threading
+
+    script_path = _write_fixture_golden(tmp_path, fixture_portal_url)
+    stop_event = threading.Event()
+
+    passed, evidence, result = certify_golden_script_once(script_path, stop_event=stop_event)
+
+    assert passed is True
+    assert evidence is None
 
 
 def test_certify_golden_script_once_parses_stdout_json_on_success(tmp_path):

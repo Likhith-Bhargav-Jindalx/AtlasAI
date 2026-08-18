@@ -292,6 +292,35 @@ def test_run_certify_phase_records_failure_evidence_when_script_lives_outside_ru
     assert "boom" in get_store().read_text(blob_ref)
 
 
+def test_run_certify_phase_stops_promptly_when_stop_event_fires_mid_run(fixture_portal_url):
+    """A Stop click during certifying must interrupt the loop promptly --
+    previously a plain subprocess.run(timeout=1200) blocked this call
+    uninterruptibly for up to 20 minutes per run, with no way for the
+    orchestrator's stop_event to take effect until all `runs` attempts
+    finished on their own. A run cancelled this way must not be recorded
+    as a failed CertificationRun -- it was stopped on purpose, not broken."""
+    import threading
+    import time
+
+    _org_id, _profile_id, _recording_id, authoring_run_id = _make_authoring_run_for_golden(fixture_portal_url)
+    script_path = _write_script_under_run_root("import time\ntime.sleep(30)\n")
+
+    stop_event = threading.Event()
+    threading.Timer(0.7, stop_event.set).start()
+
+    start = time.monotonic()
+    passed, total, persisted = run_certify_phase(script_path, authoring_run_id, runs=3, stop_event=stop_event)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5
+    assert passed == 0
+    assert total == 3
+    assert persisted is False
+    with session_scope() as session:
+        cert_runs = session.query(CertificationRun).filter_by(authoring_run_id=authoring_run_id).all()
+        assert cert_runs == []
+
+
 def test_run_certify_phase_persists_extractions_and_uploads_downloads_on_first_success(
     fixture_portal_url, tmp_path, monkeypatch,
 ):

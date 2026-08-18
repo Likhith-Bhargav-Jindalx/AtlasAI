@@ -224,7 +224,7 @@ class _AuthoringRunSession:
                 passed, total, persisted = run_certify_phase(
                     script_path, self.authoring_run_id, recording_id=self.recording_id,
                     runs=_CERTIFY_RUNS, run_number_offset=repair_attempt * _CERTIFY_RUNS,
-                    already_persisted=already_persisted,
+                    already_persisted=already_persisted, stop_event=self.stop_event,
                 )
                 already_persisted = already_persisted or persisted
 

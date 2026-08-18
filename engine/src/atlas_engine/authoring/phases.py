@@ -1,3 +1,4 @@
+import threading
 import uuid
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.llm.client import LlmClient
 from atlas_engine.recording_service import build_extraction_specs, list_page_extractions
 from atlas_engine.storage import get_store
-from atlas_engine.verify.certify import certify_golden_script_once
+from atlas_engine.verify.certify import CertifyCancelled, certify_golden_script_once
 
 
 def run_extract_phase(trajectory: ReferenceTrajectory) -> ReferenceTrajectory:
@@ -101,6 +102,7 @@ def run_golden_phase(
 def run_certify_phase(
     script_path: Path, authoring_run_id: uuid.UUID, *, recording_id: uuid.UUID | None = None,
     runs: int = 3, run_number_offset: int = 0, already_persisted: bool = False,
+    stop_event: threading.Event | None = None,
 ) -> tuple[int, int, bool]:
     """Runs the frozen golden script headless, `runs` times from fresh
     processes, recording one CertificationRun row per attempt. Returns
@@ -118,19 +120,32 @@ def run_certify_phase(
     the same authoring_run_id (e.g. the orchestrator's repair loop) avoid
     colliding with CertificationRun's UniqueConstraint("authoring_run_id",
     "run_number") — each retry passes a different offset so its rows get
-    fresh run_numbers instead of re-using 1..runs."""
+    fresh run_numbers instead of re-using 1..runs.
+
+    `stop_event`, when given, is checked before starting each run AND
+    passed down into certify_golden_script_once so it can interrupt a
+    subprocess already in flight -- without this, a Stop click during
+    certifying had no way to take effect until all `runs` attempts (each
+    up to 20 minutes) finished on their own. A run cancelled this way is
+    NOT recorded as a failed CertificationRun; the loop just stops and
+    returns whatever passed/persisted state it already has."""
     passed = 0
     persisted = already_persisted
     for i in range(1, runs + 1):
+        if stop_event is not None and stop_event.is_set():
+            break
         run_number = run_number_offset + i
         # Every standalone run gets a fresh diagnostics directory. Without
         # this, the emitted script's default `diagnostics/` path is shared by
         # all certification attempts and later failures overwrite the first
         # run's screenshot/HTML evidence.
         diagnostics_dir = script_path.parent / f"certify-{run_number}"
-        ok, failure_output, certify_result = certify_golden_script_once(
-            script_path, diagnostics_dir=diagnostics_dir,
-        )
+        try:
+            ok, failure_output, certify_result = certify_golden_script_once(
+                script_path, diagnostics_dir=diagnostics_dir, stop_event=stop_event,
+            )
+        except CertifyCancelled:
+            break
 
         failure_ref = None
         if not ok:
