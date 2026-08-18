@@ -63,7 +63,20 @@ def _load_production_env() -> None:
         os.environ.setdefault(key.strip(), value.strip())
 
 
+def _configure_log_file() -> None:
+    """A double-clicked .app has no terminal attached — stdout (where
+    atlas_engine.observability.configure_logging writes by default) goes
+    nowhere anyone can ever read. Every crash, including one inside the
+    live-capture background thread, is otherwise unrecoverable for
+    whoever's running the exe. Must run before atlas_engine.api is
+    imported below, since that import triggers configure_logging() at
+    module load time."""
+    log_path = Path.home() / ".atlas" / "logs" / "atlas-desktop.log"
+    os.environ.setdefault("ATLAS_LOG_FILE", str(log_path))
+
+
 _load_production_env()
+_configure_log_file()
 
 import uvicorn
 import webview

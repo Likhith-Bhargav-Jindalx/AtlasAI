@@ -560,7 +560,24 @@ def start_recording_endpoint(body: StartRecordingBody) -> StartRecordingResponse
 
 @app.post("/recordings/{capture_session_id}/stop", response_model=StopRecordingResponse)
 def stop_recording_endpoint(capture_session_id: str) -> StopRecordingResponse:
-    recording_id = stop_live_capture(uuid.UUID(capture_session_id))
+    try:
+        recording_id = stop_live_capture(uuid.UUID(capture_session_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except TimeoutError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        # A browser-launch/navigation failure inside the live-capture
+        # background thread (live_capture.py's _LiveCaptureSession._run)
+        # only ever surfaces here, when stop() re-raises self.error.
+        # unhandled_exception_handler (above) deliberately hides exception
+        # detail from every OTHER endpoint's caller, which is right for a
+        # shared multi-tenant backend -- but this endpoint's caller is the
+        # single person running the desktop exe, who has no other way to
+        # find out what actually went wrong (the full traceback is already
+        # logged; see observability.configure_logging's ATLAS_LOG_FILE for
+        # where a packaged .app's build of that log ends up).
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
     return StopRecordingResponse(recording_id=str(recording_id))
 
 

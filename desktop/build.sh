@@ -56,10 +56,45 @@ rm -rf build dist atlas-desktop.spec
 echo "Copying the vendored browser into the frozen bundle..."
 cp -R "$LOCAL_BROWSERS_STASH" "dist/atlas-desktop/_internal/playwright/driver/package/.local-browsers"
 
+# --onedir --windowed on macOS produces TWO separate output trees: the flat
+# dist/atlas-desktop/ folder above, AND a real dist/atlas-desktop.app bundle
+# with its own independent Contents/Resources/playwright/... copy -- PyInstaller
+# builds both from the same Analysis pass, but this reinsertion step (needed
+# only because PyInstaller's own binary-processing chokes on the vendored
+# browser's nested .app structure, per the top-of-file comment) has to be
+# done manually into EACH tree. Missing this made the actual .app bundle --
+# the one people double-click -- silently ship with no Chromium at all:
+# playwright.chromium.launch() fails every single time, deterministically,
+# for anyone running the .app rather than the bare executable inside the
+# flat folder. Confirmed by inspecting a build made before this fix: the
+# flat folder had .local-browsers, the .app did not.
+if [ -d "dist/atlas-desktop.app" ]; then
+  echo "Copying the vendored browser into the .app bundle (the flat folder's reinsertion above doesn't reach it)..."
+  cp -R "$LOCAL_BROWSERS_STASH" "dist/atlas-desktop.app/Contents/Resources/playwright/driver/package/.local-browsers"
+fi
+
 echo "Restoring the vendored browser in the dev venv (for unfrozen testing)..."
 cp -R "$LOCAL_BROWSERS_STASH" "$local_browsers"
+
+# PyInstaller signs the .app bundle itself during BUNDLE-00.toc (see "Signing
+# the BUNDLE..." in its own build output) -- but that happens BEFORE the
+# vendored browser is added back in above, so it lands as an unsigned set of
+# files inside an otherwise-signed bundle. Re-signing ad-hoc here (identity
+# "-": no real certificate, just a local, unverified signature) covers
+# everything now that it's all actually present, which is what lets
+# Gatekeeper run this on a DIFFERENT machine than the one it was built on
+# without every nested unsigned binary needing its own manual approval.
+if [ -d "dist/atlas-desktop.app" ]; then
+  echo "Re-signing dist/atlas-desktop.app (ad-hoc) now that the browser is actually in it..."
+  codesign --force --deep --sign - "dist/atlas-desktop.app"
+fi
 
 echo "Zipping dist/atlas-desktop for distribution..."
 (cd dist && zip -qr atlas-desktop.zip atlas-desktop)
 
-echo "Done: dist/atlas-desktop.zip"
+if [ -d "dist/atlas-desktop.app" ]; then
+  echo "Zipping dist/atlas-desktop.app for distribution -- this is the one to actually hand to someone else: a real macOS .app double-clicks and runs normally, unlike the bare executable inside atlas-desktop.zip's flat folder."
+  (cd dist && zip -qry atlas-desktop-app.zip atlas-desktop.app)
+fi
+
+echo "Done: dist/atlas-desktop-app.zip (share this one) — dist/atlas-desktop.zip also produced for dev/testing"
