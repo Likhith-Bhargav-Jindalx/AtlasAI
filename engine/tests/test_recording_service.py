@@ -232,6 +232,50 @@ def test_persist_recording_creates_a_video_asset_per_additional_page(tmp_path, f
         assert popup_step.offset_ms == 1000  # action at 5000ms, popup video started at 4000ms
         assert popup_step.caption_text == "Click #report-link"
 
+        recording = session.get(Recording, recording_id)
+        prefix = Path(settings.run_root) / recording.capture_blob_prefix
+
+    main_actions_stored = json.loads((prefix / "actions.json").read_text())
+    assert len(main_actions_stored) == 1
+    assert main_actions_stored[0]["selector_candidates"] == [{"selector": "#login-btn", "rank": 0}]
+
+    popup_actions_stored = json.loads((prefix / "actions-page1.json").read_text())
+    assert len(popup_actions_stored) == 1
+    assert popup_actions_stored[0]["selector_candidates"] == [{"selector": "#report-link", "rank": 0}]
+    assert popup_actions_stored[0]["kind"] == "click"
+    assert "dom_before" not in popup_actions_stored[0]
+    assert "dom_after" not in popup_actions_stored[0]
+
+
+def test_persist_recording_writes_no_extra_actions_file_when_a_popup_page_has_no_actions(tmp_path, fixture_portal_url):
+    from atlas_engine.recording_service import PageCapture
+
+    main_video = tmp_path / "main.webm"
+    main_video.write_bytes(b"main-bytes")
+    popup_video = tmp_path / "popup.webm"
+    popup_video.write_bytes(b"popup-bytes")
+
+    with session_scope() as session:
+        org = Organization(name="Empty Popup Actions Org", slug=f"empty-popup-actions-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    recording_id = persist_recording(
+        org_id, start_url, [],
+        video_path=main_video, video_started_at_ms=0, video_ended_at_ms=2000,
+        additional_pages=[
+            PageCapture(page_index=1, actions=[], video_path=popup_video, video_started_at_ms=4000, video_ended_at_ms=6000),
+        ],
+    )
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        prefix = Path(settings.run_root) / recording.capture_blob_prefix
+
+    assert not (prefix / "actions-page1.json").exists()
+
 
 def test_persist_recording_stores_codegen_script(fixture_portal_url):
     with session_scope() as session:

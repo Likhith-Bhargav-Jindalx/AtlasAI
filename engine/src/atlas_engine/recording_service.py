@@ -105,6 +105,23 @@ def persist_recording(
             [{k: v for k, v in vars(a).items() if k not in ("dom_before", "dom_after")} for a in actions],
         )
 
+        # actions.json only ever covers the main page (page_index 0) --
+        # a popup/tab's own CaptureSession produces a completely separate
+        # actions list (see live_capture.py's _attach_new_pages), which
+        # was previously persisted nowhere as its own action log (only as
+        # a much-reduced kind/selector_candidates/value subset inside
+        # each page's own {stem}-dom-events.json). Written per-page here,
+        # matching the existing video-page{N}.webm naming convention.
+        for page_capture in (additional_pages or []):
+            if page_capture.actions:
+                run_dir.write_json(
+                    f"actions-page{page_capture.page_index}.json",
+                    [
+                        {k: v for k, v in vars(a).items() if k not in ("dom_before", "dom_after")}
+                        for a in page_capture.actions
+                    ],
+                )
+
         trajectory = extract_trajectory(actions)
         trajectory_blob_ref = run_dir.write_json("trajectory.json", trajectory_to_dict(trajectory))
 
