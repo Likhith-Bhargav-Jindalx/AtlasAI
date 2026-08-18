@@ -478,11 +478,13 @@ def create_recording_request(
         return request.id
 
 
-def list_recording_requests(org_id: str, status: str | None = None) -> list[dict]:
+def list_recording_requests(org_id: str, status: str | None = None, requested_by: str | None = None) -> list[dict]:
     with session_scope() as session:
         query = session.query(RecordingRequest).filter_by(org_id=uuid.UUID(org_id))
         if status is not None:
             query = query.filter_by(status=status)
+        if requested_by is not None:
+            query = query.filter_by(requested_by=uuid.UUID(requested_by))
         return [
             {
                 "id": str(r.id),

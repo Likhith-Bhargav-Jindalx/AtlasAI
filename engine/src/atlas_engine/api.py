@@ -197,16 +197,29 @@ class ClaimRequestBody(BaseModel):
 
 
 @app.post("/recording-requests", response_model=RecordingRequestCreatedResponse)
-def create_recording_request_endpoint(body: CreateRecordingRequestBody) -> RecordingRequestCreatedResponse:
+def create_recording_request_endpoint(
+    body: CreateRecordingRequestBody, _user: CurrentUser = Depends(get_current_user),
+) -> RecordingRequestCreatedResponse:
+    # requested_by is always the authenticated caller, never trusted from
+    # the client — otherwise anyone could attribute a request to someone
+    # else's inbox.
     request_id = create_recording_request(
-        body.org_id, body.requested_by, body.target_url, body.title, body.description
+        str(_user.org_id), str(_user.id), body.target_url, body.title, body.description
     )
     return RecordingRequestCreatedResponse(request_id=str(request_id))
 
 
 @app.get("/recording-requests")
-def list_recording_requests_endpoint(org_id: str, status: str | None = None) -> list[dict]:
-    return list_recording_requests(org_id, status=status)
+def list_recording_requests_endpoint(
+    status: str | None = None, _user: CurrentUser = Depends(get_current_user),
+) -> list[dict]:
+    # Same pattern as GET /recordings: org_id always comes from the
+    # session, and an operations agent's own id is forced as the
+    # requested_by filter so their inbox only ever shows their own tasks.
+    requested_by = None
+    if _user.job_function == "operations_agent" and _user.role not in ("owner", "admin"):
+        requested_by = str(_user.id)
+    return list_recording_requests(str(_user.org_id), status=status, requested_by=requested_by)
 
 
 @app.post("/recording-requests/{request_id}/claim")
