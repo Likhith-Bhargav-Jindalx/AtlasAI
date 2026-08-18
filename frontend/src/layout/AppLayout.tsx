@@ -27,7 +27,7 @@ const ROLE_LABELS: Record<ViewRole, string> = {
 
 export function AppLayout() {
   const { user, logout } = useAuth()
-  const { role, setRole } = useRole()
+  const { role, setRole, locked } = useRole()
 
   return (
     <div className="flex min-h-screen bg-atlas-bg text-atlas-ink font-sans">
@@ -61,17 +61,23 @@ export function AppLayout() {
         <div className="mt-auto flex flex-col gap-2">
           <div className="text-[10px] tracking-wider uppercase text-atlas-muted px-2">Viewing as</div>
           <div className="flex flex-col gap-0.5 bg-[#f7f8f7] border border-atlas-border rounded-xl p-1">
-            {(Object.keys(ROLE_LABELS) as ViewRole[]).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRole(r)}
-                className={`px-2.5 py-1.5 rounded-[9px] text-[12.5px] text-left ${
-                  r === role ? 'bg-white font-semibold' : 'text-atlas-body'
-                }`}
-              >
-                {ROLE_LABELS[r]}
-              </button>
-            ))}
+            {locked ? (
+              <div className="px-2.5 py-1.5 rounded-[9px] text-[12.5px] text-left bg-white font-semibold">
+                {ROLE_LABELS.agent}
+              </div>
+            ) : (
+              (Object.keys(ROLE_LABELS) as ViewRole[]).map((r) => (
+                <button
+                  key={r}
+                  onClick={() => setRole(r)}
+                  className={`px-2.5 py-1.5 rounded-[9px] text-[12.5px] text-left ${
+                    r === role ? 'bg-white font-semibold' : 'text-atlas-body'
+                  }`}
+                >
+                  {ROLE_LABELS[r]}
+                </button>
+              ))
+            )}
           </div>
           <button onClick={() => logout()} className="text-left text-[12.5px] text-atlas-body px-2 pt-2 hover:text-atlas-ink">
             Sign out

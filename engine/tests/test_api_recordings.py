@@ -136,11 +136,21 @@ def test_get_recording_detail_reemits_codegen_with_portal_info_threaded(fixture_
 
 
 def test_list_recordings_returns_newest_first_and_filters_by_status(fixture_portal_url):
+    from atlas_engine.auth.passwords import hash_password
+    from atlas_engine.db.models import User
+
     with session_scope() as session:
         org = Organization(name="List Recordings Org", slug=f"list-recordings-org-{uuid.uuid4()}")
         session.add(org)
         session.flush()
         org_id = str(org.id)
+        dev = User(
+            org_id=org.id, email=f"dev-{uuid.uuid4()}@example.com", password_hash=hash_password("pw"),
+            job_function="developer",
+        )
+        session.add(dev)
+        session.flush()
+        dev_email = dev.email
 
     start_url = f"{fixture_portal_url}/login.html"
     older_id = persist_recording(org_id, start_url, [])
@@ -151,6 +161,7 @@ def test_list_recordings_returns_newest_first_and_filters_by_status(fixture_port
         session.get(Recording, older_id).status = "discarded"
 
     client = TestClient(app)
+    assert client.post("/auth/login", json={"email": dev_email, "password": "pw"}).status_code == 200
     response = client.get(f"/recordings?org_id={org_id}")
 
     assert response.status_code == 200
@@ -166,11 +177,21 @@ def test_list_recordings_returns_newest_first_and_filters_by_status(fixture_port
 def test_list_recordings_handles_multi_page_recordings(tmp_path, fixture_portal_url):
     """Regression test: a recording with a popup/tab has more than one
     VideoAsset row. list_recordings must not assume exactly one."""
+    from atlas_engine.auth.passwords import hash_password
+    from atlas_engine.db.models import User
+
     with session_scope() as session:
         org = Organization(name="Multi Page Org", slug=f"multi-page-org-{uuid.uuid4()}")
         session.add(org)
         session.flush()
         org_id = str(org.id)
+        dev = User(
+            org_id=org.id, email=f"dev-{uuid.uuid4()}@example.com", password_hash=hash_password("pw"),
+            job_function="developer",
+        )
+        session.add(dev)
+        session.flush()
+        dev_email = dev.email
 
     main_video = tmp_path / "main.webm"
     main_video.write_bytes(b"fake-webm-bytes")
@@ -190,6 +211,7 @@ def test_list_recordings_handles_multi_page_recordings(tmp_path, fixture_portal_
     )
 
     client = TestClient(app)
+    assert client.post("/auth/login", json={"email": dev_email, "password": "pw"}).status_code == 200
     response = client.get(f"/recordings?org_id={org_id}")
 
     assert response.status_code == 200
@@ -261,7 +283,17 @@ def test_get_recording_detail_includes_latest_authoring_run_id(fixture_portal_ur
     assert detail_after["latest_authoring_run_id"] == run_id
 
 
-def test_list_recordings_endpoint_filters_by_user_id(fixture_portal_url):
+def test_list_recordings_endpoint_requires_authentication():
+    client = TestClient(app)
+    response = client.get("/recordings")
+    assert response.status_code == 401
+
+
+def test_list_recordings_endpoint_forces_operations_agent_to_their_own_recordings(fixture_portal_url):
+    """An operations agent must only ever see their own recordings, even if
+    they pass someone else's user_id (or none at all) — the effective filter
+    is derived from the authenticated session, not trusted from the client."""
+    from atlas_engine.auth.passwords import hash_password
     from atlas_engine.db.models import User
 
     with session_scope() as session:
@@ -269,19 +301,93 @@ def test_list_recordings_endpoint_filters_by_user_id(fixture_portal_url):
         session.add(org)
         session.flush()
         org_id = str(org.id)
-        user = User(org_id=org.id, email="c@example.com", password_hash="x", job_function="operations_agent")
-        session.add(user)
+        agent = User(
+            org_id=org.id, email=f"agent-{uuid.uuid4()}@example.com", password_hash=hash_password("pw"),
+            job_function="operations_agent",
+        )
+        other = User(org_id=org.id, email=f"other-{uuid.uuid4()}@example.com", password_hash="x", job_function="operations_agent")
+        session.add_all([agent, other])
         session.flush()
-        user_id = str(user.id)
+        agent_email, agent_id, other_id = agent.email, str(agent.id), str(other.id)
 
     start_url = f"{fixture_portal_url}/login.html"
-    mine = persist_recording(org_id, start_url, [], user_id=user_id)
-    persist_recording(org_id, start_url, [])  # someone else's / unattributed
+    mine = persist_recording(org_id, start_url, [], user_id=agent_id)
+    persist_recording(org_id, start_url, [], user_id=other_id)
 
     client = TestClient(app)
-    response = client.get(f"/recordings?org_id={org_id}&user_id={user_id}")
+    login_response = client.post("/auth/login", json={"email": agent_email, "password": "pw"})
+    assert login_response.status_code == 200
+
+    # Even asking for someone else's user_id explicitly must not work.
+    response = client.get(f"/recordings?org_id={org_id}&user_id={other_id}")
     assert response.status_code == 200
     assert [r["id"] for r in response.json()] == [str(mine)]
+
+
+def test_list_recordings_endpoint_lets_developer_see_all_org_recordings(fixture_portal_url):
+    """Unlike an operations agent, a developer's view is unrestricted —
+    this must keep working exactly as before."""
+    from atlas_engine.auth.passwords import hash_password
+    from atlas_engine.db.models import User
+
+    with session_scope() as session:
+        org = Organization(name="API Dev Filter Org", slug=f"api-dev-filter-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        dev = User(
+            org_id=org.id, email=f"dev-{uuid.uuid4()}@example.com", password_hash=hash_password("pw"),
+            job_function="developer",
+        )
+        agent = User(org_id=org.id, email=f"agent2-{uuid.uuid4()}@example.com", password_hash="x", job_function="operations_agent")
+        session.add_all([dev, agent])
+        session.flush()
+        dev_email, agent_id = dev.email, str(agent.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    persist_recording(org_id, start_url, [], user_id=agent_id)
+    persist_recording(org_id, start_url, [])
+
+    client = TestClient(app)
+    login_response = client.post("/auth/login", json={"email": dev_email, "password": "pw"})
+    assert login_response.status_code == 200
+
+    response = client.get(f"/recordings?org_id={org_id}")
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+
+
+def test_list_recordings_endpoint_ignores_org_id_from_a_different_org(fixture_portal_url):
+    """A logged-in user's own org is always used server-side — a
+    client-supplied org_id for a different org must never leak that org's
+    recordings."""
+    from atlas_engine.auth.passwords import hash_password
+    from atlas_engine.db.models import User
+
+    with session_scope() as session:
+        home_org = Organization(name="Home Org", slug=f"home-org-{uuid.uuid4()}")
+        other_org = Organization(name="Other Org", slug=f"other-org-{uuid.uuid4()}")
+        session.add_all([home_org, other_org])
+        session.flush()
+        home_org_id, other_org_id = str(home_org.id), str(other_org.id)
+        dev = User(
+            org_id=home_org.id, email=f"crossorg-{uuid.uuid4()}@example.com", password_hash=hash_password("pw"),
+            job_function="developer",
+        )
+        session.add(dev)
+        session.flush()
+        dev_email = dev.email
+
+    start_url = f"{fixture_portal_url}/login.html"
+    persist_recording(other_org_id, start_url, [])  # belongs to the other org
+
+    client = TestClient(app)
+    login_response = client.post("/auth/login", json={"email": dev_email, "password": "pw"})
+    assert login_response.status_code == 200
+
+    response = client.get(f"/recordings?org_id={other_org_id}")
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 def test_patch_recording_updates_title_and_description(fixture_portal_url):

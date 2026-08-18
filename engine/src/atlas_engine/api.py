@@ -544,8 +544,18 @@ class StopRecordingResponse(BaseModel):
 
 
 @app.get("/recordings")
-def list_recordings_endpoint(org_id: str, status: str | None = None, user_id: str | None = None) -> list[dict]:
-    return list_recordings(org_id, status=status, user_id=user_id)
+def list_recordings_endpoint(
+    status: str | None = None, user_id: str | None = None,
+    _user: CurrentUser = Depends(get_current_user),
+) -> list[dict]:
+    # org_id and, for an operations agent, user_id are always derived from
+    # the authenticated session rather than trusted from the client — a
+    # client-supplied value for either would otherwise let one org see
+    # another's recordings, or one agent see another agent's.
+    effective_user_id = user_id
+    if _user.job_function == "operations_agent" and _user.role not in ("owner", "admin"):
+        effective_user_id = str(_user.id)
+    return list_recordings(str(_user.org_id), status=status, user_id=effective_user_id)
 
 
 @app.post("/recordings/start", response_model=StartRecordingResponse)
