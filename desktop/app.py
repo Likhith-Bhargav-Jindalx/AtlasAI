@@ -89,7 +89,32 @@ def _run_server() -> None:
     uvicorn.run(fastapi_app, host="127.0.0.1", port=PORT, log_level="info")
 
 
+def _unblock_windows_bundle() -> None:
+    """A zip downloaded via a browser gets tagged by Windows as
+    "Internet zone" (the Zone.Identifier NTFS alternate-data-stream, aka
+    Mark-of-the-Web) — and extracting it propagates that tag onto every
+    extracted file. .NET Framework's CLR loader refuses to resolve
+    exports from an Internet-zone assembly, which is why pywebview's
+    Windows backend (pythonnet -> clr_loader -> Python.Runtime.dll) fails
+    with "Failed to resolve Python.Runtime.Loader.Initialize" the first
+    time someone runs this exe straight out of their Downloads folder,
+    unless they first right-click -> Properties -> Unblock the zip.
+    Stripping the stream from every bundled file before webview.start()
+    below loads pythonnet makes the exe self-healing instead of relying
+    on every recipient knowing to unblock it manually."""
+    if sys.platform != "win32" or not getattr(sys, "frozen", False):
+        return
+    bundle_root = Path(sys.executable).resolve().parent
+    for path in bundle_root.rglob("*"):
+        if path.is_file():
+            try:
+                os.remove(f"{path}:Zone.Identifier")
+            except OSError:
+                pass
+
+
 def main() -> None:
+    _unblock_windows_bundle()
     frontend_dist = _resource_path("frontend_dist")
 
     # Mounted after the app's own routes are already registered at import
