@@ -7,6 +7,8 @@ export interface RecordingSummary {
   role: string
   request_id: string | null
   request_title: string | null
+  lob: string | null
+  action: string | null
   portal_domain: string | null
   duration_seconds: number | null
   has_video: boolean
@@ -38,6 +40,21 @@ export interface RecordingDetail {
   latest_authoring_run_id: string | null
   codegen_script: string | null
   pages: RecordingPage[]
+  lob: string | null
+  action: string | null
+  payer_scope: string | null
+  payer_ids: string[] | null
+  other_system_ids: string[] | null
+  carc_code_id: string | null
+  code_free_text: string | null
+  sub_reason: string | null
+  resolution_path: string[] | null
+  evidence_required: string[] | null
+  report_id: string | null
+  date_param_logic: string | null
+  output_destination: string | null
+  post_processing: string | null
+  scenario_description: string | null
 }
 
 export function useRecordings(orgId: string, status?: string, userId?: string) {
@@ -74,10 +91,28 @@ export function useStopRecording() {
   })
 }
 
+export interface UpdateRecordingDetailsBody {
+  title?: string
+  description?: string
+  payer_scope?: string
+  payer_ids?: string[]
+  other_system_ids?: string[]
+  carc_code_id?: string
+  code_free_text?: string
+  sub_reason?: string
+  resolution_path?: string[]
+  evidence_required?: string[]
+  report_id?: string
+  date_param_logic?: string
+  output_destination?: string
+  post_processing?: string
+  scenario_description?: string
+}
+
 export function usePatchRecording(recordingId: string | undefined) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (body: { title?: string; description?: string }) =>
+    mutationFn: (body: UpdateRecordingDetailsBody) =>
       apiFetch<{ ok: boolean }>(`/recordings/${recordingId}`, { method: 'PATCH', body: JSON.stringify(body) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['recording', recordingId] }),
   })

@@ -73,9 +73,30 @@ class Recording(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(default=None)
 
+    # --- Recording form v1, Section B (see requests.py's module docstring
+    # for the design doc) — filled in on submit-after-stop, once the SME
+    # has full context of what actually happened. Every field is optional
+    # since which ones apply depends on the request's lob/action. ---
+    payer_scope: Mapped[str | None] = mapped_column(default=None)
+    payer_ids: Mapped[list | None] = mapped_column(PortableJSON, default=None)
+    other_system_ids: Mapped[list | None] = mapped_column(PortableJSON, default=None)
+    carc_code_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("carc_codes.id", ondelete="SET NULL"), default=None)
+    # Free-text fallback for a rejection code with no CARC/RARC entry (e.g.
+    # a clearinghouse-specific rejection) — see the doc's `code` field notes.
+    code_free_text: Mapped[str | None] = mapped_column(default=None)
+    sub_reason: Mapped[str | None] = mapped_column(default=None)
+    resolution_path: Mapped[list | None] = mapped_column(PortableJSON, default=None)
+    evidence_required: Mapped[list | None] = mapped_column(PortableJSON, default=None)
+    report_id: Mapped[str | None] = mapped_column(default=None)
+    date_param_logic: Mapped[str | None] = mapped_column(default=None)
+    output_destination: Mapped[str | None] = mapped_column(default=None)
+    post_processing: Mapped[str | None] = mapped_column(default=None)
+    scenario_description: Mapped[str | None] = mapped_column(default=None)
+
     org: Mapped["Organization"] = relationship()
     portal_profile: Mapped["PortalProfile"] = relationship()
     user: Mapped["User | None"] = relationship(foreign_keys=[user_id])
+    carc_code: Mapped["CarcCode | None"] = relationship()
 
 
 class ReferenceTrajectory(Base):

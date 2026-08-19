@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Inbox } from 'lucide-react'
 import { useAuth } from '../../auth/AuthContext'
 import { useCreateRecordingRequest, useRecordingRequests } from '../../lib/recordingRequests'
 import { StatusPill } from '../../components/StatusPill'
+import { RecordingFormSectionA, type SectionAValues } from '../../components/RecordingFormSectionA'
 
 export function InboxPage() {
   const { user } = useAuth()
@@ -14,17 +15,16 @@ export function InboxPage() {
   const createRequest = useCreateRecordingRequest()
 
   const [showForm, setShowForm] = useState(false)
-  const [title, setTitle] = useState('')
-  const [targetUrl, setTargetUrl] = useState('')
 
   const requests = [...(openRequests ?? []), ...(submittedRequests ?? [])]
 
-  async function handleCreate(event: FormEvent) {
-    event.preventDefault()
+  async function handleCreate(values: SectionAValues) {
     const result = await createRequest.mutateAsync({
-      org_id: orgId, requested_by: user!.user_id, target_url: targetUrl, title,
+      org_id: orgId, requested_by: user!.user_id, target_url: values.targetUrl, title: values.workflowName,
+      lob: values.lob, category: values.category, action: values.action, system_id: values.systemId,
+      client_scope: values.clientScope, reuse_scope: values.reuseScope,
     })
-    navigate(`/agent/record?requestId=${result.request_id}&url=${encodeURIComponent(targetUrl)}`)
+    navigate(`/agent/record?requestId=${result.request_id}&url=${encodeURIComponent(values.targetUrl)}`)
   }
 
   function startRecording(request: { id: string; target_url: string }) {
@@ -48,19 +48,12 @@ export function InboxPage() {
       </div>
 
       {showForm && (
-        <form onSubmit={handleCreate} className="bg-atlas-card border border-atlas-border rounded-2xl p-5 flex flex-col gap-3 max-w-md">
-          <input
-            required placeholder="Title (e.g. Check eligibility)" value={title} onChange={(e) => setTitle(e.target.value)}
-            className="px-3.5 py-2.5 rounded-[10px] border border-atlas-border outline-none focus:border-atlas-accent text-sm"
-          />
-          <input
-            required type="url" placeholder="https://portal.example.com/..." value={targetUrl} onChange={(e) => setTargetUrl(e.target.value)}
-            className="px-3.5 py-2.5 rounded-[10px] border border-atlas-border outline-none focus:border-atlas-accent text-sm"
-          />
-          <button type="submit" className="bg-atlas-primary hover:bg-atlas-primaryHover text-white rounded-full py-2.5 text-[13.5px] font-medium">
-            Create and start recording
-          </button>
-        </form>
+        <RecordingFormSectionA
+          onCancel={() => setShowForm(false)}
+          onSubmit={handleCreate}
+          isSubmitting={createRequest.isPending}
+          error={createRequest.isError ? (createRequest.error as Error).message : undefined}
+        />
       )}
 
       {requests.length > 0 ? (
@@ -70,7 +63,14 @@ export function InboxPage() {
           </div>
           {requests.map((r) => (
             <div key={r.id} className="grid grid-cols-[1.7fr_1.2fr_.7fr_auto] gap-5 px-[22px] py-[18px] border-b border-atlas-rowBorder items-center hover:bg-[#fbfcfb]">
-              <div className="text-sm font-medium tracking-tight">{r.title}</div>
+              <div className="flex items-center gap-2">
+                {r.lob && (
+                  <span className="text-[10.5px] font-semibold uppercase tracking-wider text-atlas-primary bg-atlas-accentSubtle px-2 py-0.5 rounded-full flex-none">
+                    {r.lob}
+                  </span>
+                )}
+                <div className="text-sm font-medium tracking-tight truncate">{r.title}</div>
+              </div>
               <div className="text-[12.5px] text-atlas-body truncate">{r.target_url}</div>
               <div><StatusPill status={r.status} /></div>
               <button

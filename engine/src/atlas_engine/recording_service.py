@@ -245,7 +245,10 @@ def _persist_video_asset(
     return duration_seconds
 
 
-def list_recordings(org_id: str, status: str | None = None, user_id: str | None = None) -> list[dict]:
+def list_recordings(
+    org_id: str, status: str | None = None, user_id: str | None = None,
+    *, lob: str | None = None, action: str | None = None, payer_id: str | None = None,
+) -> list[dict]:
     with session_scope() as session:
         query = session.query(Recording).filter_by(org_id=uuid.UUID(org_id))
         if status is not None:
@@ -262,6 +265,16 @@ def list_recordings(org_id: str, status: str | None = None, user_id: str | None 
                 .one_or_none()
             )
             request = session.get(RecordingRequest, recording.request_id) if recording.request_id else None
+
+            # lob/action live on the linked request (Section A); no join is
+            # worth it here since every row already loads its request above.
+            if lob is not None and (request is None or request.lob != lob):
+                continue
+            if action is not None and (request is None or request.action != action):
+                continue
+            if payer_id is not None and not (recording.payer_ids and payer_id in recording.payer_ids):
+                continue
+
             profile = session.get(PortalProfile, recording.portal_profile_id)
             has_codegen = store.exists(f"{recording.capture_blob_prefix}/codegen.py")
             if not has_codegen:
@@ -273,6 +286,8 @@ def list_recordings(org_id: str, status: str | None = None, user_id: str | None 
                 "role": recording.role,
                 "request_id": str(recording.request_id) if recording.request_id else None,
                 "request_title": request.title if request is not None else None,
+                "lob": request.lob if request is not None else None,
+                "action": request.action if request is not None else None,
                 "portal_domain": profile.domain if profile is not None else None,
                 "duration_seconds": recording.duration_seconds,
                 "has_video": video_asset is not None,
@@ -354,6 +369,11 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
         )
         latest_authoring_run_id = str(latest_run.id) if latest_run is not None else None
 
+        # lob/action live on the linked request (Section A) — surfaced here
+        # so the review page's Section B form knows which conditional
+        # fields apply, without a separate round trip.
+        request = session.get(RecordingRequest, recording.request_id) if recording.request_id else None
+
         return {
             "id": str(recording.id),
             "status": recording.status,
@@ -363,10 +383,38 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
             "latest_authoring_run_id": latest_authoring_run_id,
             "codegen_script": codegen_script,
             "pages": pages,
+            "lob": request.lob if request is not None else None,
+            "action": request.action if request is not None else None,
+            "payer_scope": recording.payer_scope,
+            "payer_ids": recording.payer_ids,
+            "other_system_ids": recording.other_system_ids,
+            "carc_code_id": str(recording.carc_code_id) if recording.carc_code_id else None,
+            "code_free_text": recording.code_free_text,
+            "sub_reason": recording.sub_reason,
+            "resolution_path": recording.resolution_path,
+            "evidence_required": recording.evidence_required,
+            "report_id": recording.report_id,
+            "date_param_logic": recording.date_param_logic,
+            "output_destination": recording.output_destination,
+            "post_processing": recording.post_processing,
+            "scenario_description": recording.scenario_description,
         }
 
 
-def update_recording_details(recording_id: uuid.UUID, *, title: str | None = None, description: str | None = None) -> None:
+def update_recording_details(
+    recording_id: uuid.UUID, *, title: str | None = None, description: str | None = None,
+    payer_scope: str | None = None, payer_ids: list[str] | None = None,
+    other_system_ids: list[str] | None = None, carc_code_id: str | None = None,
+    code_free_text: str | None = None, sub_reason: str | None = None,
+    resolution_path: list[str] | None = None, evidence_required: list[str] | None = None,
+    report_id: str | None = None, date_param_logic: str | None = None,
+    output_destination: str | None = None, post_processing: str | None = None,
+    scenario_description: str | None = None,
+) -> None:
+    """title/description are the pre-existing fields; everything else is
+    Section B of the recording form (see recording_form_validation.py for
+    the business rules the caller — update_recording_details_endpoint — is
+    expected to have already checked before calling this)."""
     with session_scope() as session:
         recording = session.get(Recording, recording_id)
         if recording is None:
@@ -375,6 +423,32 @@ def update_recording_details(recording_id: uuid.UUID, *, title: str | None = Non
             recording.title = title
         if description is not None:
             recording.description = description
+        if payer_scope is not None:
+            recording.payer_scope = payer_scope
+        if payer_ids is not None:
+            recording.payer_ids = payer_ids
+        if other_system_ids is not None:
+            recording.other_system_ids = other_system_ids
+        if carc_code_id is not None:
+            recording.carc_code_id = uuid.UUID(carc_code_id)
+        if code_free_text is not None:
+            recording.code_free_text = code_free_text
+        if sub_reason is not None:
+            recording.sub_reason = sub_reason
+        if resolution_path is not None:
+            recording.resolution_path = resolution_path
+        if evidence_required is not None:
+            recording.evidence_required = evidence_required
+        if report_id is not None:
+            recording.report_id = report_id
+        if date_param_logic is not None:
+            recording.date_param_logic = date_param_logic
+        if output_destination is not None:
+            recording.output_destination = output_destination
+        if post_processing is not None:
+            recording.post_processing = post_processing
+        if scenario_description is not None:
+            recording.scenario_description = scenario_description
 
 
 def submit_recording_for_authoring(recording_id: uuid.UUID, submitted_by: uuid.UUID) -> uuid.UUID:
@@ -460,8 +534,14 @@ def _caption_for(action: RecordedAction) -> str:
 
 
 def create_recording_request(
-    org_id: str, requested_by: str, target_url: str, title: str, description: str | None = None
+    org_id: str, requested_by: str, target_url: str, title: str, description: str | None = None,
+    *, lob: str | None = None, category: str | None = None, action: str | None = None,
+    system_id: str | None = None, client_scope: list[str] | None = None, reuse_scope: str | None = None,
 ) -> uuid.UUID:
+    """target_url/title/description are the pre-existing fields; lob
+    onward are Section A of the recording form (see
+    recording_form_validation.py and the caller —
+    create_recording_request_endpoint — for the business rules)."""
     domain = target_url.split("/")[2]
     with session_scope() as session:
         profile = get_or_create_portal_profile(session, org_id, domain)
@@ -472,19 +552,39 @@ def create_recording_request(
             target_url=target_url,
             title=title,
             description=description,
+            lob=lob,
+            category=category,
+            action=action,
+            system_id=uuid.UUID(system_id) if system_id else None,
+            client_scope=client_scope,
+            reuse_scope=reuse_scope,
         )
         session.add(request)
         session.flush()
         return request.id
 
 
-def list_recording_requests(org_id: str, status: str | None = None, requested_by: str | None = None) -> list[dict]:
+def list_recording_requests(
+    org_id: str, status: str | None = None, requested_by: str | None = None,
+    *, lob: str | None = None, system_id: str | None = None, client_id: str | None = None,
+) -> list[dict]:
     with session_scope() as session:
         query = session.query(RecordingRequest).filter_by(org_id=uuid.UUID(org_id))
         if status is not None:
             query = query.filter_by(status=status)
         if requested_by is not None:
             query = query.filter_by(requested_by=uuid.UUID(requested_by))
+        if lob is not None:
+            query = query.filter_by(lob=lob)
+        if system_id is not None:
+            query = query.filter_by(system_id=uuid.UUID(system_id))
+        rows = query.order_by(RecordingRequest.created_at.desc()).all()
+        if client_id is not None:
+            # client_scope is a small JSON array (a handful of client ids,
+            # or the "generic" sentinel) — filtering in Python here avoids
+            # depending on a JSONB-specific operator that a plain
+            # PortableJSON column can't portably express.
+            rows = [r for r in rows if r.client_scope and client_id in r.client_scope]
         return [
             {
                 "id": str(r.id),
@@ -492,9 +592,47 @@ def list_recording_requests(org_id: str, status: str | None = None, requested_by
                 "target_url": r.target_url,
                 "status": r.status,
                 "claimed_by": str(r.claimed_by) if r.claimed_by else None,
+                "lob": r.lob,
+                "category": r.category,
+                "action": r.action,
+                "system_id": str(r.system_id) if r.system_id else None,
+                "client_scope": r.client_scope,
+                "reuse_scope": r.reuse_scope,
             }
-            for r in query.order_by(RecordingRequest.created_at.desc()).all()
+            for r in rows
         ]
+
+
+def list_systems(org_id: str) -> list[dict]:
+    from atlas_engine.db.models import System
+
+    with session_scope() as session:
+        rows = session.query(System).filter_by(org_id=uuid.UUID(org_id), active=True).order_by(System.name).all()
+        return [{"id": str(s.id), "name": s.name, "category": s.category} for s in rows]
+
+
+def list_payers(org_id: str) -> list[dict]:
+    from atlas_engine.db.models import Payer
+
+    with session_scope() as session:
+        rows = session.query(Payer).filter_by(org_id=uuid.UUID(org_id), active=True).order_by(Payer.name).all()
+        return [{"id": str(p.id), "name": p.name} for p in rows]
+
+
+def list_clients(org_id: str) -> list[dict]:
+    from atlas_engine.db.models import Client
+
+    with session_scope() as session:
+        rows = session.query(Client).filter_by(org_id=uuid.UUID(org_id), active=True).order_by(Client.name).all()
+        return [{"id": str(c.id), "name": c.name} for c in rows]
+
+
+def list_carc_codes(org_id: str) -> list[dict]:
+    from atlas_engine.db.models import CarcCode
+
+    with session_scope() as session:
+        rows = session.query(CarcCode).filter_by(org_id=uuid.UUID(org_id), active=True).order_by(CarcCode.code).all()
+        return [{"id": str(c.id), "code": c.code, "description": c.description, "is_multi_use": c.is_multi_use} for c in rows]
 
 
 def claim_recording_request(request_id: uuid.UUID, developer_user_id: uuid.UUID) -> None:

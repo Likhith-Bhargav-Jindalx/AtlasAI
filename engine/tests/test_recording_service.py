@@ -672,3 +672,172 @@ def test_submit_recording_for_authoring_rejects_already_linked_recording(fixture
 
     with pytest.raises(ValueError, match="already linked"):
         submit_recording_for_authoring(recording_id, agent_id)
+
+
+def test_create_recording_request_persists_section_a_fields(fixture_portal_url):
+    from atlas_engine.db.models import System
+
+    with session_scope() as session:
+        org = Organization(name="Section A Org", slug=f"section-a-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="secta@example.com", password_hash="x", job_function="operations_agent")
+        system = System(org_id=org.id, name="Availity", category="Multi-payer portal")
+        session.add_all([agent, system])
+        session.flush()
+        agent_id, system_id = str(agent.id), str(system.id)
+
+    request_id = create_recording_request(
+        org_id, agent_id, f"{fixture_portal_url}/login.html", "Status Check on Availity",
+        lob="AR", category="Process", action="Status Check", system_id=system_id,
+        client_scope=["generic"], reuse_scope="Generic",
+    )
+
+    with session_scope() as session:
+        request = session.get(RecordingRequest, request_id)
+        assert request.lob == "AR"
+        assert request.category == "Process"
+        assert request.action == "Status Check"
+        assert str(request.system_id) == system_id
+        assert request.client_scope == ["generic"]
+        assert request.reuse_scope == "Generic"
+
+
+def test_list_recording_requests_filters_by_lob_system_and_client(fixture_portal_url):
+    from atlas_engine.db.models import System
+    from atlas_engine.recording_service import list_recording_requests
+
+    with session_scope() as session:
+        org = Organization(name="Filter Section A Org", slug=f"filter-section-a-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="filtersecta@example.com", password_hash="x", job_function="operations_agent")
+        availity = System(org_id=org.id, name="Availity")
+        ecw = System(org_id=org.id, name="eCW")
+        session.add_all([agent, availity, ecw])
+        session.flush()
+        agent_id, availity_id, ecw_id = str(agent.id), str(availity.id), str(ecw.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    ar_availity_client1 = create_recording_request(
+        org_id, agent_id, start_url, "AR on Availity for client 1",
+        lob="AR", system_id=availity_id, client_scope=["client-1"],
+    )
+    ev_ecw_client2 = create_recording_request(
+        org_id, agent_id, start_url, "EV on eCW",
+        lob="EV", system_id=ecw_id, client_scope=["client-2"],
+    )
+
+    by_lob = list_recording_requests(org_id, lob="AR")
+    assert [r["id"] for r in by_lob] == [str(ar_availity_client1)]
+
+    by_system = list_recording_requests(org_id, system_id=availity_id)
+    assert [r["id"] for r in by_system] == [str(ar_availity_client1)]
+
+    by_client = list_recording_requests(org_id, client_id="client-1")
+    assert [r["id"] for r in by_client] == [str(ar_availity_client1)]
+
+    by_other_client = list_recording_requests(org_id, client_id="client-2")
+    assert [r["id"] for r in by_other_client] == [str(ev_ecw_client2)]
+
+    by_unknown_client = list_recording_requests(org_id, client_id="no-such-client")
+    assert by_unknown_client == []
+
+
+def test_update_recording_details_persists_section_b_fields(fixture_portal_url):
+    from atlas_engine.db.models import CarcCode
+
+    with session_scope() as session:
+        org = Organization(name="Section B Org", slug=f"section-b-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        carc = CarcCode(org_id=org.id, code="CO-16", is_multi_use=True)
+        session.add(carc)
+        session.flush()
+        carc_id = str(carc.id)
+
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", [])
+
+    update_recording_details(
+        recording_id,
+        payer_scope="Payer-specific", payer_ids=["payer-1"], other_system_ids=["system-1"],
+        carc_code_id=carc_id, sub_reason="Missing NDC", resolution_path=["Corrected claim"],
+        evidence_required=["Medical records"], report_id="RPT-123", date_param_logic="prior calendar month",
+        output_destination="SFTP", post_processing="None", scenario_description="Denial follow-up",
+    )
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        assert recording.payer_scope == "Payer-specific"
+        assert recording.payer_ids == ["payer-1"]
+        assert recording.other_system_ids == ["system-1"]
+        assert str(recording.carc_code_id) == carc_id
+        assert recording.sub_reason == "Missing NDC"
+        assert recording.resolution_path == ["Corrected claim"]
+        assert recording.evidence_required == ["Medical records"]
+        assert recording.report_id == "RPT-123"
+        assert recording.date_param_logic == "prior calendar month"
+        assert recording.output_destination == "SFTP"
+        assert recording.post_processing == "None"
+        assert recording.scenario_description == "Denial follow-up"
+
+
+def test_list_recordings_filters_by_lob_action_and_payer(fixture_portal_url):
+    from atlas_engine.recording_service import list_recordings
+    with session_scope() as session:
+        org = Organization(name="Filter Recordings Section Org", slug=f"filter-recordings-section-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="filterrec@example.com", password_hash="x", job_function="operations_agent")
+        session.add(agent)
+        session.flush()
+        agent_id = str(agent.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    ar_request_id = create_recording_request(org_id, agent_id, start_url, "AR request", lob="AR", action="Status Check")
+    ev_request_id = create_recording_request(org_id, agent_id, start_url, "EV request", lob="EV", action="Portal Verification")
+
+    ar_recording_id = persist_recording(org_id, start_url, [], request_id=ar_request_id)
+    ev_recording_id = persist_recording(org_id, start_url, [], request_id=ev_request_id)
+    update_recording_details(ar_recording_id, payer_ids=["payer-9"])
+
+    by_lob = list_recordings(org_id, lob="AR")
+    assert [r["id"] for r in by_lob] == [str(ar_recording_id)]
+
+    by_action = list_recordings(org_id, action="Portal Verification")
+    assert [r["id"] for r in by_action] == [str(ev_recording_id)]
+
+    by_payer = list_recordings(org_id, payer_id="payer-9")
+    assert [r["id"] for r in by_payer] == [str(ar_recording_id)]
+
+
+def test_master_data_list_functions_return_only_active_rows_for_the_org(fixture_portal_url):
+    from atlas_engine.db.models import CarcCode, Client, Payer, System
+    from atlas_engine.recording_service import list_carc_codes, list_clients, list_payers, list_systems
+
+    with session_scope() as session:
+        org = Organization(name="Master Data Org", slug=f"master-data-org-{uuid.uuid4()}")
+        other_org = Organization(name="Other Master Data Org", slug=f"other-master-data-org-{uuid.uuid4()}")
+        session.add_all([org, other_org])
+        session.flush()
+        org_id = str(org.id)
+        session.add_all([
+            System(org_id=org.id, name="Active System", active=True),
+            System(org_id=org.id, name="Inactive System", active=False),
+            System(org_id=other_org.id, name="Other Org System", active=True),
+            Payer(org_id=org.id, name="Cigna", active=True),
+            Client(org_id=org.id, name="Acme Clinic", active=True),
+            CarcCode(org_id=org.id, code="CO-16", is_multi_use=True, active=True),
+        ])
+
+    assert [s["name"] for s in list_systems(org_id)] == ["Active System"]
+    assert [p["name"] for p in list_payers(org_id)] == ["Cigna"]
+    assert [c["name"] for c in list_clients(org_id)] == ["Acme Clinic"]
+    codes = list_carc_codes(org_id)
+    assert len(codes) == 1
+    assert codes[0]["code"] == "CO-16"
+    assert codes[0]["is_multi_use"] is True

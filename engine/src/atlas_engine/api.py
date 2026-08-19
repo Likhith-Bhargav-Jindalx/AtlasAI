@@ -36,13 +36,23 @@ from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.llm.usage import list_llm_usage_summary
+from atlas_engine.recording_form_validation import (
+    validate_date_param_logic,
+    validate_payers_required,
+    validate_post_processing,
+    validate_sub_reason_required,
+)
 from atlas_engine.recording_service import (
     claim_recording_request,
     create_recording_request,
     get_recording_detail,
+    list_carc_codes,
+    list_clients,
     list_page_extractions,
+    list_payers,
     list_recording_requests,
     list_recordings,
+    list_systems,
     persist_recording,
     submit_recording_for_authoring,
     update_recording_details,
@@ -186,6 +196,14 @@ class CreateRecordingRequestBody(BaseModel):
     target_url: str
     title: str
     description: str | None = None
+    # Recording form v1, Section A — see
+    # docs/superpowers/specs/2026-08-19-recording-form-v1-design.md
+    lob: str | None = None
+    category: str | None = None
+    action: str | None = None
+    system_id: str | None = None
+    client_scope: list[str] | None = None
+    reuse_scope: str | None = None
 
 
 class RecordingRequestCreatedResponse(BaseModel):
@@ -200,18 +218,25 @@ class ClaimRequestBody(BaseModel):
 def create_recording_request_endpoint(
     body: CreateRecordingRequestBody, _user: CurrentUser = Depends(get_current_user),
 ) -> RecordingRequestCreatedResponse:
+    # client_scope (and the rest of Section A) is required by the frontend
+    # form, not enforced here — this endpoint is also the one path CLI
+    # callers and pre-existing simple title+URL flows still use, and they
+    # never supply these fields at all.
     # requested_by is always the authenticated caller, never trusted from
     # the client — otherwise anyone could attribute a request to someone
     # else's inbox.
     request_id = create_recording_request(
-        str(_user.org_id), str(_user.id), body.target_url, body.title, body.description
+        str(_user.org_id), str(_user.id), body.target_url, body.title, body.description,
+        lob=body.lob, category=body.category, action=body.action, system_id=body.system_id,
+        client_scope=body.client_scope, reuse_scope=body.reuse_scope,
     )
     return RecordingRequestCreatedResponse(request_id=str(request_id))
 
 
 @app.get("/recording-requests")
 def list_recording_requests_endpoint(
-    status: str | None = None, _user: CurrentUser = Depends(get_current_user),
+    status: str | None = None, lob: str | None = None, system_id: str | None = None,
+    client_id: str | None = None, _user: CurrentUser = Depends(get_current_user),
 ) -> list[dict]:
     # Same pattern as GET /recordings: org_id always comes from the
     # session, and an operations agent's own id is forced as the
@@ -219,7 +244,30 @@ def list_recording_requests_endpoint(
     requested_by = None
     if _user.job_function == "operations_agent" and _user.role not in ("owner", "admin"):
         requested_by = str(_user.id)
-    return list_recording_requests(str(_user.org_id), status=status, requested_by=requested_by)
+    return list_recording_requests(
+        str(_user.org_id), status=status, requested_by=requested_by,
+        lob=lob, system_id=system_id, client_id=client_id,
+    )
+
+
+@app.get("/master-data/systems")
+def list_systems_endpoint(_user: CurrentUser = Depends(get_current_user)) -> list[dict]:
+    return list_systems(str(_user.org_id))
+
+
+@app.get("/master-data/payers")
+def list_payers_endpoint(_user: CurrentUser = Depends(get_current_user)) -> list[dict]:
+    return list_payers(str(_user.org_id))
+
+
+@app.get("/master-data/clients")
+def list_clients_endpoint(_user: CurrentUser = Depends(get_current_user)) -> list[dict]:
+    return list_clients(str(_user.org_id))
+
+
+@app.get("/master-data/carc-codes")
+def list_carc_codes_endpoint(_user: CurrentUser = Depends(get_current_user)) -> list[dict]:
+    return list_carc_codes(str(_user.org_id))
 
 
 @app.post("/recording-requests/{request_id}/claim")
@@ -559,6 +607,7 @@ class StopRecordingResponse(BaseModel):
 @app.get("/recordings")
 def list_recordings_endpoint(
     status: str | None = None, user_id: str | None = None,
+    lob: str | None = None, action: str | None = None, payer_id: str | None = None,
     _user: CurrentUser = Depends(get_current_user),
 ) -> list[dict]:
     # org_id and, for an operations agent, user_id are always derived from
@@ -568,7 +617,10 @@ def list_recordings_endpoint(
     effective_user_id = user_id
     if _user.job_function == "operations_agent" and _user.role not in ("owner", "admin"):
         effective_user_id = str(_user.id)
-    return list_recordings(str(_user.org_id), status=status, user_id=effective_user_id)
+    return list_recordings(
+        str(_user.org_id), status=status, user_id=effective_user_id,
+        lob=lob, action=action, payer_id=payer_id,
+    )
 
 
 @app.post("/recordings/start", response_model=StartRecordingResponse)
@@ -694,6 +746,25 @@ class RecordingDetailResponse(BaseModel):
     latest_authoring_run_id: str | None = None
     codegen_script: str | None = None
     pages: list[RecordingPageResponse]
+    # Recording form v1 — lob/action from the linked request (Section A),
+    # plus this recording's own saved Section B values (pre-fills the
+    # review page's form on re-open). See
+    # docs/superpowers/specs/2026-08-19-recording-form-v1-design.md
+    lob: str | None = None
+    action: str | None = None
+    payer_scope: str | None = None
+    payer_ids: list[str] | None = None
+    other_system_ids: list[str] | None = None
+    carc_code_id: str | None = None
+    code_free_text: str | None = None
+    sub_reason: str | None = None
+    resolution_path: list[str] | None = None
+    evidence_required: list[str] | None = None
+    report_id: str | None = None
+    date_param_logic: str | None = None
+    output_destination: str | None = None
+    post_processing: str | None = None
+    scenario_description: str | None = None
 
 
 class PageExtractionResponse(BaseModel):
@@ -716,14 +787,52 @@ def get_recording_endpoint(recording_id: str) -> RecordingDetailResponse:
 class UpdateRecordingDetailsBody(BaseModel):
     title: str | None = None
     description: str | None = None
+    # Recording form v1, Section B — see
+    # docs/superpowers/specs/2026-08-19-recording-form-v1-design.md
+    payer_scope: str | None = None
+    payer_ids: list[str] | None = None
+    other_system_ids: list[str] | None = None
+    carc_code_id: str | None = None
+    code_free_text: str | None = None
+    sub_reason: str | None = None
+    resolution_path: list[str] | None = None
+    evidence_required: list[str] | None = None
+    report_id: str | None = None
+    date_param_logic: str | None = None
+    output_destination: str | None = None
+    post_processing: str | None = None
+    scenario_description: str | None = None
 
 
 @app.patch("/recordings/{recording_id}")
 def update_recording_details_endpoint(recording_id: str, body: UpdateRecordingDetailsBody) -> dict:
     try:
-        update_recording_details(uuid.UUID(recording_id), title=body.title, description=body.description)
+        carc_code_is_multi_use = False
+        if body.carc_code_id is not None:
+            with session_scope() as session:
+                from atlas_engine.db.models import CarcCode
+                carc_code = session.get(CarcCode, uuid.UUID(body.carc_code_id))
+                carc_code_is_multi_use = carc_code is not None and carc_code.is_multi_use
+
+        validate_payers_required(body.payer_scope, body.payer_ids)
+        validate_sub_reason_required(body.sub_reason, carc_code_is_multi_use)
+        validate_date_param_logic(body.date_param_logic)
+        validate_post_processing(body.post_processing)
+
+        update_recording_details(
+            uuid.UUID(recording_id), title=body.title, description=body.description,
+            payer_scope=body.payer_scope, payer_ids=body.payer_ids,
+            other_system_ids=body.other_system_ids, carc_code_id=body.carc_code_id,
+            code_free_text=body.code_free_text, sub_reason=body.sub_reason,
+            resolution_path=body.resolution_path, evidence_required=body.evidence_required,
+            report_id=body.report_id, date_param_logic=body.date_param_logic,
+            output_destination=body.output_destination, post_processing=body.post_processing,
+            scenario_description=body.scenario_description,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        detail = str(exc)
+        status_code = 404 if detail.startswith("No such recording") else 422
+        raise HTTPException(status_code=status_code, detail=detail)
     return {"ok": True}
 
 

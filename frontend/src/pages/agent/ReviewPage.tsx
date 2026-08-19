@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useRecordingDetail, usePatchRecording, useSubmitRecording } from '../../lib/recordings'
+import { useRecordingDetail, usePatchRecording, useSubmitRecording, type UpdateRecordingDetailsBody } from '../../lib/recordings'
 import { useAuth } from '../../auth/AuthContext'
 import { VideoStepPlayer } from '../../components/VideoStepPlayer'
 import { StatusPill } from '../../components/StatusPill'
+import { RecordingFormSectionB } from '../../components/RecordingFormSectionB'
 import { formatDuration } from '../../lib/format'
 
 export function ReviewPage() {
@@ -13,10 +14,12 @@ export function ReviewPage() {
 
   const { user } = useAuth()
   const patchRecording = usePatchRecording(recordingId)
+  const sectionBPatch = usePatchRecording(recordingId)
   const submitRecording = useSubmitRecording(recordingId)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [submitted, setSubmitted] = useState(false)
+  const [sectionBSaved, setSectionBSaved] = useState(false)
 
   useEffect(() => {
     if (recording) {
@@ -101,6 +104,22 @@ export function ReviewPage() {
             >
               {submitRecording.isPending || patchRecording.isPending ? 'Submitting…' : 'Submit to developer'}
             </button>
+          )}
+        </div>
+      )}
+
+      {recording.lob && (
+        <div className="flex flex-col gap-2 max-w-lg">
+          <RecordingFormSectionB
+            lob={recording.lob as 'AR' | 'EV' | 'Generic'}
+            action={recording.action}
+            initial={recording}
+            onSubmit={(values: UpdateRecordingDetailsBody) => sectionBPatch.mutate(values, { onSuccess: () => setSectionBSaved(true) })}
+            isSubmitting={sectionBPatch.isPending}
+            error={sectionBPatch.isError ? (sectionBPatch.error as Error).message : undefined}
+          />
+          {sectionBSaved && !sectionBPatch.isError && (
+            <div className="text-[13px] text-atlas-primary font-medium">Context saved.</div>
           )}
         </div>
       )}
