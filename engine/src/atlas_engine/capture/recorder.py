@@ -96,14 +96,22 @@ class CaptureSession:
         self.browser_disconnected = True
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        if self.browser_disconnected:
-            if self._pending is not None:
-                self._finalize_pending(
-                    url_after=self._pending["url_before"], dom_after=self._pending["dom_before"]
-                )
-            return
-        self.page.wait_for_load_state("domcontentloaded")
-        self._finalize_pending(url_after=self.page.url, dom_after=self.page.content())
+        if not self.browser_disconnected:
+            try:
+                self.page.wait_for_load_state("domcontentloaded")
+                self._finalize_pending(url_after=self.page.url, dom_after=self.page.content())
+                return
+            except Exception:
+                # The browser can still die in the instant between the last
+                # liveness probe and this call landing — fall through to the
+                # same disconnected finalization below rather than letting a
+                # live-page failure here propagate and abort the whole
+                # capture session.
+                pass
+        if self._pending is not None:
+            self._finalize_pending(
+                url_after=self._pending["url_before"], dom_after=self._pending["dom_before"]
+            )
 
     def _finalize_pending(self, *, url_after: str, dom_after: str) -> None:
         if self._pending is None:

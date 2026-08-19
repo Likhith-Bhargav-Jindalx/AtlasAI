@@ -49,6 +49,16 @@ def _wait_for_stop_or_disconnect(
             on_tick()
             return True
     on_tick()
+    # stop_event fired -- but the browser may have already died in the same
+    # window before the explicit stop arrived (e.g. a human closes the
+    # window, then clicks Stop). Trusting "not disconnected" here without a
+    # real check sends the caller (CaptureSession.__exit__, finalize_video)
+    # down live Playwright calls against an already-dead page, which is
+    # what actually hung for minutes rather than failing fast in production.
+    try:
+        page.title()
+    except Exception:
+        return True
     return False
 
 

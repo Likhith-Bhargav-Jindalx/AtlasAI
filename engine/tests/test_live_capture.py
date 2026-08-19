@@ -138,12 +138,35 @@ def test_wait_for_stop_or_disconnect_returns_false_on_explicit_stop():
 
     stop_event = threading.Event()
     stop_event.set()  # already stopped, as if /stop had just been called
-    page = Mock()
+    page = Mock()  # page.title() succeeds -- browser is genuinely still alive
 
     disconnected = _wait_for_stop_or_disconnect(stop_event, page, poll_interval=0.01)
 
     assert disconnected is False
-    page.title.assert_not_called()
+    # A stop_event that's already set must still be verified against a real
+    # liveness probe before trusting "not disconnected" -- see the test
+    # below for the race this guards against.
+    page.title.assert_called_once()
+
+
+def test_wait_for_stop_or_disconnect_detects_disconnect_even_if_stop_event_was_already_set():
+    """Reproduces the reported hang: a human closes the browser window and
+    only then clicks Stop, so stop_event is already set by the time this
+    function is called. The old implementation trusted stop_event blindly
+    and never probed the page, so callers (CaptureSession.__exit__,
+    finalize_video) went on to make live Playwright calls against an
+    already-dead page -- which is exactly what hung for minutes in
+    production instead of failing fast."""
+    from atlas_engine.live_capture import _wait_for_stop_or_disconnect
+
+    stop_event = threading.Event()
+    stop_event.set()
+    page = Mock()
+    page.title.side_effect = Exception("Target page, context or browser has been closed")
+
+    disconnected = _wait_for_stop_or_disconnect(stop_event, page, poll_interval=0.01)
+
+    assert disconnected is True
 
 
 def test_wait_for_stop_or_disconnect_calls_on_tick_every_iteration_and_at_the_end():

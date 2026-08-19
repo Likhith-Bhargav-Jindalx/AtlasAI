@@ -90,6 +90,39 @@ def test_exit_after_browser_disconnected_finalizes_without_querying_the_page(fix
     assert action.dom_after == action.dom_before
 
 
+def test_exit_falls_back_gracefully_when_the_page_died_without_being_marked_disconnected(fixture_portal_url):
+    """Defense-in-depth for the same race _wait_for_stop_or_disconnect
+    guards against: even if something else ever lets __exit__ run against
+    an already-dead page (browser_disconnected still False), it must fall
+    back to finalizing from the pending state instead of letting a live
+    Playwright call raise/hang and abort the whole capture session."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        capture = CaptureSession(page)
+        capture.__enter__()
+        page.fill("#username", "demo")
+
+        deadline = time.time() + 5
+        while capture._pending is None and time.time() < deadline:
+            page.wait_for_timeout(50)
+        assert capture._pending is not None  # leaves one action pending
+
+        page.close()  # the page dies for real, but browser_disconnected is never set
+        assert capture.browser_disconnected is False
+
+        capture.__exit__(None, None, None)  # must not raise
+
+        browser.close()
+
+    assert len(capture.actions) == 1
+    action = capture.actions[0]
+    assert action.url_after == action.url_before
+    assert action.dom_after == action.dom_before
+
+
 def test_capture_session_ignores_clicks_on_the_extraction_button(fixture_portal_url):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
