@@ -1,4 +1,5 @@
 import threading
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import Mock
@@ -111,13 +112,19 @@ def test_stop_live_capture_stays_retryable_after_a_timeout(fixture_portal_url):
         release_persist.wait(timeout=10)
         return uuid.uuid4()
 
+    print(f"[DEBUG {time.monotonic():.2f}] calling start_live_capture", flush=True)
     capture_session_id = start_live_capture(org_id, start_url, persist_fn=slow_persist)
 
+    print(f"[DEBUG {time.monotonic():.2f}] calling first stop_live_capture(timeout=0.5)", flush=True)
     with pytest.raises(TimeoutError):
         stop_live_capture(capture_session_id, timeout=0.5)
+    print(f"[DEBUG {time.monotonic():.2f}] first stop_live_capture timed out as expected", flush=True)
 
+    print(f"[DEBUG {time.monotonic():.2f}] setting release_persist", flush=True)
     release_persist.set()
+    print(f"[DEBUG {time.monotonic():.2f}] calling second stop_live_capture(timeout=10)", flush=True)
     recording_id = stop_live_capture(capture_session_id, timeout=10)
+    print(f"[DEBUG {time.monotonic():.2f}] second stop_live_capture returned", flush=True)
     assert recording_id is not None
 
 

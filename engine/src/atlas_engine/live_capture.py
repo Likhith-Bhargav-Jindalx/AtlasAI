@@ -157,9 +157,11 @@ class _LiveCaptureSession:
                             # never take down the whole recording.
                             logger.exception("Failed to process a page-extraction request")
 
+                print(f"[DEBUG {time.monotonic():.2f}] entering wait_for_stop_or_disconnect", flush=True)
                 with CaptureSession(page) as capture:
                     if _wait_for_stop_or_disconnect(self.stop_event, page, on_tick=_attach_new_pages):
                         capture.mark_browser_disconnected()
+                print(f"[DEBUG {time.monotonic():.2f}] CaptureSession exited, disconnected={capture.browser_disconnected}", flush=True)
 
                 actions = capture.actions
 
@@ -178,11 +180,14 @@ class _LiveCaptureSession:
                         video_ended_at_ms=int(time.time() * 1000),
                     ))
 
+                print(f"[DEBUG {time.monotonic():.2f}] calling finalize_video", flush=True)
                 video_path, video_ended_at_ms = finalize_video(context, page)
+                print(f"[DEBUG {time.monotonic():.2f}] finalize_video done, calling browser.close()", flush=True)
                 try:
                     browser.close()
                 except Exception:
                     pass
+                print(f"[DEBUG {time.monotonic():.2f}] browser.close() done", flush=True)
 
             codegen_script = None
             try:
@@ -193,6 +198,7 @@ class _LiveCaptureSession:
                 # the recording that already happened.
                 logger.exception("Failed to read the native codegen script")
 
+            print(f"[DEBUG {time.monotonic():.2f}] calling persist_fn", flush=True)
             self.recording_id = self.persist_fn(
                 self.org_id, self.start_url, actions,
                 request_id=self.request_id, role=self.role, user_id=self.user_id,
@@ -203,13 +209,16 @@ class _LiveCaptureSession:
                 page_extractions=pending_extractions,
                 codegen_script=codegen_script,
             )
+            print(f"[DEBUG {time.monotonic():.2f}] persist_fn returned", flush=True)
         except Exception as exc:  # surfaced to the caller of stop()
             self.error = exc
+            print(f"[DEBUG {time.monotonic():.2f}] _run raised: {exc!r}", flush=True)
         finally:
             if video_dir is not None:
                 shutil.rmtree(video_dir, ignore_errors=True)
             if codegen_dir is not None:
                 shutil.rmtree(codegen_dir, ignore_errors=True)
+            print(f"[DEBUG {time.monotonic():.2f}] setting done_event", flush=True)
             self.done_event.set()
 
     def start(self) -> None:
