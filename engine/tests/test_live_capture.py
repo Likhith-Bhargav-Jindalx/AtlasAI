@@ -108,7 +108,7 @@ def test_stop_live_capture_stays_retryable_after_a_timeout(fixture_portal_url):
     release_persist = threading.Event()
 
     def slow_persist(org_id_arg, start_url_arg, actions, **kwargs):
-        release_persist.wait(timeout=10)
+        release_persist.wait(timeout=30)
         return uuid.uuid4()
 
     capture_session_id = start_live_capture(org_id, start_url, persist_fn=slow_persist)
@@ -117,7 +117,12 @@ def test_stop_live_capture_stays_retryable_after_a_timeout(fixture_portal_url):
         stop_live_capture(capture_session_id, timeout=0.5)
 
     release_persist.set()
-    recording_id = stop_live_capture(capture_session_id, timeout=10)
+    # Generous on purpose: nothing in _run() checks stop_event until after
+    # browser launch + page.goto() have both already completed, so this
+    # budget has to absorb worst-case CI launch latency (observed: launch
+    # alone can exceed 10s under a loaded 4-worker/4-core Xvfb runner), not
+    # just the deliberately-slow persist_fn above.
+    recording_id = stop_live_capture(capture_session_id, timeout=30)
     assert recording_id is not None
 
 
