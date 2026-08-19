@@ -60,8 +60,7 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
     })
   }
 
-  const canSubmit = targetUrl.trim() !== '' && workflowName.trim() !== '' && category !== ''
-    && action !== '' && systemId !== '' && clientScope.length > 0 && reuseScope !== ''
+  const canSubmit = targetUrl.trim() !== ''
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6">
@@ -166,7 +165,10 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
 
           <button
             disabled={!canSubmit || isSubmitting}
-            onClick={() => onSubmit({ targetUrl, workflowName, lob, category, action, systemId, clientScope, reuseScope })}
+            onClick={() => {
+              const effectiveTitle = workflowName.trim() || suggestWorkflowName(action || null, systemName) || targetUrl.trim()
+              onSubmit({ targetUrl: targetUrl.trim(), workflowName: effectiveTitle, lob, category, action, systemId, clientScope, reuseScope })
+            }}
             className="bg-atlas-primary hover:bg-atlas-primaryHover text-white rounded-full py-2.5 text-[13.5px] font-medium disabled:opacity-60"
           >
             {isSubmitting ? 'Starting…' : 'Create and start recording'}

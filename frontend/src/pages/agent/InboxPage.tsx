@@ -20,9 +20,16 @@ export function InboxPage() {
 
   async function handleCreate(values: SectionAValues) {
     const result = await createRequest.mutateAsync({
-      org_id: orgId, requested_by: user!.user_id, target_url: values.targetUrl, title: values.workflowName,
-      lob: values.lob, category: values.category, action: values.action, system_id: values.systemId,
-      client_scope: values.clientScope, reuse_scope: values.reuseScope,
+      org_id: orgId,
+      requested_by: user!.user_id,
+      target_url: values.targetUrl,
+      title: values.workflowName || values.targetUrl,
+      lob: values.lob || undefined,
+      category: values.category || undefined,
+      action: values.action || undefined,
+      system_id: values.systemId || undefined,
+      client_scope: values.clientScope.length > 0 ? values.clientScope : undefined,
+      reuse_scope: values.reuseScope || undefined,
     })
     navigate(`/agent/record?requestId=${result.request_id}&url=${encodeURIComponent(values.targetUrl)}`)
   }
