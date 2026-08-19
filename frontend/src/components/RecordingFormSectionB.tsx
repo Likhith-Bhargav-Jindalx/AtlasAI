@@ -8,10 +8,17 @@ import type { UpdateRecordingDetailsBody } from '../lib/recordings'
 
 export interface SectionBValues extends UpdateRecordingDetailsBody {}
 
+// The API returns already-saved values as `| null` (RecordingDetail);
+// what gets sent back on submit is `| undefined` (UpdateRecordingDetailsBody,
+// a PATCH body where an absent field means "don't touch this"). `initial`
+// accepts either shape so a RecordingDetail can be passed straight through
+// without the caller re-mapping null -> undefined field by field.
+type NullableSectionBValues = { [K in keyof SectionBValues]?: SectionBValues[K] | null }
+
 interface Props {
   lob: Lob
   action: string | null
-  initial: Partial<SectionBValues>
+  initial: NullableSectionBValues
   onSubmit: (values: SectionBValues) => void
   isSubmitting: boolean
   error?: string
