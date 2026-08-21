@@ -95,7 +95,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create latest-windows dist/atlas-desktop-windows.zip --title "Latest Windows Build" --notes "Automated Windows build with vendored Chromium" --clobber || gh release upload latest-windows dist/atlas-desktop-windows.zip --clobber
+          gh release create latest-windows dist/atlas-desktop-windows.zip --title "Latest Windows Build" --notes "Automated Windows build with vendored Chromium" || gh release upload latest-windows dist/atlas-desktop-windows.zip --clobber
 
       - name: Upload exe artifact (optional fallback)
         continue-on-error: true
