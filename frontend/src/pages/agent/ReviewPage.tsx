@@ -111,7 +111,7 @@ export function ReviewPage() {
       {recording.lob && (
         <div className="flex flex-col gap-2 max-w-lg">
           <RecordingFormSectionB
-            lob={recording.lob as 'AR' | 'EV' | 'Generic'}
+            lob={recording.lob as 'AR' | 'EV'}
             action={recording.action}
             initial={recording}
             onSubmit={(values: UpdateRecordingDetailsBody) => sectionBPatch.mutate(values, { onSuccess: () => setSectionBSaved(true) })}

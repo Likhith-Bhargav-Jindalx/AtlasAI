@@ -537,6 +537,7 @@ def create_recording_request(
     org_id: str, requested_by: str, target_url: str, title: str, description: str | None = None,
     *, lob: str | None = None, category: str | None = None, action: str | None = None,
     system_id: str | None = None, client_scope: list[str] | None = None, reuse_scope: str | None = None,
+    ehr: str | None = None, specific_to: str | None = None,
 ) -> uuid.UUID:
     """target_url/title/description are the pre-existing fields; lob
     onward are Section A of the recording form (see
@@ -558,6 +559,8 @@ def create_recording_request(
             system_id=uuid.UUID(system_id) if system_id else None,
             client_scope=client_scope,
             reuse_scope=reuse_scope,
+            ehr=ehr,
+            specific_to=specific_to,
         )
         session.add(request)
         session.flush()
@@ -598,6 +601,8 @@ def list_recording_requests(
                 "system_id": str(r.system_id) if r.system_id else None,
                 "client_scope": r.client_scope,
                 "reuse_scope": r.reuse_scope,
+                "ehr": r.ehr,
+                "specific_to": r.specific_to,
             }
             for r in rows
         ]

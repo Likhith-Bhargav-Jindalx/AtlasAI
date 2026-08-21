@@ -52,6 +52,10 @@ class RecordingRequest(Base):
     reuse_scope: Mapped[str | None] = mapped_column(
         Enum(*RECORDING_REQUEST_REUSE_SCOPES, name="recording_request_reuse_scope"), default=None
     )
+    # Recording form v2 — EHR system name (plain text, not a FK) and
+    # whether the recording is specific to an EHR or a Payor.
+    ehr: Mapped[str | None] = mapped_column(default=None)
+    specific_to: Mapped[str | None] = mapped_column(default=None)
 
     org: Mapped["Organization"] = relationship()
     requester: Mapped["User"] = relationship(foreign_keys=[requested_by])

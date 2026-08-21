@@ -6,12 +6,6 @@ describe('sectionBVisibility.payerScope', () => {
     expect(sectionBVisibility.payerScope({ lob: 'AR', action: null, payerScope: null, resolutionPath: [] })).toBe(true)
     expect(sectionBVisibility.payerScope({ lob: 'EV', action: null, payerScope: null, resolutionPath: [] })).toBe(true)
   })
-
-  it('shows for Generic only when the action came from PA or PP, not Reporting-Admin', () => {
-    expect(sectionBVisibility.payerScope({ lob: 'Generic', action: 'Auth Submission', payerScope: null, resolutionPath: [] })).toBe(true)
-    expect(sectionBVisibility.payerScope({ lob: 'Generic', action: 'ERA Posting', payerScope: null, resolutionPath: [] })).toBe(true)
-    expect(sectionBVisibility.payerScope({ lob: 'Generic', action: 'Report Download', payerScope: null, resolutionPath: [] })).toBe(false)
-  })
 })
 
 describe('sectionBVisibility.payers', () => {
@@ -29,40 +23,41 @@ describe('sectionBVisibility.payers', () => {
 })
 
 describe('sectionBVisibility.code', () => {
-  it('shows for Denial/Rejection Check/Denial Posting only', () => {
-    expect(sectionBVisibility.code({ lob: 'AR', action: 'Denial', payerScope: null, resolutionPath: [] })).toBe(true)
-    expect(sectionBVisibility.code({ lob: 'AR', action: 'Rejection Check', payerScope: null, resolutionPath: [] })).toBe(true)
-    expect(sectionBVisibility.code({ lob: 'Generic', action: 'Denial Posting', payerScope: null, resolutionPath: [] })).toBe(true)
-    expect(sectionBVisibility.code({ lob: 'AR', action: 'Status Check', payerScope: null, resolutionPath: [] })).toBe(false)
+  it('shows for denial-like actions only', () => {
+    expect(sectionBVisibility.code({ lob: 'AR', action: 'Denial Review', payerScope: null, resolutionPath: [] })).toBe(true)
+    expect(sectionBVisibility.code({ lob: 'AR', action: 'Claim Rejection', payerScope: null, resolutionPath: [] })).toBe(true)
+    expect(sectionBVisibility.code({ lob: 'AR', action: 'Claim Submission', payerScope: null, resolutionPath: [] })).toBe(false)
   })
 })
 
 describe('sectionBVisibility.evidenceRequired', () => {
   it('shows only when resolution_path includes Appeal or Corrected claim', () => {
-    expect(sectionBVisibility.evidenceRequired({ lob: 'AR', action: 'Denial', payerScope: null, resolutionPath: ['Appeal'] })).toBe(true)
-    expect(sectionBVisibility.evidenceRequired({ lob: 'AR', action: 'Denial', payerScope: null, resolutionPath: ['Payer call'] })).toBe(false)
+    expect(sectionBVisibility.evidenceRequired({ lob: 'AR', action: 'Denial Review', payerScope: null, resolutionPath: ['Appeal'] })).toBe(true)
+    expect(sectionBVisibility.evidenceRequired({ lob: 'AR', action: 'Denial Review', payerScope: null, resolutionPath: ['Payer call'] })).toBe(false)
   })
 })
 
-describe('sectionBVisibility.reportFields / reportingAdminFields', () => {
-  it('reportFields shows for Report Download/Generation regardless of lob', () => {
-    expect(sectionBVisibility.reportFields({ lob: 'Generic', action: 'Report Download', payerScope: null, resolutionPath: [] })).toBe(true)
+describe('sectionBVisibility.reportFields', () => {
+  it('shows for Report Extraction action', () => {
+    expect(sectionBVisibility.reportFields({ lob: 'AR', action: 'Report Extraction', payerScope: null, resolutionPath: [] })).toBe(true)
   })
 
-  it('reportingAdminFields shows only for the Reporting-Admin-sourced Generic actions', () => {
-    expect(sectionBVisibility.reportingAdminFields({ lob: 'Generic', action: 'Report Download', payerScope: null, resolutionPath: [] })).toBe(true)
-    expect(sectionBVisibility.reportingAdminFields({ lob: 'Generic', action: 'ERA Posting', payerScope: null, resolutionPath: [] })).toBe(false)
-    expect(sectionBVisibility.reportingAdminFields({ lob: 'AR', action: 'Status Check', payerScope: null, resolutionPath: [] })).toBe(false)
+  it('hides for non-report actions', () => {
+    expect(sectionBVisibility.reportFields({ lob: 'AR', action: 'Claim Submission', payerScope: null, resolutionPath: [] })).toBe(false)
   })
 })
 
 describe('suggestWorkflowName', () => {
-  it('builds "ACTION – SYSTEM – v1"', () => {
-    expect(suggestWorkflowName('Status Check', 'Availity')).toBe('Status Check – Availity – v1')
+  it('builds "Client + Action + EHR"', () => {
+    expect(suggestWorkflowName('Audentes CPI', 'Claim Submission', 'eCW')).toBe('Audentes CPI + Claim Submission + eCW')
   })
 
-  it('is empty until both action and system are chosen', () => {
-    expect(suggestWorkflowName(null, 'Availity')).toBe('')
-    expect(suggestWorkflowName('Status Check', null)).toBe('')
+  it('builds partial title when only some fields are set', () => {
+    expect(suggestWorkflowName('Audentes CPI', null, null)).toBe('Audentes CPI')
+    expect(suggestWorkflowName('Audentes CPI', 'Claim Submission', null)).toBe('Audentes CPI + Claim Submission')
+  })
+
+  it('is empty when nothing is chosen', () => {
+    expect(suggestWorkflowName(null, null, null)).toBe('')
   })
 })

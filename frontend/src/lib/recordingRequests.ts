@@ -13,6 +13,8 @@ export interface RecordingRequestSummary {
   system_id: string | null
   client_scope: string[] | null
   reuse_scope: string | null
+  ehr: string | null
+  specific_to: string | null
 }
 
 export interface CreateRecordingRequestBody {
@@ -27,6 +29,8 @@ export interface CreateRecordingRequestBody {
   system_id?: string
   client_scope?: string[]
   reuse_scope?: string
+  ehr?: string
+  specific_to?: string
 }
 
 export function useRecordingRequests(orgId: string, status?: string, filters?: { lob?: string; systemId?: string; clientId?: string }) {

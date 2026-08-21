@@ -25,11 +25,10 @@ export function InboxPage() {
       target_url: values.targetUrl,
       title: values.workflowName || values.targetUrl,
       lob: values.lob || undefined,
-      category: values.category || undefined,
       action: values.action || undefined,
-      system_id: values.systemId || undefined,
-      client_scope: values.clientScope.length > 0 ? values.clientScope : undefined,
-      reuse_scope: values.reuseScope || undefined,
+      client_scope: values.client ? [values.client] : undefined,
+      ehr: values.ehr || undefined,
+      specific_to: values.specificTo || undefined,
     })
     navigate(`/agent/record?requestId=${result.request_id}&url=${encodeURIComponent(values.targetUrl)}`)
   }

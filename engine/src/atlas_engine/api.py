@@ -196,14 +196,16 @@ class CreateRecordingRequestBody(BaseModel):
     target_url: str
     title: str
     description: str | None = None
-    # Recording form v1, Section A — see
-    # docs/superpowers/specs/2026-08-19-recording-form-v1-design.md
+    # Recording form Section A
     lob: str | None = None
     category: str | None = None
     action: str | None = None
     system_id: str | None = None
     client_scope: list[str] | None = None
     reuse_scope: str | None = None
+    # Recording form v2
+    ehr: str | None = None
+    specific_to: str | None = None
 
 
 class RecordingRequestCreatedResponse(BaseModel):
@@ -229,6 +231,7 @@ def create_recording_request_endpoint(
         str(_user.org_id), str(_user.id), body.target_url, body.title, body.description,
         lob=body.lob, category=body.category, action=body.action, system_id=body.system_id,
         client_scope=body.client_scope, reuse_scope=body.reuse_scope,
+        ehr=body.ehr, specific_to=body.specific_to,
     )
     return RecordingRequestCreatedResponse(request_id=str(request_id))
 

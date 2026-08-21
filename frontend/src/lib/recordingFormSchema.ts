@@ -1,57 +1,159 @@
-// Recording form v1 — see docs/superpowers/specs/2026-08-19-recording-form-v1-design.md
-// and the source doc atlas-recording-form-v1.md (repo root).
+// Recording form v2 — LOB-specific master lists for Client, Action, EHR.
 //
-// The "Generic" tab merges the doc's PA/PP/Reporting-Admin lobs into one —
-// each Generic action remembers which of those three it came from
-// (`sourceLob`) purely so Section B's show-when rules still match the
-// doc's original per-lob conditions. That tag never leaves the frontend.
+// The form now shows two LOB tabs (AR, EV). Each tab has its own set of
+// clients, actions, and EHR systems — all hardcoded here rather than
+// fetched from the master-data API, since they're static operational
+// vocabulary that rarely changes.
 
-export type Lob = 'AR' | 'EV' | 'Generic'
-export type SourceLob = 'AR' | 'EV' | 'PA' | 'PP' | 'Reporting-Admin'
+export type Lob = 'AR' | 'EV'
 
 export const LOB_TABS: { lob: Lob; label: string }[] = [
   { lob: 'AR', label: 'AR' },
   { lob: 'EV', label: 'EV' },
-  { lob: 'Generic', label: 'Generic' },
 ]
 
-export interface ActionOption {
-  value: string
-  sourceLob: SourceLob
-}
+// ---------------------------------------------------------------------------
+// Client master lists — per LOB
+// ---------------------------------------------------------------------------
 
-export const ACTION_OPTIONS: Record<Lob, ActionOption[]> = {
+export const CLIENT_OPTIONS: Record<Lob, string[]> = {
   AR: [
-    { value: 'Status Check', sourceLob: 'AR' },
-    { value: 'Status Follow-up', sourceLob: 'AR' },
-    { value: 'Denial', sourceLob: 'AR' },
-    { value: 'Rejection Check', sourceLob: 'AR' },
-    { value: 'Payment Research', sourceLob: 'AR' },
+    'Audentes CSSL CSSC THSC',
+    'Audentes CPI',
+    'Audentes CSSA',
+    'Audentes XRS',
+    'Houston Heart Health',
+    'Maiden Lane Medical',
+    'MRI',
+    'Pediatric Associates at Ridge',
+    'Parkside Psychiatric Hospital Clinic',
+    'Penta',
+    'Tricity',
+    'Voyage Health',
+    'Urgent Care',
+    'NHS',
+    'PRMC',
   ],
   EV: [
-    { value: 'Portal Verification', sourceLob: 'EV' },
-    { value: 'IVR Verification', sourceLob: 'EV' },
-    { value: 'Rep Call', sourceLob: 'EV' },
-    { value: 'Mismatch Resolution', sourceLob: 'EV' },
-  ],
-  Generic: [
-    { value: 'Auth Submission', sourceLob: 'PA' },
-    { value: 'Auth Follow-up', sourceLob: 'PA' },
-    { value: 'Clinical Upload', sourceLob: 'PA' },
-    { value: 'Auth Entry in PMS', sourceLob: 'PA' },
-    { value: 'ERA Posting', sourceLob: 'PP' },
-    { value: 'EOB Manual Posting', sourceLob: 'PP' },
-    { value: 'Denial Posting', sourceLob: 'PP' },
-    { value: 'Unapplied / Recoupment', sourceLob: 'PP' },
-    { value: 'Report Download', sourceLob: 'Reporting-Admin' },
-    { value: 'Report Generation', sourceLob: 'Reporting-Admin' },
-    { value: 'File Transfer', sourceLob: 'Reporting-Admin' },
-    { value: 'Master Data Update', sourceLob: 'Reporting-Admin' },
+    'Audentes Verification',
+    'Voyage sales Verification',
+    'Voyage intake Verification',
+    'Housten Heart',
+    'Pediatrics Ridge',
+    'MRI Memorial Verification',
+    'MLM',
+    'TUC',
+    'STKS',
+    'NHS',
+    'Healing Biologics',
   ],
 }
 
-export const CATEGORY_OPTIONS = ['Process', 'Scenario'] as const
-export const REUSE_SCOPE_OPTIONS = ['Client-specific', 'Generic'] as const
+// ---------------------------------------------------------------------------
+// Action master lists — per LOB
+// ---------------------------------------------------------------------------
+
+export const ACTION_OPTIONS: Record<Lob, string[]> = {
+  AR: [
+    'Report Extraction',
+    'Claim Submission',
+    'Claim Correction',
+    'Claim Resubmission',
+    'Claim Reconsideration',
+    'Void Claim',
+    'Replacement Claim',
+    'Secondary/Tertiary Billing',
+    'Claim Rejection',
+    'Denial Review',
+    'Denial Correction',
+    'Denial Resubmission',
+    'Denial Appeal',
+    'Appeal',
+    'Peer-to-Peer Review',
+    'Medical Necessity Appeal',
+    'Coding Appeal',
+    'Authorization Appeal',
+    'Claim Status Follow-up',
+    'Payer Call',
+    'Payer Portal Follow-up',
+    'Pending Claim Follow-up',
+    'Medical Records Request',
+    'Documentation Submission',
+    'Payer Escalation',
+    'Payment Posting',
+    'Underpayment Review',
+    'Underpayment Appeal',
+    'Contractual Adjustment',
+    'Payment Variance Review',
+    'Recoupment Review',
+    'Refund Processing',
+    'Eligibility Verification',
+    'Insurance Discovery',
+    'Insurance Update',
+    'COB Update',
+    'Payer Correction',
+    'Subscriber Information Correction',
+    'Authorization Verification',
+    'Patient Balance Review',
+    'Patient Statement Generation',
+    'Patient Billing',
+    'Patient Payment Follow-up',
+    'Payment Plan Setup',
+    'Financial Assistance Review',
+    'Patient Responsibility Adjustment',
+    'Bad Debt Transfer',
+    'Write-off',
+    'Small Balance Write-off',
+    'Administrative Adjustment',
+    'Charity Care Adjustment',
+    'Bad Debt',
+    'Account Closure',
+    'Zero Balance Resolution',
+    'Duplicate Account/Claim Resolution',
+    'Credit Balance Resolution',
+  ],
+  EV: [
+    'Portal Verification',
+    'Note Posting',
+    'Report Extraction',
+  ],
+}
+
+// ---------------------------------------------------------------------------
+// EHR master lists — per LOB
+// ---------------------------------------------------------------------------
+
+export const EHR_OPTIONS: Record<Lob, string[]> = {
+  AR: [
+    'HST',
+    'eCW',
+    'EXA',
+    'Netsmart',
+    'Modmed',
+    'Brightree',
+    'Experity',
+    'Cerner',
+  ],
+  EV: [
+    'eCW',
+    'Brightree',
+    'Exa',
+    'Experity',
+    'Cerner',
+    'Healing Biologix',
+  ],
+}
+
+// ---------------------------------------------------------------------------
+// Specificity options — EHR or Payor
+// ---------------------------------------------------------------------------
+
+export const SPECIFICITY_OPTIONS = ['EHR', 'Payor'] as const
+
+// ---------------------------------------------------------------------------
+// Section B — kept from v1 for the review page (unchanged)
+// ---------------------------------------------------------------------------
+
 export const PAYER_SCOPE_OPTIONS = ['Payer-specific', 'Multi-payer portal', 'All payers'] as const
 export const RESOLUTION_PATH_OPTIONS = [
   'Corrected claim', 'Appeal', 'Refile to correct payer', 'Payer call',
@@ -61,18 +163,6 @@ export const EVIDENCE_REQUIRED_OPTIONS = [
   'Medical records', 'Auth number', 'EOB', 'Proof of timely filing', 'W9', 'None',
 ] as const
 
-export const GENERIC_CLIENT_SENTINEL = 'generic'
-
-function sourceLobFor(lob: Lob, action: string | null): SourceLob | null {
-  if (!action) return null
-  return ACTION_OPTIONS[lob].find((o) => o.value === action)?.sourceLob ?? null
-}
-
-/** Section A's `action`-driven codes/rejections needing sub_reason follow-up. */
-const DENIAL_LIKE_ACTIONS = new Set(['Denial', 'Rejection Check', 'Denial Posting'])
-const RESOLUTION_PATH_ACTIONS = new Set(['Denial', 'Rejection Check', 'Payment Research'])
-const REPORT_ACTIONS = new Set(['Report Download', 'Report Generation'])
-
 export interface SectionBContext {
   lob: Lob
   action: string | null
@@ -80,36 +170,39 @@ export interface SectionBContext {
   resolutionPath: string[]
 }
 
-/** True when the request's lob/action combination is one of the doc's
- * AR/EV/PA/PP flavors (as opposed to Reporting-Admin) — drives payer_scope/
- * payers/other_systems visibility exactly per the doc's original condition
- * `lob ∈ {AR, EV, PA, PP}`. */
-function isPayerBearingFlow(ctx: SectionBContext): boolean {
-  if (ctx.lob === 'AR' || ctx.lob === 'EV') return true
-  const source = sourceLobFor(ctx.lob, ctx.action)
-  return source === 'PA' || source === 'PP'
-}
-
-function isReportingAdminFlow(ctx: SectionBContext): boolean {
-  return sourceLobFor(ctx.lob, ctx.action) === 'Reporting-Admin'
-}
+/** Denial-like actions that need code/sub_reason follow-up. */
+const DENIAL_LIKE_ACTIONS = new Set([
+  'Denial Review', 'Denial Correction', 'Denial Resubmission', 'Denial Appeal',
+  'Claim Rejection',
+])
+const RESOLUTION_PATH_ACTIONS = new Set([
+  'Denial Review', 'Denial Correction', 'Denial Resubmission', 'Denial Appeal',
+  'Underpayment Review', 'Underpayment Appeal',
+])
+const REPORT_ACTIONS = new Set(['Report Extraction'])
 
 export const sectionBVisibility = {
-  payerScope: (ctx: SectionBContext) => isPayerBearingFlow(ctx),
-  payers: (ctx: SectionBContext) => isPayerBearingFlow(ctx) && ctx.payerScope !== null && ctx.payerScope !== 'All payers',
-  otherSystems: (ctx: SectionBContext) => isPayerBearingFlow(ctx),
+  payerScope: (_ctx: SectionBContext) => true,
+  payers: (ctx: SectionBContext) => ctx.payerScope !== null && ctx.payerScope !== 'All payers',
+  otherSystems: (_ctx: SectionBContext) => true,
   code: (ctx: SectionBContext) => ctx.action !== null && DENIAL_LIKE_ACTIONS.has(ctx.action),
-  // sub_reason's actual show-when also depends on whether the chosen CARC
-  // code is multi-use — resolved by the caller (it has the master-data
-  // list), not derivable from this static schema alone.
   resolutionPath: (ctx: SectionBContext) => ctx.action !== null && RESOLUTION_PATH_ACTIONS.has(ctx.action),
   evidenceRequired: (ctx: SectionBContext) =>
     ctx.resolutionPath.includes('Appeal') || ctx.resolutionPath.includes('Corrected claim'),
   reportFields: (ctx: SectionBContext) => ctx.action !== null && REPORT_ACTIONS.has(ctx.action),
-  reportingAdminFields: (ctx: SectionBContext) => isReportingAdminFlow(ctx),
+  reportingAdminFields: (_ctx: SectionBContext) => false,
 }
 
-export function suggestWorkflowName(action: string | null, systemName: string | null): string {
-  if (!action || !systemName) return ''
-  return `${action} – ${systemName} – v1`
+// ---------------------------------------------------------------------------
+// Auto-title: Client + Action + EHR
+// ---------------------------------------------------------------------------
+
+export function suggestWorkflowName(
+  client: string | null,
+  action: string | null,
+  ehr: string | null,
+): string {
+  const parts = [client, action, ehr].filter(Boolean)
+  if (parts.length === 0) return ''
+  return parts.join(' + ')
 }
