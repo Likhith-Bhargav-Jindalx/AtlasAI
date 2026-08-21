@@ -13,6 +13,8 @@ on:
 jobs:
   build-windows-exe:
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -82,13 +84,23 @@ jobs:
         shell: bash
         run: cp -R "$RUNNER_TEMP/local-browsers" "dist/atlas-desktop/_internal/playwright/driver/package/.local-browsers"
 
-      - name: Upload exe artifact
+      - name: Zip distribution folder
+        shell: bash
+        run: |
+          cd dist
+          7z a atlas-desktop-windows.zip atlas-desktop
+
+      - name: Upload to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create latest-windows dist/atlas-desktop-windows.zip --title "Latest Windows Build" --notes "Automated Windows build with vendored Chromium" --clobber || gh release upload latest-windows dist/atlas-desktop-windows.zip --clobber
+
+      - name: Upload exe artifact (optional fallback)
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: atlas-desktop-windows
           path: dist/atlas-desktop/
-          # The vendored browser lives under a dot-prefixed .local-browsers
-          # directory (Playwright's own naming convention for
-          # PLAYWRIGHT_BROWSERS_PATH=0) — upload-artifact excludes hidden
-          # files by default, which silently dropped it from earlier builds.
           include-hidden-files: true
