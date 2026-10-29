@@ -2,7 +2,7 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.trajectory.extract import extract_trajectory
 
 
-def _action(index, kind, value, url_before, url_after, dom_before, dom_after):
+def _action(index, kind, value, url_before, url_after, dom_before, dom_after, page_index=0, operator_note=None):
     return RecordedAction(
         index=index,
         kind=kind,
@@ -12,6 +12,8 @@ def _action(index, kind, value, url_before, url_after, dom_before, dom_after):
         url_after=url_after,
         dom_before=dom_before,
         dom_after=dom_after,
+        page_index=page_index,
+        operator_note=operator_note,
     )
 
 
@@ -49,3 +51,27 @@ def test_extract_trajectory_carries_selector_candidates_and_value_forward():
 
     assert trajectory.steps[0].selector_candidates == [{"selector": "#field-0", "rank": 1}]
     assert trajectory.steps[0].value == "demo-pass"
+
+
+def test_extract_trajectory_stamps_page_index_from_the_recorded_action():
+    actions = [
+        _action(0, "click", None, "https://x/a", "https://x/a", "<a/>", "<a/>", page_index=0),
+        _action(1, "click", None, "https://x/a", "https://x/a", "<a/>", "<b/>", page_index=1),
+    ]
+
+    trajectory = extract_trajectory(actions)
+
+    assert trajectory.steps[0].page_index == 0
+    assert trajectory.steps[1].page_index == 1
+
+
+def test_extract_trajectory_stamps_operator_note_from_the_recorded_action():
+    actions = [
+        _action(0, "click", None, "https://x/a", "https://x/a", "<a/>", "<a/>", operator_note="per payer instructions"),
+        _action(1, "click", None, "https://x/a", "https://x/a", "<a/>", "<b/>"),
+    ]
+
+    trajectory = extract_trajectory(actions)
+
+    assert trajectory.steps[0].operator_note == "per payer instructions"
+    assert trajectory.steps[1].operator_note is None

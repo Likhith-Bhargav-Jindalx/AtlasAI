@@ -412,10 +412,13 @@ def _emit_css_step(
     step: TrajectoryStep, selector: str, *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
     value_expr: str | None = None,
 ) -> list[str]:
-    """Emits calls for a step with a plain CSS selector."""
+    """Emits calls for a step with a plain CSS selector. Acts on `page` or,
+    for a step recorded on a popup tab via the live-capture multi-tab merge
+    (step.page_index > 0, no codegen_expr involved), on `_page(page, N)`."""
     lines: list[str] = []
+    pg = f"_page(page, {step.page_index})" if step.page_index else "page"
     if pre_action_ms > 0:
-        lines.append("    _pace(page)")
+        lines.append(f"    _pace({pg})")
 
     selector = _prefer_visible(selector, step.force_click)
     use_locator = ">>" in selector or not step.selector_candidates
@@ -423,54 +426,54 @@ def _emit_css_step(
     if step.kind == "click":
         if use_locator:
             click_call = ".click(force=True)" if step.force_click else ".click()"
-            lines.append(f"    page.locator({selector!r}).first{click_call}")
+            lines.append(f"    {pg}.locator({selector!r}).first{click_call}")
         else:
-            lines.append(f"    page.click({selector!r}, force=True)" if step.force_click else f"    page.click({selector!r})")
+            lines.append(f"    {pg}.click({selector!r}, force=True)" if step.force_click else f"    {pg}.click({selector!r})")
     elif step.kind == "dblclick":
-        lines.append(f"    page.locator({selector!r}).first.dblclick()" if use_locator else f"    page.dblclick({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.dblclick()" if use_locator else f"    {pg}.dblclick({selector!r})")
     elif step.kind == "hover":
-        lines.append(f"    page.locator({selector!r}).first.hover()" if use_locator else f"    page.hover({selector!r})")
-        lines.append("    page.wait_for_timeout(900)")
+        lines.append(f"    {pg}.locator({selector!r}).first.hover()" if use_locator else f"    {pg}.hover({selector!r})")
+        lines.append(f"    {pg}.wait_for_timeout(900)")
     elif step.kind == "hover_click":
-        lines.append(f"    page.locator({selector!r}).first.hover()" if use_locator else f"    page.hover({selector!r})")
-        lines.append("    page.wait_for_timeout(900)")
-        lines.append(f"    page.locator({selector!r}).first.click()" if use_locator else f"    page.click({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.hover()" if use_locator else f"    {pg}.hover({selector!r})")
+        lines.append(f"    {pg}.wait_for_timeout(900)")
+        lines.append(f"    {pg}.locator({selector!r}).first.click()" if use_locator else f"    {pg}.click({selector!r})")
     elif step.kind == "dispatch_click":
-        lines.append(f'    page.locator({selector!r}).first.dispatch_event("click")')
+        lines.append(f'    {pg}.locator({selector!r}).first.dispatch_event("click")')
     elif step.kind == "fill":
         val = value_expr if value_expr is not None else repr(step.value or "")
         if use_locator:
-            lines.append(f"    page.locator({selector!r}).first.fill({val})")
+            lines.append(f"    {pg}.locator({selector!r}).first.fill({val})")
         else:
-            lines.append(f"    page.fill({selector!r}, {val})")
+            lines.append(f"    {pg}.fill({selector!r}, {val})")
     elif step.kind == "type":
         seq = value_expr if value_expr is not None else repr(step.value or "")
         if use_locator:
-            lines.append(f"    page.locator({selector!r}).first.click()")
-            lines.append(f"    page.locator({selector!r}).first.fill('')")
-            lines.append(f"    page.locator({selector!r}).first.press_sequentially({seq}, delay=100)")
+            lines.append(f"    {pg}.locator({selector!r}).first.click()")
+            lines.append(f"    {pg}.locator({selector!r}).first.fill('')")
+            lines.append(f"    {pg}.locator({selector!r}).first.press_sequentially({seq}, delay=100)")
         else:
-            lines.append(f"    page.click({selector!r})")
-            lines.append(f"    page.fill({selector!r}, '')")
-            lines.append(f"    page.press_sequentially({selector!r}, {seq}, delay=100)")
+            lines.append(f"    {pg}.click({selector!r})")
+            lines.append(f"    {pg}.fill({selector!r}, '')")
+            lines.append(f"    {pg}.press_sequentially({selector!r}, {seq}, delay=100)")
     elif step.kind == "press":
         key = step.key or step.value or "Enter"
-        lines.append(f"    page.locator({selector!r}).first.press({key!r})" if use_locator else f"    page.press({selector!r}, {key!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.press({key!r})" if use_locator else f"    {pg}.press({selector!r}, {key!r})")
     elif step.kind == "select_option":
         value = value_expr if value_expr is not None else repr(step.value or "")
         lines.append(
-            f"    page.locator({selector!r}).first.select_option({value})"
-            if use_locator else f"    page.select_option({selector!r}, {value})"
+            f"    {pg}.locator({selector!r}).first.select_option({value})"
+            if use_locator else f"    {pg}.select_option({selector!r}, {value})"
         )
     elif step.kind == "check":
-        lines.append(f"    page.locator({selector!r}).first.check()" if use_locator else f"    page.check({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.check()" if use_locator else f"    {pg}.check({selector!r})")
     elif step.kind == "uncheck":
-        lines.append(f"    page.locator({selector!r}).first.uncheck()" if use_locator else f"    page.uncheck({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.uncheck()" if use_locator else f"    {pg}.uncheck({selector!r})")
     else:
         raise ValueError(f"Unsupported step kind for emission: {step.kind}")
 
     if step.expected_effect == "url_changed":
-        lines.append("    page.wait_for_load_state()")
+        lines.append(f"    {pg}.wait_for_load_state()")
     return lines
 
 
@@ -692,13 +695,18 @@ def _login_locator_expr(step: TrajectoryStep) -> str:
 def _step_page_expr(step: TrajectoryStep) -> str:
     """The page expression a step acts on — `page` or `_page(page, N)` for
     popup steps — used for the per-step _settle_frames() call (matches the
-    old app's `_settle_frames(${p.pageVar})` before every planned step)."""
+    old app's `_settle_frames(${p.pageVar})` before every planned step).
+    Checked first via a codegen_expr `pageN.` root (native codegen
+    recorder's popup case); falls back to step.page_index for every other
+    selector kind, plain CSS included (live-capture multi-tab merge)."""
     selector = _best_selector(step)
     if selector.startswith(_CODEGEN_EXPR_PREFIX):
         expr = selector[len(_CODEGEN_EXPR_PREFIX):]
         m = _PAGE_ROOT_RE.match(expr)
         if m and m.group(1) != "page":
             return f"_page(page, {int(m.group(1)[4:])})"
+    if step.page_index:
+        return f"_page(page, {step.page_index})"
     return "page"
 
 

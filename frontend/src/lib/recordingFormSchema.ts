@@ -133,6 +133,7 @@ export const EHR_OPTIONS: Record<Lob, string[]> = {
     'Brightree',
     'Experity',
     'Cerner',
+    'Athena',
   ],
   EV: [
     'eCW',

@@ -12,7 +12,7 @@ def test_trajectory_round_trips_through_dict():
             ),
             TrajectoryStep(
                 1, "click", [{"selector": "#b", "rank": 0}], None, "dom_changed",
-                expects_popup=True,
+                expects_popup=True, page_index=1, operator_note="per payer instructions",
             ),
         )
     )
@@ -32,7 +32,7 @@ def test_trajectory_round_trips_through_dict():
                 "ref_shot_after": "refs/0-post.png",
                 "expects_popup": False, "expects_download": False,
                 "wait_ceiling_ms": None, "force_click": False,
-                "key": None, "x": None, "y": None,
+                "key": None, "x": None, "y": None, "page_index": 0, "operator_note": None,
             },
             {
                 "index": 1, "kind": "click",
@@ -41,7 +41,8 @@ def test_trajectory_round_trips_through_dict():
                 "identity": None, "ref_shot_before": None, "ref_shot_after": None,
                 "expects_popup": True, "expects_download": False,
                 "wait_ceiling_ms": None, "force_click": False,
-                "key": None, "x": None, "y": None,
+                "key": None, "x": None, "y": None, "page_index": 1,
+                "operator_note": "per payer instructions",
             },
         ]
     }
@@ -64,3 +65,5 @@ def test_trajectory_from_dict_tolerates_old_records_without_new_fields():
     assert restored.steps[0].identity is None
     assert restored.steps[0].expects_popup is False
     assert restored.steps[0].force_click is False
+    assert restored.steps[0].page_index == 0
+    assert restored.steps[0].operator_note is None

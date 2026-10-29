@@ -182,3 +182,133 @@ def test_recorded_dom_snapshots_exclude_the_extraction_button(fixture_portal_url
     # A fill sets the value property, not markup — so with the button gone
     # from both snapshots the action's true effect is visible as "none".
     assert expected_effect_for_action(username_fill) == "none"
+
+
+def test_capture_session_attaches_a_live_note_to_the_most_recently_finalized_action(fixture_portal_url):
+    """A note submitted mid-recording attaches to the last action already
+    finalized (appended to self.actions) — the same one-event lag dom_after
+    already has, nothing new to invent here. The action still pending at the
+    moment the note is submitted is untouched."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#username")  # becomes pending
+            page.click("#password")  # finalizes the #username click
+            page.evaluate("() => window.__atlas_note('per payer instructions')")
+
+        browser.close()
+
+    assert [a.operator_note for a in capture.actions] == ["per payer instructions", None]
+
+
+def test_capture_session_ignores_a_note_submitted_before_any_action_is_finalized(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.evaluate("() => window.__atlas_note('too early')")
+            page.click("#username")
+
+        browser.close()
+
+    assert [a.operator_note for a in capture.actions] == [None]
+
+
+def test_capture_session_undoes_the_most_recently_finalized_action(fixture_portal_url):
+    """Undo always targets 'whatever Python currently considers the last
+    FINALIZED action' -- no JS-side index to go stale across a navigation
+    (see recorder.py's _LISTENER_SCRIPT comment on why an arbitrary-index
+    remove list was dropped in favor of this)."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#username")  # becomes pending
+            page.click("#password")  # finalizes #username; becomes pending
+            page.evaluate("() => window.__atlas_undo_last()")  # undoes #username
+
+        browser.close()
+
+    assert [a.kind for a in capture.actions] == ["click"]
+    assert capture.actions[0].selector_candidates[0]["selector"] == "#password"
+
+
+def test_capture_session_ignores_undo_before_any_action_is_finalized(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.evaluate("() => window.__atlas_undo_last()")  # nothing finalized yet -- no-op
+            page.click("#username")
+
+        browser.close()
+
+    assert [a.kind for a in capture.actions] == ["click"]
+    assert capture.actions[0].selector_candidates[0]["selector"] == "#username"
+
+
+def test_undo_button_removes_the_most_recently_finalized_action(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#username")  # becomes pending
+            page.click("#password")  # finalizes #username; becomes pending
+            page.wait_for_selector("#__atlasUndoBtn")
+            page.click("#__atlasUndoBtn")
+            page.wait_for_function(
+                "document.getElementById('__atlasUndoBtn').textContent.includes('removed')"
+            )
+
+        browser.close()
+
+    assert [a.kind for a in capture.actions] == ["click"]
+    assert capture.actions[0].selector_candidates[0]["selector"] == "#password"
+
+
+def test_undo_button_clicks_are_not_recorded_as_actions(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#__atlasUndoBtn")
+            page.fill("#username", "demo")  # a real action, to prove capture still works
+
+        browser.close()
+
+    assert [a.kind for a in capture.actions] == ["fill"]
+
+
+def test_recorded_dom_snapshots_exclude_the_undo_button(fixture_portal_url):
+    """Same bug class as the extraction button and note box: the button's
+    own label mutates on click ('↶ Undo last step' -> '✓ removed'), so
+    leaving it in the snapshot would make a real action's dom_before/
+    dom_after differ on the button alone."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#__atlasUndoBtn")  # starts the label mutation
+            page.fill("#username", "demo")  # a real action, mid-mutation
+            page.fill("#password", "demo-pass")  # finalizes the username fill
+
+        browser.close()
+
+    username_fill = capture.actions[0]
+    assert "__atlasUndoBtn" not in username_fill.dom_before
+    assert "__atlasUndoBtn" not in username_fill.dom_after

@@ -166,7 +166,10 @@ BUTTON = """
     b.id = '__atlasGrabBtn';
     b.type = 'button';
     b.textContent = '\\uD83D\\uDCF8 Extract this page \\u2192 JSON';
-    b.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;background:#5b8cff;color:#fff;border:0;padding:12px 16px;border-radius:10px;font:600 14px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer';
+    // top-right, not bottom-right: EHR note editors commonly put their own
+    // Save/Post FAB at bottom-right, and this button's fixed position +
+    // max z-index was silently eating clicks meant for it during recording.
+    b.style.cssText = 'position:fixed;top:20px;right:20px;z-index:2147483647;background:#5b8cff;color:#fff;border:0;padding:12px 16px;border-radius:10px;font:600 14px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer';
     b.addEventListener('click', function(e){
       e.preventDefault(); e.stopPropagation();
       var o = b.textContent; b.textContent = '\\u23F3 extracting\\u2026';
@@ -174,6 +177,50 @@ BUTTON = """
       setTimeout(function(){ b.textContent = o; }, 2500);
     }, true);
     document.body.appendChild(b);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
+  setInterval(mount, 1500);
+})();
+"""
+
+# A second small floating element, mounted the same way as BUTTON (one
+# context-wide add_init_script) but bottom-left — clear of the extraction
+# button (top-right) and the bottom-right FAB most EHR note editors already
+# use. On submit it ONLY calls window.__atlas_note(text); CaptureSession is
+# what exposes that binding and attaches the note to the most-recently-
+# finalized action (see recorder.py's _on_note).
+NOTE_BOX = """
+(() => {
+  if (window.top !== window.self) return;
+  function mount(){
+    if (document.getElementById('__atlasNoteBox')) return;
+    if (!document.body) { setTimeout(mount, 300); return; }
+    var box = document.createElement('div');
+    box.id = '__atlasNoteBox';
+    box.style.cssText = 'position:fixed;bottom:20px;left:20px;z-index:2147483647;display:flex;gap:6px;font:600 13px system-ui,sans-serif';
+    var input = document.createElement('input');
+    input.id = '__atlasNoteInput';
+    input.type = 'text';
+    input.placeholder = 'Why this step? (optional)';
+    input.style.cssText = 'padding:8px 10px;border-radius:8px;border:1px solid #ccc;width:220px';
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = 'Add note';
+    btn.style.cssText = 'background:#2fa84f;color:#fff;border:0;padding:8px 12px;border-radius:8px;cursor:pointer';
+    function submit(){
+      var text = input.value.trim();
+      if (!text) return;
+      Promise.resolve(window.__atlas_note && window.__atlas_note(text)).then(function(){
+        input.value = '';
+        var o = btn.textContent; btn.textContent = '\\u2713 noted';
+        setTimeout(function(){ btn.textContent = o; }, 1500);
+      }).catch(function(){});
+    }
+    btn.addEventListener('click', submit, true);
+    input.addEventListener('keydown', function(e){ if (e.key === 'Enter') submit(); }, true);
+    box.appendChild(input);
+    box.appendChild(btn);
+    document.body.appendChild(box);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount); else mount();
   setInterval(mount, 1500);
@@ -260,3 +307,11 @@ def attach_extraction_button(context: BrowserContext, on_requested: Callable[[Pa
         return {"summary": "captured"}
 
     context.expose_binding("__atlasGrab", _on_grab)
+
+
+def attach_note_box(context: BrowserContext) -> None:
+    """Mounts the floating note box (see NOTE_BOX) in every page (current
+    and future) of `context`. Submitting it only calls window.__atlas_note —
+    CaptureSession exposes that binding per-page and owns attaching the note
+    to an action."""
+    context.add_init_script(NOTE_BOX)

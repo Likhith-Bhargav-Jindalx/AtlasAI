@@ -1,9 +1,36 @@
 from playwright.sync_api import sync_playwright
 
-from atlas_engine.brain.evaluate import evaluate
+from atlas_engine.brain.evaluate import StepOutcome, evaluate
 from atlas_engine.brain.models import TrajectoryStep
-from atlas_engine.brain.repair import RepairAction, think
+from atlas_engine.brain.repair import RepairAction, _build_user_text, think
 from atlas_engine.llm.client import FakeLlmClient
+
+
+def _outcome(step_index=0, **overrides):
+    defaults = dict(
+        step_index=step_index, on_track=False, url_after="https://x/a",
+        dom_after="<a/>", resolved_selector="#a",
+    )
+    defaults.update(overrides)
+    return StepOutcome(**defaults)
+
+
+def test_build_user_text_includes_the_operator_note_when_present():
+    """operator_note is grounding context the repair LLM doesn't have
+    today -- why the human took this action, captured live during
+    recording. Present -> surfaced in the prompt; absent -> no new noise."""
+    step = TrajectoryStep(
+        0, "click", [{"selector": "#submit", "rank": 0}], None, "dom_changed",
+        operator_note="Clicking submit even though the amount looks wrong, per payer instructions",
+    )
+    text = _build_user_text(step, "<html/>", _outcome(), attempts=[])
+    assert "Clicking submit even though the amount looks wrong, per payer instructions" in text
+
+
+def test_build_user_text_omits_operator_note_section_when_absent():
+    step = TrajectoryStep(0, "click", [{"selector": "#submit", "rank": 0}], None, "dom_changed")
+    text = _build_user_text(step, "<html/>", _outcome(), attempts=[])
+    assert "operator note" not in text.lower()
 
 
 def test_brain_prompt_uses_the_executor_and_golden_select_option_action_name():

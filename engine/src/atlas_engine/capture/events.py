@@ -14,3 +14,5 @@ class RecordedAction:
     dom_before: str
     dom_after: str
     timestamp_ms: int = field(default_factory=lambda: int(time.time() * 1000))
+    page_index: int = 0
+    operator_note: str | None = None

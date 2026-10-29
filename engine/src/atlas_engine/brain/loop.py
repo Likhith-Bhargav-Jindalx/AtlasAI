@@ -148,13 +148,18 @@ def _page_for_index(page, index: int, timeout: float = 15.0):
     raise TimeoutError(f"Popup page {index} never opened")
 
 
-def _target_page(page, selector: str):
+def _target_page(page, selector: str, page_index: int = 0):
     """The page a step's selector refers to — the main page, or a popup page
-    when the selector carries a `page1.` codegen root."""
+    either when the selector carries a `page1.` codegen root (recorded by the
+    native codegen recorder's popup case) or, for every other selector kind
+    (plain CSS included), when the step itself carries a nonzero
+    page_index (recorded by the live-capture multi-tab merge)."""
     if selector.startswith(_CODEGEN_EXPR_PREFIX):
         m = _PAGE_ROOT_RE.match(selector[len(_CODEGEN_EXPR_PREFIX):])
         if m and m.group(1) != "page":
             return _page_for_index(page, int(m.group(1)[4:]))
+    if page_index:
+        return _page_for_index(page, page_index)
     return page
 
 
@@ -465,7 +470,7 @@ def run_step(
         )
     # A codegen popup step acts on a different page (page1, ...) — measure
     # and act on THAT page, not the main one.
-    target = _target_page(page, resolved_selector)
+    target = _target_page(page, resolved_selector, step.page_index)
     pages_before = len(page.context.pages)
     t0 = time.monotonic()
 

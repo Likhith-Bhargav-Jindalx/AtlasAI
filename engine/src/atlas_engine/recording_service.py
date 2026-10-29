@@ -1,6 +1,6 @@
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +35,22 @@ class PageCapture:
     video_path: Path | None = None
     video_started_at_ms: int | None = None
     video_ended_at_ms: int | None = None
+
+
+def _merge_actions_for_trajectory(
+    actions: list[RecordedAction], additional_pages: list["PageCapture"] | None,
+) -> list[RecordedAction]:
+    """Merges the main page's actions with every popup/tab's actions into one
+    globally-ordered list, by wall-clock timestamp, with `index` re-assigned
+    sequentially across the merge — the local per-tab index each
+    CaptureSession keeps (restarting at 0) is discarded here. This is the
+    only list extract_trajectory sees; actions.json/actions-page{N}.json
+    keep each page's own original (unmerged) actions untouched."""
+    merged = [replace(a, page_index=0) for a in actions]
+    for page_capture in additional_pages or []:
+        merged.extend(replace(a, page_index=page_capture.page_index) for a in page_capture.actions)
+    merged.sort(key=lambda a: a.timestamp_ms)
+    return [replace(a, index=i) for i, a in enumerate(merged)]
 
 
 def persist_recording(
@@ -122,7 +138,7 @@ def persist_recording(
                     ],
                 )
 
-        trajectory = extract_trajectory(actions)
+        trajectory = extract_trajectory(_merge_actions_for_trajectory(actions, additional_pages))
         trajectory_blob_ref = run_dir.write_json("trajectory.json", trajectory_to_dict(trajectory))
 
         if codegen_script is not None:

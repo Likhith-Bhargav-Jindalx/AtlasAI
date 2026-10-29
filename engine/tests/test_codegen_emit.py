@@ -190,6 +190,43 @@ def test_emitted_golden_script_runs_a_multi_page_flow(fixture_portal_url, tmp_pa
     assert result.returncode == 0, result.stderr
 
 
+def test_step_page_expr_uses_page_index_for_a_plain_css_step():
+    """A plain-CSS step recorded on a popup tab (live-capture multi-tab merge
+    stamps page_index, no codegen_expr involved) must still resolve to
+    _page(page, N) -- not silently fall back to the top-level page."""
+    from atlas_engine.codegen.emit import _step_page_expr
+    step = TrajectoryStep(1, "click", [{"selector": "#generate-report-btn", "rank": 0}], None, "dom_changed", page_index=1)
+    assert _step_page_expr(step) == "_page(page, 1)"
+
+
+def test_emitted_golden_script_runs_a_multi_page_flow_with_a_plain_css_popup_step(fixture_portal_url, tmp_path):
+    """Same latent-bug regression as the codegen_expr popup flow above, but
+    for a step recorded with page_index (live-capture multi-tab) instead of a
+    codegen_expr page1. selector -- it must still act on the popup, not the
+    top-level page."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "click", [{"selector": "#open-report", "rank": 0}],
+                None, "none",
+            ),
+            TrajectoryStep(
+                1, "click", [{"selector": "#generate-report-btn", "rank": 0}],
+                None, "dom_changed", page_index=1,
+            ),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/popup_trigger.html")
+    assert "_page(page, 1)" in script
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+
+
 # ── Tests for ported logic from emitGolden.ts ──────────────────────────
 
 

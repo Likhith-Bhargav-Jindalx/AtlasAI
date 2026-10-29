@@ -9,7 +9,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers
-from atlas_engine.capture.extraction import attach_extraction_button, collect_page_data
+from atlas_engine.capture.extraction import attach_extraction_button, attach_note_box, collect_page_data
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
 from atlas_engine.recording_service import PageCapture, persist_recording
@@ -108,6 +108,7 @@ class _LiveCaptureSession:
 
                 pending_grab_pages: list = []
                 attach_extraction_button(context, pending_grab_pages.append)
+                attach_note_box(context)
 
                 codegen_dir = Path(tempfile.mkdtemp(prefix="atlas-codegen-"))
                 codegen_path = codegen_dir / "codegen.py"
