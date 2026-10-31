@@ -285,6 +285,8 @@ def _simple_selector_to_expr(selector: dict | str) -> str:
 
 
 def _first_selector(step: TrajectoryStep) -> str:
+    if not step.selector_candidates:
+        return ""
     ranked = sorted(step.selector_candidates, key=lambda c: c["rank"])
     return ranked[0]["selector"]
 
@@ -343,7 +345,8 @@ def _resolve_locator(page, candidates: list[dict], timeout_ms: int | None):
 def _act_on_locator(locator, step: TrajectoryStep, *, force: bool = False, timeout_ms: float | None = None, key: str | None = None) -> None:
     val = _rematerialize(step.value)
     if step.kind in ("click", "dblclick"):
-        getattr(locator, step.kind)(force=force, timeout=timeout_ms)
+        modifiers = list(step.modifiers) or None
+        getattr(locator, step.kind)(force=force, timeout=timeout_ms, modifiers=modifiers)
     elif step.kind == "hover":
         locator.hover(force=force, timeout=timeout_ms)
         locator.page.wait_for_timeout(900)

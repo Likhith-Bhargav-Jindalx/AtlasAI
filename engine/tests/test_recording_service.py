@@ -589,6 +589,42 @@ def test_get_recording_detail_synthesizes_codegen_script_when_missing(fixture_po
     assert "#login-btn" in detail["codegen_script"]
 
 
+def test_get_recording_detail_does_not_cache_the_synthesized_script_as_codegen_py(fixture_portal_url):
+    """Confirmed via a real authoring run: caching the synthesized PREVIEW
+    golden script (parameterized -- fill values are `params["x"]` expressions,
+    not literals) at capture_blob_prefix/codegen.py poisons every later
+    authoring run on this recording. authoring/run.py's
+    apply_stored_codegen_selectors treats any codegen.py found there as the
+    native Playwright codegen recorder's ground-truth script and parses it
+    assuming literal fill values -- so it extracted the literal text
+    'params["search_input"]' as a step's value and typed that string into the
+    page instead of the real recorded text. get_recording_detail is a
+    read-only GET endpoint; it must never leave behind a file another
+    pipeline treats as authoritative."""
+    from atlas_engine.recording_service import get_recording_detail
+    from atlas_engine.storage import get_store
+
+    with session_scope() as session:
+        org = Organization(name="Codegen No Cache Org", slug=f"codegen-no-cache-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    actions = [
+        RecordedAction(0, "fill", [{"selector": "#username", "rank": 0}], "user1", f"{fixture_portal_url}/login.html", f"{fixture_portal_url}/login.html", "", ""),
+    ]
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", actions)
+
+    get_recording_detail(recording_id)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        capture_blob_prefix = recording.capture_blob_prefix
+
+    store = get_store()
+    assert not store.exists(f"{capture_blob_prefix}/codegen.py")
+
+
 def test_persist_recording_stores_user_id(fixture_portal_url):
     with session_scope() as session:
         org = Organization(name="User Id Org", slug=f"user-id-org-{uuid.uuid4()}")

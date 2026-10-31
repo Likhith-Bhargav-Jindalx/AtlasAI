@@ -123,6 +123,31 @@ def test_exit_falls_back_gracefully_when_the_page_died_without_being_marked_disc
     assert action.dom_after == action.dom_before
 
 
+def test_action_timestamp_reflects_when_the_event_fired_not_when_it_was_finalized(fixture_portal_url):
+    """timestamp_ms drives the cross-tab merge sort in recording_service.py
+    (_merge_actions_for_trajectory) -- if it were stamped at finalization
+    instead of at the original event, an action that sits pending across a
+    long gap (e.g. the user switched tabs) would sort AFTER actions that
+    actually happened later but finalized sooner, corrupting the merged
+    order. Confirmed as a real bug via a live multi-tab recording against
+    a real external site before this test was written."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.fill("#username", "demo")  # fires now, becomes pending
+            fired_at_ms = int(time.time() * 1000)
+            page.wait_for_timeout(300)  # a real gap before anything finalizes it
+            page.fill("#password", "demo-pass")  # finalizes the username fill, ~300ms later
+
+        browser.close()
+
+    username_fill = capture.actions[0]
+    assert username_fill.timestamp_ms < fired_at_ms + 150  # nowhere near +300ms later
+
+
 def test_capture_session_ignores_clicks_on_the_extraction_button(fixture_portal_url):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -312,3 +337,68 @@ def test_recorded_dom_snapshots_exclude_the_undo_button(fixture_portal_url):
     username_fill = capture.actions[0]
     assert "__atlasUndoBtn" not in username_fill.dom_before
     assert "__atlasUndoBtn" not in username_fill.dom_after
+
+
+def test_capture_session_falls_back_to_a_text_selector_when_no_id_or_testid(fixture_portal_url):
+    """Confirmed via real recordings against real sites (Wikipedia search
+    results, a popup-trigger link): most real clickable elements have
+    neither an id nor a data-testid, which left selector_candidates totally
+    empty -- the step could never be resolved or acted on at all during
+    replay, not even as an off-track attempt. A visible-text fallback gives
+    the brain something to act on for the very common case of a link/button
+    with real on-screen text."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+        page.evaluate("""() => {
+            const a = document.createElement('a');
+            a.textContent = 'Forgot password?';
+            a.href = '#';
+            a.style.cssText = 'position:fixed;top:300px;left:300px';
+            document.body.appendChild(a);
+        }""")
+
+        with CaptureSession(page) as capture:
+            page.click("text=Forgot password?")
+            page.fill("#username", "demo")  # finalizes the click above
+
+        browser.close()
+
+    click = capture.actions[0]
+    assert click.selector_candidates == [{"selector": "text=Forgot password?", "rank": 2}]
+
+
+def test_capture_session_records_the_modifier_keys_held_during_a_click(fixture_portal_url):
+    """Confirmed via a real multi-tab recording: a cmd+click is what makes a
+    normal link (no target=_blank) open in a new tab instead of navigating
+    in place. Without the modifier, replay performs a plain click and the
+    popup it should open never opens at all -- 'Popup page N never opened'
+    even though the step itself resolves and clicks fine."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#login-btn", modifiers=["Meta"])
+            page.wait_for_timeout(100)
+
+        browser.close()
+
+    assert capture.actions[0].modifiers == ["Meta"]
+
+
+def test_capture_session_records_no_modifiers_for_a_plain_click(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#login-btn")
+            page.wait_for_timeout(100)
+
+        browser.close()
+
+    assert capture.actions[0].modifiers == []

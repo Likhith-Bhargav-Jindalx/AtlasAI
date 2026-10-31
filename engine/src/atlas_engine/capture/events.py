@@ -16,3 +16,4 @@ class RecordedAction:
     timestamp_ms: int = field(default_factory=lambda: int(time.time() * 1000))
     page_index: int = 0
     operator_note: str | None = None
+    modifiers: list[str] = field(default_factory=list)

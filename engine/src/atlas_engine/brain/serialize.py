@@ -22,6 +22,7 @@ def trajectory_to_dict(trajectory: ReferenceTrajectory) -> dict:
                 "y": step.y,
                 "page_index": step.page_index,
                 "operator_note": step.operator_note,
+                "modifiers": list(step.modifiers),
             }
             for step in trajectory.steps
         ]
@@ -48,6 +49,7 @@ def trajectory_from_dict(data: dict) -> ReferenceTrajectory:
             y=item.get("y"),
             page_index=item.get("page_index", 0),
             operator_note=item.get("operator_note"),
+            modifiers=tuple(item.get("modifiers", ())),
         )
         for item in data["steps"]
     )

@@ -227,6 +227,36 @@ def test_emitted_golden_script_runs_a_multi_page_flow_with_a_plain_css_popup_ste
     assert result.returncode == 0, result.stderr
 
 
+def test_emitted_golden_script_replays_a_cmd_click_so_a_same_window_link_opens_a_new_tab(fixture_portal_url, tmp_path):
+    """Confirmed via a real authoring run: without reproducing the recorded
+    Meta/Control modifier, the emitted script's plain .click() call just
+    navigates the link's own page in place instead of opening a new tab --
+    every certification run then failed with 'Popup page 1 never opened'
+    even though the live brain-loop replay (a separate code path, already
+    fixed) succeeded."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "click", [{"selector": "#open-report-samewindow", "rank": 0}],
+                None, "none", modifiers=("Meta",),
+            ),
+            TrajectoryStep(
+                1, "click", [{"selector": "#generate-report-btn", "rank": 0}],
+                None, "dom_changed", page_index=1,
+            ),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/popup_trigger.html")
+    assert "modifiers=['Meta']" in script
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+
+
 # ── Tests for ported logic from emitGolden.ts ──────────────────────────
 
 
@@ -489,6 +519,27 @@ def test_argparse_block_registers_one_flag_per_duplicated_password_secret():
     block = _build_argparse_and_main_params(classified)
     assert block.count('"--password"') == 1
     assert block.count('params["password"] = args.password') == 1
+
+
+def test_argparse_block_registers_one_flag_per_duplicated_cli_param_name():
+    """Confirmed via a real authoring run: searching the same field twice
+    (e.g. the same #searchInput on two tabs) produced two CliParam entries
+    sharing the identical cli_name 'search-input' -- argparse errored on the
+    duplicate --search-input registration, crashing every certification run
+    immediately. Mirrors the existing secrets dedup (same conflict, same
+    fix) for plain params, which had none."""
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams, CliParam
+    classified = ClassifiedParams(
+        secrets=(),
+        params=(
+            CliParam(0, "search-input", "hello"),
+            CliParam(2, "search-input", "hello"),
+        ),
+    )
+    block = _build_argparse_and_main_params(classified)
+    assert block.count('"--search-input"') == 1
+    assert block.count('params["search_input"] = args.search_input') == 1
 
 
 def test_argparse_block_always_declares_headless_and_diagnostics_dir():

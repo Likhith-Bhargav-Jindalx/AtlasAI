@@ -25,6 +25,7 @@ def extract_trajectory(actions: list[RecordedAction]) -> ReferenceTrajectory:
             expected_effect=expected_effect_for_action(action),
             page_index=action.page_index,
             operator_note=action.operator_note,
+            modifiers=tuple(action.modifiers),
         )
         for action in actions
     )

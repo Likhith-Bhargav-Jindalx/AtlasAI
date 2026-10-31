@@ -370,10 +370,15 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
                         pre_action_ms=(profile.pacing_pre_action_ms or 0) if profile else 0,
                         settle_after_nav_ms=(profile.pacing_settle_after_nav_ms or 0) if profile else 0,
                     )
-                    try:
-                        store.write_text(codegen_blob_ref, codegen_script)
-                    except Exception:
-                        pass
+                    # NOT cached back to codegen_blob_ref: authoring/run.py's
+                    # apply_stored_codegen_selectors treats any codegen.py
+                    # found there as the native Playwright codegen recorder's
+                    # ground-truth script and parses it assuming literal fill
+                    # values -- this synthesized script's fill values are
+                    # `params["x"]` expressions, not literals, so caching it
+                    # here poisoned every later authoring run on this
+                    # recording (confirmed via a real authoring run: it typed
+                    # the literal text 'params["search_input"]' into the page).
             except Exception:
                 pass
 

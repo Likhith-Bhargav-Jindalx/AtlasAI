@@ -424,11 +424,16 @@ def _emit_css_step(
     use_locator = ">>" in selector or not step.selector_candidates
 
     if step.kind == "click":
+        click_kwargs = []
+        if step.force_click:
+            click_kwargs.append("force=True")
+        if step.modifiers:
+            click_kwargs.append(f"modifiers={list(step.modifiers)!r}")
+        kwargs_str = ", ".join(click_kwargs)
         if use_locator:
-            click_call = ".click(force=True)" if step.force_click else ".click()"
-            lines.append(f"    {pg}.locator({selector!r}).first{click_call}")
+            lines.append(f"    {pg}.locator({selector!r}).first.click({kwargs_str})")
         else:
-            lines.append(f"    {pg}.click({selector!r}, force=True)" if step.force_click else f"    {pg}.click({selector!r})")
+            lines.append(f"    {pg}.click({selector!r}, {kwargs_str})" if kwargs_str else f"    {pg}.click({selector!r})")
     elif step.kind == "dblclick":
         lines.append(f"    {pg}.locator({selector!r}).first.dblclick()" if use_locator else f"    {pg}.dblclick({selector!r})")
     elif step.kind == "hover":
@@ -628,7 +633,11 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config:
             continue
         seen_secret_labels.add(s.label)
         lines.append(f'    parser.add_argument("--{s.cli_name}", default={s.default_value!r})')
+    seen_param_names: set[str] = set()
     for p in classified.params:
+        if p.cli_name in seen_param_names:
+            continue
+        seen_param_names.add(p.cli_name)
         lines.append(f'    parser.add_argument("--{p.cli_name}", default={p.default_value!r})')
     lines.append('    parser.add_argument("--headless", action="store_true", default=True)')
     lines.append('    parser.add_argument("--headed", dest="headless", action="store_false")')
@@ -647,7 +656,11 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config:
         seen_secret_labels.add(s.label)
         attr = s.cli_name.replace("-", "_")
         lines.append(f'    params["{s.label}"] = args.{attr}')
+    seen_param_names = set()
     for p in classified.params:
+        if p.cli_name in seen_param_names:
+            continue
+        seen_param_names.add(p.cli_name)
         attr = p.cli_name.replace("-", "_")
         lines.append(f'    params["{attr}"] = args.{attr}')
     auth_config = auth_config or {}

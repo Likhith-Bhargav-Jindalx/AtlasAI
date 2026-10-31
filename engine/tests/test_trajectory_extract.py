@@ -2,7 +2,7 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.trajectory.extract import extract_trajectory
 
 
-def _action(index, kind, value, url_before, url_after, dom_before, dom_after, page_index=0, operator_note=None):
+def _action(index, kind, value, url_before, url_after, dom_before, dom_after, page_index=0, operator_note=None, modifiers=None):
     return RecordedAction(
         index=index,
         kind=kind,
@@ -14,6 +14,7 @@ def _action(index, kind, value, url_before, url_after, dom_before, dom_after, pa
         dom_after=dom_after,
         page_index=page_index,
         operator_note=operator_note,
+        modifiers=modifiers or [],
     )
 
 
@@ -75,3 +76,15 @@ def test_extract_trajectory_stamps_operator_note_from_the_recorded_action():
 
     assert trajectory.steps[0].operator_note == "per payer instructions"
     assert trajectory.steps[1].operator_note is None
+
+
+def test_extract_trajectory_stamps_modifiers_from_the_recorded_action():
+    actions = [
+        _action(0, "click", None, "https://x/a", "https://x/a", "<a/>", "<a/>", modifiers=["Meta"]),
+        _action(1, "click", None, "https://x/a", "https://x/a", "<a/>", "<b/>"),
+    ]
+
+    trajectory = extract_trajectory(actions)
+
+    assert trajectory.steps[0].modifiers == ("Meta",)
+    assert trajectory.steps[1].modifiers == ()

@@ -28,6 +28,7 @@ class TrajectoryStep:
     y: float | None = None
     page_index: int = 0
     operator_note: str | None = None
+    modifiers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

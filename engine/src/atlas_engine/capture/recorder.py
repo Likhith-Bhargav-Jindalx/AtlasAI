@@ -1,3 +1,5 @@
+import time
+
 from atlas_engine.capture.events import RecordedAction
 
 # An IIFE, not a bare arrow function: add_init_script runs its source as
@@ -42,7 +44,7 @@ _LISTENER_SCRIPT = """
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mountUndoButton); else mountUndoButton();
   setInterval(mountUndoButton, 1500);
 
-  const push = (kind, el, value) => {
+  const push = (kind, el, value, text, modifiers) => {
     if (!el) return;
     if (el.closest && (el.closest("#__atlasGrabBtn") || el.closest("#__atlasNoteBox") || el.closest("#__atlasUndoBtn"))) return;
     // The extraction button's own label mutates while a grab is in flight
@@ -70,13 +72,22 @@ _LISTENER_SCRIPT = """
       value: value ?? null,
       id: el.id || null,
       testId: el.getAttribute ? el.getAttribute("data-testid") : null,
+      text: text || null,
+      modifiers: modifiers || [],
       url: window.location.href,
       dom,
     });
   };
   document.addEventListener(
     "click",
-    (event) => push("click", event.target, null),
+    (event) => {
+      const mods = [];
+      if (event.ctrlKey) mods.push("Control");
+      if (event.metaKey) mods.push("Meta");
+      if (event.shiftKey) mods.push("Shift");
+      if (event.altKey) mods.push("Alt");
+      push("click", event.target, null, (event.target.textContent || "").trim().slice(0, 80), mods);
+    },
     true,
   );
   document.addEventListener(
@@ -94,6 +105,8 @@ def _selector_candidates(record: dict) -> list[dict]:
         candidates.append({"selector": f'[data-testid="{record["testId"]}"]', "rank": 0})
     if record.get("id"):
         candidates.append({"selector": f"#{record['id']}", "rank": 1})
+    if not candidates and record.get("text"):
+        candidates.append({"selector": f'text={record["text"]}', "rank": 2})
     return candidates
 
 
@@ -173,6 +186,8 @@ class CaptureSession:
                 url_after=url_after,
                 dom_before=pending["dom_before"],
                 dom_after=dom_after,
+                timestamp_ms=pending["timestamp_ms"],
+                modifiers=pending["modifiers"],
             )
         )
 
@@ -190,6 +205,8 @@ class CaptureSession:
             "selector_candidates": _selector_candidates(record),
             "url_before": url_now,
             "dom_before": dom_now,
+            "timestamp_ms": int(time.time() * 1000),
+            "modifiers": record.get("modifiers") or [],
         }
 
     def _on_note(self, source: dict, text: str) -> None:
