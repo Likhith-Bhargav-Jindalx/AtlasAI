@@ -2,21 +2,65 @@ name: Build desktop exe
 
 on:
   workflow_dispatch:
-  push:
+  # Was `push: branches: [main]` with its own path filter. Switched to
+  # workflow_run so this exe build can never land ahead of CI's
+  # migrate-production job -- the exe talks straight to prod Postgres with
+  # no migration step of its own (see ci.yml's migrate-production job), so
+  # a build produced in parallel with (or before) a pending migration could
+  # ship new model fields a not-yet-migrated prod schema doesn't have. A
+  # `push`-triggered workflow in a separate file runs concurrently with
+  # `ci.yml`'s own `push` trigger, not after it -- only workflow_run
+  # actually waits for the other workflow's conclusion.
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: [main]
-    paths:
-      - "desktop/**"
-      - "engine/src/**"
-      - "frontend/src/**"
-      - ".github/workflows/build-exe.yml"
 
 jobs:
+  check-paths:
+    # workflow_run has no equivalent of push.paths, so this reimplements
+    # that filter by diffing the commit CI just ran against its parent --
+    # an unrelated change (docs, test-only, etc.) still skips the Windows
+    # build instead of rebuilding on every merge to main. Compares against
+    # HEAD^ specifically (not the push's original `before` SHA, which
+    # workflow_run's payload doesn't carry) -- correct for the common case
+    # of one commit landing on main per merge; a multi-commit push could
+    # under-detect a relevant change further back than the immediate parent.
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.diff.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+      - id: diff
+        shell: bash
+        run: |
+          if git diff --name-only HEAD^ HEAD | grep -qE '^(desktop/|engine/src/|frontend/src/|\.github/workflows/build-exe\.yml)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-windows-exe:
+    needs: [check-paths]
+    # always() is required because workflow_dispatch skips check-paths
+    # entirely (its own `if` only matches workflow_run) -- without it, this
+    # job would inherit that skip via `needs` instead of evaluating its own
+    # condition.
+    if: |
+      always() &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' && needs.check-paths.outputs.relevant == 'true'))
     runs-on: windows-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
