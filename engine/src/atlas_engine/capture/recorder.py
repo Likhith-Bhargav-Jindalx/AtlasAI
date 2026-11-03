@@ -29,7 +29,7 @@ _LISTENER_SCRIPT = """
     btn.id = "__atlasUndoBtn";
     btn.type = "button";
     btn.textContent = "\\u21b6 Undo last step";
-    btn.style.cssText = "position:fixed;top:20px;left:20px;z-index:2147483647;background:#d9534f;color:#fff;border:0;padding:10px 14px;border-radius:10px;font:600 13px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer";
+    btn.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483647;background:#d9534f;color:#fff;border:0;padding:10px 14px;border-radius:10px;font:600 13px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer";
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
