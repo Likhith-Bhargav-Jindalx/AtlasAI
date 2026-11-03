@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { UpdateBanner } from '../components/UpdateBanner'
 import { useRole, type ViewRole } from './RoleContext'
 
 const NAV: Record<ViewRole, { to: string; label: string }[]> = {
@@ -86,6 +87,7 @@ export function AppLayout() {
       </div>
 
       <div className="flex-1 min-w-0 flex flex-col">
+        <UpdateBanner />
         <Outlet />
       </div>
     </div>
