@@ -78,15 +78,74 @@ def _configure_log_file() -> None:
 _load_production_env()
 _configure_log_file()
 
+import dataclasses
+import importlib.metadata
+import tempfile
+
 import uvicorn
 import webview
+from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
 
 from atlas_engine.api import app as fastapi_app
+from atlas_engine.desktop_update import (
+    UpdateApplyError,
+    check_for_update,
+    launch_swap_script,
+    stage_update,
+    write_swap_script,
+)
 
 
 def _run_server() -> None:
     uvicorn.run(fastapi_app, host="127.0.0.1", port=PORT, log_level="info")
+
+
+def _read_app_version() -> str:
+    return _resource_path("VERSION").read_text().strip()
+
+
+def _read_vendor_version() -> str:
+    return importlib.metadata.version("playwright")
+
+
+@fastapi_app.get("/update/check")
+def update_check_endpoint() -> dict:
+    result = check_for_update(_read_app_version(), _read_vendor_version())
+    return dataclasses.asdict(result)
+
+
+@fastapi_app.post("/update/apply")
+def update_apply_endpoint():
+    if not getattr(sys, "frozen", False):
+        raise HTTPException(status_code=400, detail="updates only apply to a packaged build")
+
+    result = check_for_update(_read_app_version(), _read_vendor_version())
+    if not result.update_available:
+        raise HTTPException(status_code=409, detail="no update available")
+
+    staging_dir = Path(tempfile.mkdtemp(prefix="atlas-desktop-update-"))
+    try:
+        stage_update(result, staging_dir)
+    except UpdateApplyError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    install_dir = Path(sys.executable).resolve().parent
+    script_path = staging_dir.parent / f"{staging_dir.name}-swap.ps1"
+    write_swap_script(
+        pid=os.getpid(),
+        staging_dir=staging_dir,
+        install_dir=install_dir,
+        exe_name="atlas-desktop.exe",
+        script_path=script_path,
+    )
+    launch_swap_script(script_path)
+
+    # Exit after a short delay, not immediately — the HTTP response below
+    # must reach the frontend before this process disappears, otherwise
+    # the "Update now" click looks like it silently failed.
+    threading.Timer(1.0, lambda: os._exit(0)).start()
+    return {"ok": True}
 
 
 def _unblock_windows_bundle() -> None:
