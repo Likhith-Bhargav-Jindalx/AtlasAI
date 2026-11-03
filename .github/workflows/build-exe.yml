@@ -132,24 +132,71 @@ jobs:
         shell: bash
         run: |
           rm -rf build dist atlas-desktop.spec
-          pyinstaller --onedir --windowed --name atlas-desktop --add-data "frontend/dist;frontend_dist" --add-data "desktop/production.env;." --paths engine/src desktop/app.py
+          pyinstaller --onedir --windowed --name atlas-desktop --add-data "frontend/dist;frontend_dist" --add-data "desktop/production.env;." --add-data "desktop/VERSION;." --paths engine/src desktop/app.py
 
       - name: Copy the vendored browser into the frozen bundle
         shell: bash
         run: cp -R "$RUNNER_TEMP/local-browsers" "dist/atlas-desktop/_internal/playwright/driver/package/.local-browsers"
 
-      - name: Zip distribution folder
+      - name: Read desktop version
+        id: version
+        shell: bash
+        run: echo "value=$(cat desktop/VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Read vendor (Playwright) version
+        id: vendor
         shell: bash
         run: |
-          cd dist
-          7z a atlas-desktop-windows.zip atlas-desktop
+          value=$(python -c "import importlib.metadata; print(importlib.metadata.version('playwright'))")
+          echo "value=$value" >> "$GITHUB_OUTPUT"
 
-      - name: Upload to GitHub Release
+      - name: Check whether this version was already released
+        id: existing
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create latest-windows dist/atlas-desktop-windows.zip --title "Latest Windows Build" --notes "Automated Windows build with vendored Chromium" || gh release upload latest-windows dist/atlas-desktop-windows.zip --clobber
+          if gh release view "desktop-v${{ steps.version.outputs.value }}" >/dev/null 2>&1; then
+            echo "already_released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_released=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Split into app and vendor zips
+        if: steps.existing.outputs.already_released == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_version="${{ steps.version.outputs.value }}"
+          vendor_version="${{ steps.vendor.outputs.value }}"
+
+          mkdir -p dist/app-payload/_internal
+          cd dist/atlas-desktop
+          find . -mindepth 1 -maxdepth 1 ! -name '_internal' -exec cp -r {} ../app-payload/ \;
+          find _internal -mindepth 1 -maxdepth 1 ! -name 'playwright' -exec cp -r {} ../app-payload/_internal/ \;
+          cd ../app-payload
+          7z a "../atlas-desktop-app-${app_version}.zip" . >/dev/null
+          cd ../atlas-desktop/_internal
+          7z a "../../atlas-desktop-vendor-${vendor_version}.zip" playwright >/dev/null
+          cd ../../..
+
+          sha256sum "dist/atlas-desktop-app-${app_version}.zip" "dist/atlas-desktop-vendor-${vendor_version}.zip" \
+            | sed 's#dist/##' > dist/checksums.txt
+
+      - name: Publish GitHub release
+        if: steps.existing.outputs.already_released == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          app_version="${{ steps.version.outputs.value }}"
+          vendor_version="${{ steps.vendor.outputs.value }}"
+          gh release create "desktop-v${app_version}" \
+            "dist/atlas-desktop-app-${app_version}.zip" \
+            "dist/atlas-desktop-vendor-${vendor_version}.zip" \
+            dist/checksums.txt \
+            --title "Atlas Desktop v${app_version}" \
+            --notes "Automated Windows build."
 
       - name: Upload exe artifact (optional fallback)
         continue-on-error: true
