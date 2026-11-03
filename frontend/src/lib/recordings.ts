@@ -13,6 +13,14 @@ export interface RecordingSummary {
   duration_seconds: number | null
   has_video: boolean
   has_codegen_script?: boolean
+  folder_id: string | null
+  folder_name: string | null
+  created_at: string
+}
+
+export interface RecordingFolder {
+  id: string
+  name: string
   created_at: string
 }
 
@@ -57,15 +65,49 @@ export interface RecordingDetail {
   scenario_description: string | null
 }
 
-export function useRecordings(orgId: string, status?: string, userId?: string) {
+export function useRecordings(
+  orgId: string, status?: string, userId?: string,
+  opts?: { folderId?: string; q?: string },
+) {
+  const { folderId, q } = opts ?? {}
   return useQuery({
-    queryKey: ['recordings', orgId, status, userId],
+    queryKey: ['recordings', orgId, status, userId, folderId, q],
     queryFn: () => {
       const params = new URLSearchParams({ org_id: orgId })
       if (status) params.set('status', status)
       if (userId) params.set('user_id', userId)
+      if (folderId) params.set('folder_id', folderId)
+      if (q) params.set('q', q)
       return apiFetch<RecordingSummary[]>(`/recordings?${params}`)
     },
+  })
+}
+
+export function useRecordingFolders() {
+  return useQuery({
+    queryKey: ['recording-folders'],
+    queryFn: () => apiFetch<RecordingFolder[]>('/recording-folders'),
+  })
+}
+
+export function useCreateRecordingFolder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (name: string) =>
+      apiFetch<RecordingFolder>('/recording-folders', { method: 'POST', body: JSON.stringify({ name }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['recording-folders'] }),
+  })
+}
+
+export function useMoveRecordingToFolder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ recordingId, folderId }: { recordingId: string; folderId: string }) =>
+      apiFetch<{ ok: boolean }>(`/recordings/${recordingId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ folder_id: folderId }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['recordings'] }),
   })
 }
 

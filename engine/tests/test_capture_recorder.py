@@ -1,10 +1,20 @@
 import time
 
+import pytest
 from playwright.sync_api import sync_playwright
 
 from atlas_engine.capture.extraction import attach_extraction_button
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.trajectory.extract import expected_effect_for_action
+
+
+def _confirm_note(page) -> None:
+    """Dismisses the mandatory note modal with its pre-filled default —
+    every real click/fill in these tests shows one, and it blocks any
+    further click from reaching its real target until confirmed."""
+    page.wait_for_selector("#__atlasNoteModal input")
+    page.keyboard.press("Enter")
+    page.wait_for_selector("#__atlasNoteModal", state="detached")
 
 
 def test_capture_session_records_click_and_fill(fixture_portal_url):
@@ -15,7 +25,9 @@ def test_capture_session_records_click_and_fill(fixture_portal_url):
 
         with CaptureSession(page) as capture:
             page.fill("#username", "demo")
+            _confirm_note(page)
             page.fill("#password", "demo-pass")
+            _confirm_note(page)
             page.click("#login-btn")
             page.wait_for_url("**/dashboard.html")
 
@@ -139,6 +151,7 @@ def test_action_timestamp_reflects_when_the_event_fired_not_when_it_was_finalize
         with CaptureSession(page) as capture:
             page.fill("#username", "demo")  # fires now, becomes pending
             fired_at_ms = int(time.time() * 1000)
+            _confirm_note(page)
             page.wait_for_timeout(300)  # a real gap before anything finalizes it
             page.fill("#password", "demo-pass")  # finalizes the username fill, ~300ms later
 
@@ -196,6 +209,7 @@ def test_recorded_dom_snapshots_exclude_the_extraction_button(fixture_portal_url
         with CaptureSession(page) as capture:
             page.click("#__atlasGrabBtn")  # starts the label mutation
             page.fill("#username", "demo")  # a real action, mid-mutation
+            _confirm_note(page)
             page.fill("#password", "demo-pass")  # finalizes the username fill
 
         browser.close()
@@ -209,39 +223,171 @@ def test_recorded_dom_snapshots_exclude_the_extraction_button(fixture_portal_url
     assert expected_effect_for_action(username_fill) == "none"
 
 
-def test_capture_session_attaches_a_live_note_to_the_most_recently_finalized_action(fixture_portal_url):
-    """A note submitted mid-recording attaches to the last action already
-    finalized (appended to self.actions) — the same one-event lag dom_after
-    already has, nothing new to invent here. The action still pending at the
-    moment the note is submitted is untouched."""
+def test_capture_session_attaches_a_pending_note_to_the_action_still_in_flight(fixture_portal_url):
+    """A note submitted via __atlas_pending_note (the mandatory modal's
+    binding) attaches to the action still _pending — the one the operator
+    was just prompted about — not to whatever was last finalized. This is
+    the opposite targeting from the old optional note box, which could only
+    ever reach an action already one event behind."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{fixture_portal_url}/login.html")
 
         with CaptureSession(page) as capture:
-            page.click("#username")  # becomes pending
-            page.click("#password")  # finalizes the #username click
-            page.evaluate("() => window.__atlas_note('per payer instructions')")
+            page.click("#username")  # becomes pending, its mandatory modal appears
+            page.evaluate("() => window.__atlas_pending_note('per payer instructions')")
+            # Bypassing the modal's own UI (unlike a real operator) to target
+            # the binding directly -- still must dismiss it exactly as a real
+            # confirm would, or it blocks the next click like any other.
+            page.evaluate("() => document.getElementById('__atlasNoteModal')?.remove()")
+            page.click("#password")  # finalizes the #username click, now carrying the note
 
         browser.close()
 
     assert [a.operator_note for a in capture.actions] == ["per payer instructions", None]
 
 
-def test_capture_session_ignores_a_note_submitted_before_any_action_is_finalized(fixture_portal_url):
+def test_capture_session_ignores_a_pending_note_submitted_when_nothing_is_pending(fixture_portal_url):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{fixture_portal_url}/login.html")
 
         with CaptureSession(page) as capture:
-            page.evaluate("() => window.__atlas_note('too early')")
+            page.evaluate("() => window.__atlas_pending_note('too early')")
             page.click("#username")
 
         browser.close()
 
     assert [a.operator_note for a in capture.actions] == [None]
+
+
+def test_capture_session_does_not_show_a_note_modal_for_a_click_that_only_focuses_a_field(fixture_portal_url):
+    """Reproduced via a real recording: clicking a search box to start
+    typing immediately popped the mandatory modal, which steals focus --
+    the operator could never actually type a single letter without first
+    confirming a note for the mere act of clicking the field, so they kept
+    re-clicking it instead. A click into an INPUT/TEXTAREA/SELECT is just
+    setup for the fill that follows (which already gets its own debounced
+    prompt) and is not itself a meaningful action."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#username")
+            page.wait_for_timeout(200)
+            assert page.locator("#__atlasNoteModal").count() == 0
+            page.type("#username", "demo")  # now able to actually type
+            _confirm_note(page)
+
+        browser.close()
+
+    # The focus-only click is still recorded (unchanged, pre-existing
+    # behavior) -- only the mandatory modal is skipped for it. page.type()
+    # fires one "input" per keystroke, each its own fill action (matching
+    # real per-keystroke recording), with the debounce still collapsing
+    # that to a single confirmed note on the last one.
+    kinds = [a.kind for a in capture.actions]
+    assert kinds == ["click"] + ["fill"] * (len(kinds) - 1)
+    assert capture.actions[0].operator_note is None
+    assert capture.actions[-1].value == "demo"
+
+
+def test_capture_session_shows_a_mandatory_note_modal_after_a_click_with_a_mechanical_default(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#login-btn")
+            modal_input = page.locator("#__atlasNoteModal input")
+            modal_input.wait_for(state="visible")
+            assert modal_input.input_value() == ""  # not prefilled
+            assert modal_input.get_attribute("placeholder") is None  # not even shown as a hint
+            default_text = modal_input.get_attribute("data-default-text")
+            assert default_text  # non-empty mechanical default, no LLM call
+            page.keyboard.press("Enter")
+            page.click("#username")  # finalizes the login-btn click, carrying its note
+
+        browser.close()
+
+    assert capture.actions[0].operator_note == default_text
+
+
+def test_capture_session_note_modal_blocks_a_subsequent_click_until_confirmed(fixture_portal_url):
+    """Proves the overlay is genuinely blocking, not cosmetic: a second real
+    click attempted while the modal from the first is still open must fail
+    to reach its target (Playwright's actionability check raises) rather
+    than silently landing on the overlay."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#login-btn")
+            page.wait_for_selector("#__atlasNoteModal")
+            with pytest.raises(Exception):
+                page.click("#username", timeout=1000)
+
+        browser.close()
+
+
+def test_capture_session_shows_the_note_modal_once_per_field_not_per_keystroke(fixture_portal_url):
+    """A real operator typing into a field fires one 'input' event per
+    keystroke (see the real multi-keystroke trajectories this session
+    captured) -- a modal on every keystroke would make the field unusable.
+    The modal must debounce off the keystrokes themselves instead (resetting
+    on every further one) rather than relying on a 'change'/blur event --
+    confirmed empirically that page.fill() never fires 'change' unless
+    something else actually steals focus afterward, which a real operator
+    typing and then clicking Submit won't reliably do before this modal is
+    meant to appear."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.locator("#username").press_sequentially("demo", delay=30)
+            assert page.locator("#__atlasNoteModal").count() == 0  # not yet -- debounce still pending
+            _confirm_note(page)  # waits out the debounce, then dismisses the one modal that appears
+
+        browser.close()
+
+    assert [a.value for a in capture.actions if a.kind == "fill"][-1] == "demo"
+
+
+def test_capture_session_use_default_button_fills_the_box_without_confirming(fixture_portal_url):
+    """Use Default only populates the input with the mechanical default,
+    replacing whatever was typed -- it never confirms by itself, so the
+    default text is only ever shown once the operator explicitly asks for
+    it, and Continue is still required to actually submit the note."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#login-btn")
+            modal_input = page.locator("#__atlasNoteModal input")
+            modal_input.wait_for(state="visible")
+            default_text = modal_input.get_attribute("data-default-text")
+            modal_input.fill("something the operator typed instead")
+            page.click("#__atlasNoteModalDefaultBtn")
+            assert modal_input.input_value() == default_text  # box now shows it
+            assert page.locator("#__atlasNoteModal").count() == 1  # still open, not confirmed
+            page.click("#__atlasNoteModalContinueBtn")
+            page.wait_for_selector("#__atlasNoteModal", state="detached")
+            page.click("#username")  # finalizes the login-btn click, carrying its note
+
+        browser.close()
+
+    assert capture.actions[0].operator_note == default_text
 
 
 def test_capture_session_undoes_the_most_recently_finalized_action(fixture_portal_url):
@@ -255,7 +401,7 @@ def test_capture_session_undoes_the_most_recently_finalized_action(fixture_porta
         page.goto(f"{fixture_portal_url}/login.html")
 
         with CaptureSession(page) as capture:
-            page.click("#username")  # becomes pending
+            page.click("#username")  # becomes pending -- no modal, it's a field focus click
             page.click("#password")  # finalizes #username; becomes pending
             page.evaluate("() => window.__atlas_undo_last()")  # undoes #username
 
@@ -288,12 +434,49 @@ def test_undo_button_removes_the_most_recently_finalized_action(fixture_portal_u
         page.goto(f"{fixture_portal_url}/login.html")
 
         with CaptureSession(page) as capture:
-            page.click("#username")  # becomes pending
+            page.click("#username")  # becomes pending -- no modal, it's a field focus click
             page.click("#password")  # finalizes #username; becomes pending
             page.wait_for_selector("#__atlasUndoBtn")
             page.click("#__atlasUndoBtn")
             page.wait_for_function(
                 "document.getElementById('__atlasUndoBtn').textContent.includes('removed')"
+            )
+
+        browser.close()
+
+    assert [a.kind for a in capture.actions] == ["click"]
+    assert capture.actions[0].selector_candidates[0]["selector"] == "#password"
+
+
+def test_undo_button_shows_distinct_feedback_when_nothing_is_removed(fixture_portal_url):
+    """A no-op undo (nothing finalized yet, or a repeat click re-targeting an
+    already-removed action) must look different from a real removal -- the
+    recording we checked where the operator clicked Undo 2-3 times showed no
+    gap at all, and without this the button can't tell them why."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            # Nothing finalized yet -- clicking Undo must not claim "removed".
+            page.click("#__atlasUndoBtn")
+            page.wait_for_function(
+                "document.getElementById('__atlasUndoBtn').textContent.includes('Nothing to undo')"
+            )
+
+            page.click("#username")  # becomes pending
+            page.click("#password")  # finalizes #username; becomes pending
+            page.click("#__atlasUndoBtn")  # real removal of #username
+            page.wait_for_function(
+                "document.getElementById('__atlasUndoBtn').textContent.includes('removed')"
+            )
+            page.wait_for_timeout(1600)  # let the label revert
+
+            # Repeat click, nothing new finalized in between -- same no-op case.
+            page.click("#__atlasUndoBtn")
+            page.wait_for_function(
+                "document.getElementById('__atlasUndoBtn').textContent.includes('Nothing to undo')"
             )
 
         browser.close()
@@ -330,6 +513,7 @@ def test_recorded_dom_snapshots_exclude_the_undo_button(fixture_portal_url):
         with CaptureSession(page) as capture:
             page.click("#__atlasUndoBtn")  # starts the label mutation
             page.fill("#username", "demo")  # a real action, mid-mutation
+            _confirm_note(page)
             page.fill("#password", "demo-pass")  # finalizes the username fill
 
         browser.close()
@@ -361,6 +545,7 @@ def test_capture_session_falls_back_to_a_text_selector_when_no_id_or_testid(fixt
 
         with CaptureSession(page) as capture:
             page.click("text=Forgot password?")
+            _confirm_note(page)
             page.fill("#username", "demo")  # finalizes the click above
 
         browser.close()
@@ -387,6 +572,45 @@ def test_capture_session_records_the_modifier_keys_held_during_a_click(fixture_p
         browser.close()
 
     assert capture.actions[0].modifiers == ["Meta"]
+
+
+def test_capture_session_can_record_a_manually_opened_tab(fixture_portal_url):
+    """A human opening a fresh tab (Cmd+T, or one already open when the
+    recording starts) and navigating it isn't a DOM event -- nothing in
+    _LISTENER_SCRIPT ever fires for it, so the caller (live_capture.py)
+    must synthesize this as its own lifecycle action, not something
+    CaptureSession infers from the page."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            capture.record_tab_opened("https://example.com/report", "<html></html>", origin="manual")
+            page.click("#login-btn")
+
+        browser.close()
+
+    assert capture.actions[0].kind == "tab_opened"
+    assert capture.actions[0].value == "https://example.com/report"
+    assert capture.actions[0].tab_origin == "manual"
+    assert capture.actions[1].kind == "click"
+
+
+def test_capture_session_can_record_a_tab_close(fixture_portal_url):
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#login-btn")
+            capture.record_tab_closed()
+
+        browser.close()
+
+    assert capture.actions[-1].kind == "tab_closed"
+    assert capture.actions[-1].value is None
 
 
 def test_capture_session_records_no_modifiers_for_a_plain_click(fixture_portal_url):

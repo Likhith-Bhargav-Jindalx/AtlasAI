@@ -103,11 +103,20 @@ def log_step(msg):
     print(f"[step] {msg}", file=sys.stderr)
 
 
+_PAGE_REGISTRY = {}
+
 def _page(page, index):
     """Resolves the Nth page of the shared browser context: page 0 is the
-    page the run started on; pages 1+ are popups the app opened."""
+    page the run started on. A manually-opened tab (tab_opened/tab_closed
+    steps, below) is tracked here by IDENTITY, not position -- context.pages
+    is positional, and a closed page drops out of it, which would shift
+    every later index down by one and resolve the wrong tab. With no
+    registry entry (a real popup the app spawned on its own), falls back to
+    waiting for context.pages to grow to this length, as before."""
     if index == 0:
         return page
+    if index in _PAGE_REGISTRY:
+        return _PAGE_REGISTRY[index]
     deadline = time.time() + 15
     while time.time() < deadline:
         pages = page.context.pages
@@ -628,12 +637,14 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config:
     first is registered with argparse."""
     lines = ["    parser = argparse.ArgumentParser()"]
     seen_secret_labels: set[str] = set()
+    registered_cli_names: set[str] = set()
     for s in classified.secrets:
         if s.label in seen_secret_labels:
             continue
         seen_secret_labels.add(s.label)
+        registered_cli_names.add(s.cli_name)
         lines.append(f'    parser.add_argument("--{s.cli_name}", default={s.default_value!r})')
-    seen_param_names: set[str] = set()
+    seen_param_names: set[str] = set(registered_cli_names)
     for p in classified.params:
         if p.cli_name in seen_param_names:
             continue
@@ -650,13 +661,15 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config:
     lines.append('        "diagnostics_dir": args.diagnostics_dir,')
     lines.append("    }")
     seen_secret_labels = set()
+    registered_cli_names = set()
     for s in classified.secrets:
         if s.label in seen_secret_labels:
             continue
         seen_secret_labels.add(s.label)
+        registered_cli_names.add(s.cli_name)
         attr = s.cli_name.replace("-", "_")
         lines.append(f'    params["{s.label}"] = args.{attr}')
-    seen_param_names = set()
+    seen_param_names = set(registered_cli_names)
     for p in classified.params:
         if p.cli_name in seen_param_names:
             continue
@@ -1039,7 +1052,19 @@ def _build_login_block(
     password_entries = [s for s in classified.secrets if s.label == "password"]
     if not password_entries:
         return "", set()
-    password_secret = password_entries[0]
+    steps_by_index_pre = {s.index: s for s in trajectory.steps}
+    # The retry wrapper below always re-navigates to `start_url` on the
+    # top-level `page` before filling -- valid only for a login that happens
+    # on the main page. A password step recorded on a manually-opened tab
+    # (page_index > 0) is already handled correctly by per-step emission
+    # (which resolves the right `_page(page, N)`), so skip synthesis rather
+    # than generate a retry block that fills the wrong page and times out.
+    page0_password_entries = [
+        s for s in password_entries if steps_by_index_pre[s.step_index].page_index == 0
+    ]
+    if not page0_password_entries:
+        return "", set()
+    password_secret = page0_password_entries[0]
     username_entries = [s for s in classified.secrets if s.label == "username"]
 
     steps_by_index = {s.index: s for s in trajectory.steps}
@@ -1569,6 +1594,17 @@ def emit_golden_script(
                 body_lines.extend(f"    {line}" for line in _emit_extract_checkpoint(name, current_page_expr))
             else:
                 body_lines.extend(f"    {line}" for line in _emit_extract_step(current_page_expr))
+            continue
+        if step.kind == "tab_opened":
+            if step.tab_origin == "popup":
+                continue  # spawned as a side effect of another step — nothing to emit here
+            body_lines.append(f"    _PAGE_REGISTRY[{step.page_index}] = page.context.new_page()")
+            body_lines.append(f"    _PAGE_REGISTRY[{step.page_index}].goto({step.value!r}, wait_until='load', timeout=30000)")
+            current_page_expr = f"_page(page, {step.page_index})"
+            continue
+        if step.kind == "tab_closed":
+            body_lines.append(f"    _page(page, {step.page_index}).close()")
+            body_lines.append(f"    _PAGE_REGISTRY.pop({step.page_index}, None)")
             continue
         page_expr = _step_page_expr(step)
         current_page_expr = page_expr

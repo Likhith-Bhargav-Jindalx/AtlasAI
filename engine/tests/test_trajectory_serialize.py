@@ -13,7 +13,7 @@ def test_trajectory_round_trips_through_dict():
             TrajectoryStep(
                 1, "click", [{"selector": "#b", "rank": 0}], None, "dom_changed",
                 expects_popup=True, page_index=1, operator_note="per payer instructions",
-                modifiers=("Meta",),
+                modifiers=("Meta",), tab_origin="popup",
             ),
         )
     )
@@ -34,7 +34,7 @@ def test_trajectory_round_trips_through_dict():
                 "expects_popup": False, "expects_download": False,
                 "wait_ceiling_ms": None, "force_click": False,
                 "key": None, "x": None, "y": None, "page_index": 0, "operator_note": None,
-                "modifiers": [],
+                "modifiers": [], "tab_origin": None,
             },
             {
                 "index": 1, "kind": "click",
@@ -45,7 +45,7 @@ def test_trajectory_round_trips_through_dict():
                 "wait_ceiling_ms": None, "force_click": False,
                 "key": None, "x": None, "y": None, "page_index": 1,
                 "operator_note": "per payer instructions",
-                "modifiers": ["Meta"],
+                "modifiers": ["Meta"], "tab_origin": "popup",
             },
         ]
     }
@@ -71,3 +71,4 @@ def test_trajectory_from_dict_tolerates_old_records_without_new_fields():
     assert restored.steps[0].page_index == 0
     assert restored.steps[0].operator_note is None
     assert restored.steps[0].modifiers == ()
+    assert restored.steps[0].tab_origin is None

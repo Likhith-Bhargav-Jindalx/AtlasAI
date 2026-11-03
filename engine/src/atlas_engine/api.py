@@ -8,6 +8,7 @@ from fastapi import Cookie, Depends, FastAPI, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from atlas_engine.observability import RequestIdMiddleware, configure_logging, get_request_id
 
@@ -44,12 +45,14 @@ from atlas_engine.recording_form_validation import (
 )
 from atlas_engine.recording_service import (
     claim_recording_request,
+    create_recording_folder,
     create_recording_request,
     get_recording_detail,
     list_carc_codes,
     list_clients,
     list_page_extractions,
     list_payers,
+    list_recording_folders,
     list_recording_requests,
     list_recordings,
     list_systems,
@@ -611,6 +614,7 @@ class StopRecordingResponse(BaseModel):
 def list_recordings_endpoint(
     status: str | None = None, user_id: str | None = None,
     lob: str | None = None, action: str | None = None, payer_id: str | None = None,
+    folder_id: str | None = None, q: str | None = None,
     _user: CurrentUser = Depends(get_current_user),
 ) -> list[dict]:
     # org_id and, for an operations agent, user_id are always derived from
@@ -622,8 +626,30 @@ def list_recordings_endpoint(
         effective_user_id = str(_user.id)
     return list_recordings(
         str(_user.org_id), status=status, user_id=effective_user_id,
-        lob=lob, action=action, payer_id=payer_id,
+        lob=lob, action=action, payer_id=payer_id, folder_id=folder_id, q=q,
     )
+
+
+class CreateRecordingFolderBody(BaseModel):
+    name: str
+
+
+@app.get("/recording-folders")
+def list_recording_folders_endpoint(_user: CurrentUser = Depends(get_current_user)) -> list[dict]:
+    return list_recording_folders(str(_user.org_id))
+
+
+@app.post("/recording-folders")
+def create_recording_folder_endpoint(
+    body: CreateRecordingFolderBody, _user: CurrentUser = Depends(get_current_user)
+) -> dict:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name can't be empty")
+    try:
+        return create_recording_folder(str(_user.org_id), name, created_by=str(_user.id))
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f'A folder named "{name}" already exists')
 
 
 @app.post("/recordings/start", response_model=StartRecordingResponse)
@@ -790,6 +816,9 @@ def get_recording_endpoint(recording_id: str) -> RecordingDetailResponse:
 class UpdateRecordingDetailsBody(BaseModel):
     title: str | None = None
     description: str | None = None
+    # "" explicitly means "remove from its folder" -- the one field here
+    # that needs a clear, not just a set (see update_recording_details).
+    folder_id: str | None = None
     # Recording form v1, Section B — see
     # docs/superpowers/specs/2026-08-19-recording-form-v1-design.md
     payer_scope: str | None = None
@@ -824,6 +853,7 @@ def update_recording_details_endpoint(recording_id: str, body: UpdateRecordingDe
 
         update_recording_details(
             uuid.UUID(recording_id), title=body.title, description=body.description,
+            folder_id=body.folder_id,
             payer_scope=body.payer_scope, payer_ids=body.payer_ids,
             other_system_ids=body.other_system_ids, carc_code_id=body.carc_code_id,
             code_free_text=body.code_free_text, sub_reason=body.sub_reason,

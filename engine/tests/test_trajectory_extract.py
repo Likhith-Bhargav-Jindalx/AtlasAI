@@ -2,7 +2,10 @@ from atlas_engine.capture.events import RecordedAction
 from atlas_engine.trajectory.extract import extract_trajectory
 
 
-def _action(index, kind, value, url_before, url_after, dom_before, dom_after, page_index=0, operator_note=None, modifiers=None):
+def _action(
+    index, kind, value, url_before, url_after, dom_before, dom_after, page_index=0, operator_note=None,
+    modifiers=None, tab_origin=None,
+):
     return RecordedAction(
         index=index,
         kind=kind,
@@ -15,6 +18,7 @@ def _action(index, kind, value, url_before, url_after, dom_before, dom_after, pa
         page_index=page_index,
         operator_note=operator_note,
         modifiers=modifiers or [],
+        tab_origin=tab_origin,
     )
 
 
@@ -88,3 +92,15 @@ def test_extract_trajectory_stamps_modifiers_from_the_recorded_action():
 
     assert trajectory.steps[0].modifiers == ("Meta",)
     assert trajectory.steps[1].modifiers == ()
+
+
+def test_extract_trajectory_stamps_tab_origin_from_the_recorded_action():
+    actions = [
+        _action(0, "tab_opened", "https://x/b", "https://x/b", "https://x/b", "<a/>", "<a/>", page_index=1, tab_origin="manual"),
+        _action(1, "click", None, "https://x/a", "https://x/a", "<a/>", "<b/>"),
+    ]
+
+    trajectory = extract_trajectory(actions)
+
+    assert trajectory.steps[0].tab_origin == "manual"
+    assert trajectory.steps[1].tab_origin is None

@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head><title>Fixture Portal — Auto Popup Delayed Navigation</title></head>
+<body>
+  <h1>Auto popup, delayed navigation</h1>
+  <script>
+    // Opens a blank tab immediately (like a manually-opened one would be),
+    // then navigates it to a real destination only after a delay LONGER
+    // than the old fixed capture window (3000ms) -- simulating an operator
+    // who takes a while to type a URL into a freshly opened tab.
+    setTimeout(function () {
+      var w = window.open('', '_blank');
+      setTimeout(function () { w.location.href = '/dashboard.html'; }, 4000);
+    }, 500);
+  </script>
+</body>
+</html>

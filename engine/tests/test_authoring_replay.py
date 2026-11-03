@@ -62,6 +62,59 @@ def test_run_replay_phase_completes_automatically_when_every_step_succeeds(fixtu
         assert all(e.level == "info" for e in events)
 
 
+def test_run_replay_phase_opens_and_closes_a_manually_triggered_tab(fixture_portal_url):
+    authoring_run_id = _make_authoring_run()
+    start_url = f"{fixture_portal_url}/login.html"
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "tab_opened", [], f"{fixture_portal_url}/dashboard.html", "none",
+                page_index=1, tab_origin="manual",
+            ),
+            TrajectoryStep(1, "tab_closed", [], None, "none", page_index=1),
+        )
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_context().new_page()
+        page.goto(start_url)
+        result = run_replay_phase(
+            page, trajectory, authoring_run_id, threading.Event(), threading.Event(),
+        )
+        browser.close()
+
+    assert result is not None
+    assert [s.kind for s in result.steps] == ["tab_opened", "tab_closed"]
+
+
+def test_run_replay_phase_skips_popup_origin_tab_opened_steps(fixture_portal_url):
+    """Carried forward would be misleading: this step has no action to
+    re-verify during replay (the popup is a side effect of a different
+    step) — it is dropped the same way a 'close' step is."""
+    authoring_run_id = _make_authoring_run()
+    start_url = f"{fixture_portal_url}/login.html"
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "tab_opened", [], "https://example.com/", "none", page_index=1, tab_origin="popup",
+            ),
+        )
+    )
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(start_url)
+        result = run_replay_phase(
+            page, trajectory, authoring_run_id, threading.Event(), threading.Event(),
+        )
+        browser.close()
+
+    assert result is not None
+    assert result.steps == ()
+
+
 def test_run_replay_phase_captures_reference_evidence_per_step(fixture_portal_url):
     """The replay is INSTRUMENTED — every step gets reference screenshots and
     the resolved element's identity, the evidence the brain thinks over."""

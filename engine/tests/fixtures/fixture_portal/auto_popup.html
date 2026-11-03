@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head><title>Fixture Portal — Auto Popup</title></head>
+<body>
+  <h1>Auto popup</h1>
+  <script>
+    // Delayed, not on load: the live-capture thread registers its
+    // context.on("page") popup listener right after page.goto() RETURNS,
+    // which is after the load event -- a popup opened synchronously during
+    // page load would fire before that listener exists and be missed.
+    setTimeout(function () { window.open('/dashboard.html', '_blank'); }, 500);
+  </script>
+</body>
+</html>

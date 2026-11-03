@@ -24,12 +24,15 @@ def run_replay_phase(
     mid-replay."""
     ref_dir = Path(settings.ensure_run_root()) / "authoring" / str(authoring_run_id) / "ref"
     enriched: list = []
+    page_registry: dict = {0: page}
     for step in trajectory.steps:
         if stop_event.is_set():
             return None
 
         if step.kind == "close":
             continue  # page closes are teardown, not flow — never carried forward
+        if step.kind == "tab_opened" and step.tab_origin == "popup":
+            continue  # spawned as a side effect of another step — nothing to replay here
 
         try:
             # A 15s resolve ceiling keeps an off-track step bounded during
@@ -38,6 +41,7 @@ def run_replay_phase(
             outcome = run_step(
                 page, step, shot_dir=str(ref_dir), timeout_ms=min(step.wait_ceiling_ms or 15000, 15000),
                 pre_action_ms=pre_action_ms, settle_after_nav_ms=settle_after_nav_ms,
+                page_registry=page_registry,
             )
         except Exception as exc:  # keep the step — the brain repairs it
             log_event(

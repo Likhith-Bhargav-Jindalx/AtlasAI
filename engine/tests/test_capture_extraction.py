@@ -93,50 +93,9 @@ def test_attach_extraction_button_notifies_on_click(fixture_portal_url):
     assert requested_pages == [page]
 
 
-def test_attach_note_box_submits_text_via_the_atlas_note_binding(fixture_portal_url):
-    from atlas_engine.capture.extraction import attach_note_box
-    from atlas_engine.capture.recorder import CaptureSession
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        context = browser.new_context()
-        attach_note_box(context)
-        page = context.new_page()
-        page.goto(f"{fixture_portal_url}/login.html")
-        page.wait_for_selector("#__atlasNoteBox")
-
-        with CaptureSession(page) as capture:
-            page.click("#username")  # becomes pending
-            page.click("#password")  # finalizes the #username click
-            page.fill("#__atlasNoteInput", "per payer instructions")
-            page.click("#__atlasNoteBox button")
-            page.wait_for_function(
-                "document.querySelector('#__atlasNoteBox button').textContent.includes('noted')"
-            )
-
-        browser.close()
-
-    assert [a.operator_note for a in capture.actions] == ["per payer instructions", None]
-
-
-def test_note_box_clicks_and_input_are_not_recorded_as_actions(fixture_portal_url):
-    from atlas_engine.capture.extraction import attach_note_box
-    from atlas_engine.capture.recorder import CaptureSession
-
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        context = browser.new_context()
-        attach_note_box(context)
-        page = context.new_page()
-        page.goto(f"{fixture_portal_url}/login.html")
-        page.wait_for_selector("#__atlasNoteBox")
-
-        with CaptureSession(page) as capture:
-            page.fill("#__atlasNoteInput", "ignored")
-            page.click("#__atlasNoteBox button")
-            page.fill("#username", "demo")  # a real action, to prove capture still works
-
-        browser.close()
-
-    assert [action.kind for action in capture.actions] == ["fill"]
-    assert capture.actions[0].value == "demo"
+# The optional, always-visible "why this step?" corner note box (and its
+# window.__atlas_note binding) was replaced by a mandatory per-action modal
+# (see recorder.py's _LISTENER_SCRIPT/showPendingNoteModal and
+# test_capture_recorder.py's test_capture_session_* note/modal tests) that
+# targets the action still in flight correctly, rather than whatever was
+# last finalized.

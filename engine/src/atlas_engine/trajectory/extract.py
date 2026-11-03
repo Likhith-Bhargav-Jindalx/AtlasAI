@@ -26,6 +26,7 @@ def extract_trajectory(actions: list[RecordedAction]) -> ReferenceTrajectory:
             page_index=action.page_index,
             operator_note=action.operator_note,
             modifiers=tuple(action.modifiers),
+            tab_origin=action.tab_origin,
         )
         for action in actions
     )

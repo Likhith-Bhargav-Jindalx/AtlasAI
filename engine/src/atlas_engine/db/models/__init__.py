@@ -7,6 +7,7 @@ from atlas_engine.db.models.portal import (
     PageExtraction,
     PortalProfile,
     Recording,
+    RecordingFolder,
     ReferenceTrajectory,
     SecretsRef,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "Payer",
     "PortalProfile",
     "Recording",
+    "RecordingFolder",
     "RecordingRequest",
     "ReferenceTrajectory",
     "Run",

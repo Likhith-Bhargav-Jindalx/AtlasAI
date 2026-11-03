@@ -1,16 +1,21 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { VideoOff } from 'lucide-react'
 import { useAuth } from '../../auth/AuthContext'
 import { useRecordings } from '../../lib/recordings'
 import { StatusPill } from '../../components/StatusPill'
+import { RecordingLibraryToolbar } from '../../components/RecordingLibraryToolbar'
+import { RecordingFolderPicker } from '../../components/RecordingFolderPicker'
 import { formatDuration, formatRelativeTime } from '../../lib/format'
 
 export function AgentLibraryPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const [q, setQ] = useState('')
+  const [folderId, setFolderId] = useState('')
   // User is guaranteed to be defined by ProtectedRoute, but may be undefined
   // during first render. We pass defaults and check user existence below.
-  const { data: recordings, isLoading } = useRecordings(user?.org_id || '', undefined, user?.user_id)
+  const { data: recordings, isLoading } = useRecordings(user?.org_id || '', undefined, user?.user_id, { folderId, q })
 
   if (!user || isLoading) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
@@ -20,6 +25,8 @@ export function AgentLibraryPage() {
         <h1 className="font-display text-[30px] font-semibold tracking-tight m-0">Recording library</h1>
         <div className="text-sm text-atlas-body">Your past recordings — video and steps.</div>
       </div>
+
+      <RecordingLibraryToolbar q={q} onQChange={setQ} folderId={folderId} onFolderIdChange={setFolderId} />
 
       <div className="grid grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-5">
         {(recordings ?? []).map((r) => (
@@ -40,8 +47,9 @@ export function AgentLibraryPage() {
                 <StatusPill status={r.status} />
               </div>
               <div className="text-[12.5px] text-atlas-body">{r.portal_domain}</div>
-              <div className="text-[12px] text-atlas-muted pt-1.5 border-t border-atlas-rowBorder">
-                {formatRelativeTime(r.created_at)}
+              <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-atlas-rowBorder">
+                <div className="text-[12px] text-atlas-muted">{formatRelativeTime(r.created_at)}</div>
+                <RecordingFolderPicker recordingId={r.id} folderId={r.folder_id} />
               </div>
             </div>
           </button>
