@@ -6,8 +6,12 @@ by atlas_engine.api.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import subprocess
+import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 
@@ -110,3 +114,79 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
     except Exception:
         logger.warning("desktop update check failed", exc_info=True)
         return UpdateCheckResult(update_available=False)
+
+
+class UpdateApplyError(Exception):
+    pass
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _download_and_verify(url: str, expected_sha256: str | None, dest_zip: Path) -> None:
+    response = httpx.get(url, timeout=120.0, follow_redirects=True)
+    response.raise_for_status()
+    content = response.content
+    if expected_sha256 is None or _sha256_bytes(content) != expected_sha256:
+        raise UpdateApplyError(f"checksum mismatch downloading {url}")
+    dest_zip.write_bytes(content)
+
+
+def stage_update(result: UpdateCheckResult, staging_dir: Path) -> None:
+    """Downloads and verifies this update's assets into staging_dir,
+    extracted so staging_dir ends up laid out exactly like the install
+    directory (app files at the top level; playwright/... only present
+    when a vendor update was actually required). Raises UpdateApplyError
+    on any checksum mismatch — never touches anything outside
+    staging_dir, so the real install is untouched on failure."""
+    staging_dir.mkdir(parents=True, exist_ok=True)
+
+    app_zip = staging_dir / "_app.zip"
+    _download_and_verify(result.app_asset_url, result.app_sha256, app_zip)
+    with zipfile.ZipFile(app_zip) as zf:
+        zf.extractall(staging_dir)
+    app_zip.unlink()
+
+    if result.vendor_update_required:
+        vendor_zip = staging_dir / "_vendor.zip"
+        _download_and_verify(result.vendor_asset_url, result.vendor_sha256, vendor_zip)
+        with zipfile.ZipFile(vendor_zip) as zf:
+            zf.extractall(staging_dir)
+        vendor_zip.unlink()
+
+
+_SWAP_SCRIPT_TEMPLATE = """\
+$targetPid = {pid}
+$staging = "{staging}"
+$install = "{install}"
+$exe = "{exe_name}"
+
+while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) {{
+    Start-Sleep -Milliseconds 500
+}}
+
+robocopy $staging $install /E | Out-Null
+Remove-Item -Recurse -Force $staging
+Start-Process -FilePath (Join-Path $install $exe)
+"""
+
+
+def write_swap_script(
+    *, pid: int, staging_dir: Path, install_dir: Path, exe_name: str, script_path: Path
+) -> None:
+    """Plain (non-mirroring) robocopy: only files present in staging_dir
+    are touched, so the install dir's existing playwright/ subfolder is
+    left alone whenever a vendor update wasn't staged."""
+    script_path.write_text(
+        _SWAP_SCRIPT_TEMPLATE.format(
+            pid=pid, staging=staging_dir, install=install_dir, exe_name=exe_name
+        )
+    )
+
+
+def launch_swap_script(script_path: Path) -> subprocess.Popen:
+    return subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script_path)],
+        close_fds=True,
+    )
