@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Atlas AI capture/trajectory/brain/codegen/certify engine"
 requires-python = ">=3.11"
 dependencies = [
-    "playwright>=1.49",
+    # <1.64: atlas_engine.capture.codegen.attach_codegen_recorder calls Playwright's
+    # private "enableRecorder" channel directly, which 1.64.0 removed (last verified
+    # working at 1.63.0). Bump this ceiling only after that call is ported to
+    # whatever replaced it.
+    "playwright>=1.49,<1.64",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlalchemy>=2.0",

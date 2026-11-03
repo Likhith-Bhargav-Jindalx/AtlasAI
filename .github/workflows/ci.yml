@@ -1,9 +1,11 @@
 name: CI
 
 on:
+  # No push:main trigger: the PR's own pull_request run already tests this
+  # exact code, so re-running on merge would just repeat it. main has no
+  # branch protection, so a direct push (bypassing a PR) gets no CI at
+  # all — an accepted gap, not an oversight.
   pull_request:
-  push:
-    branches: [main]
 
 jobs:
   engine-tests:
