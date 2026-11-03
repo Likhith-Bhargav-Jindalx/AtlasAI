@@ -26,6 +26,10 @@ class TrajectoryStep:
     key: str | None = None
     x: float | None = None
     y: float | None = None
+    page_index: int = 0
+    operator_note: str | None = None
+    modifiers: tuple[str, ...] = ()
+    tab_origin: str | None = None
 
 
 @dataclass(frozen=True)

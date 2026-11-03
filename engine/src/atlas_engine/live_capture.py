@@ -118,15 +118,87 @@ class _LiveCaptureSession:
                 new_pages: list = []
                 context.on("page", lambda new_page: new_pages.append(new_page))
 
+                # page.on("popup") fires ONLY for a page spawned as a side
+                # effect of this specific page's own click (window.open,
+                # target=_blank, cmd/ctrl+click) -- unlike context.on("page")
+                # above, which fires for ANY new page regardless of cause.
+                # That makes it the reliable signal for telling a popup apart
+                # from a tab the operator opened themselves (Cmd+T, or one
+                # already open at recording start): a popup will be spawned
+                # again by replaying the same click, so the golden script
+                # must just wait for it; a manually-opened tab never will be,
+                # so the golden script must open and navigate it itself (see
+                # codegen/emit.py and brain/loop.py's run_step).
+                popup_pages: set = set()
+                page.on("popup", lambda popup: popup_pages.add(popup))
+
                 extra_captures: list[tuple] = []
                 pending_extractions: list[dict] = []
 
                 def _attach_new_pages() -> None:
                     while new_pages:
                         new_page = new_pages.pop(0)
+                        new_page.on("popup", lambda popup: popup_pages.add(popup))  # this tab can itself spawn popups
                         started_at_ms = int(time.time() * 1000)
                         capture = CaptureSession(new_page)
                         capture.__enter__()
+                        origin = "popup" if new_page in popup_pages else "manual"
+
+                        # A manually-opened tab is typically still blank
+                        # (about:blank, chrome://newtab/) the instant it
+                        # appears, and an operator may take any amount of
+                        # time to type a destination into it. Recording the
+                        # URL on a fixed timeout either fires too early
+                        # (captures the blank page, breaking every later
+                        # replayed step on this tab) or blocks this whole
+                        # polling loop -- including the stop/health-check in
+                        # _wait_for_stop_or_disconnect -- for as long as the
+                        # bound. Event-driven instead: fires exactly once,
+                        # whenever the tab actually lands somewhere real, no
+                        # deadline either way.
+                        recorded = {"done": False}
+
+                        def _record_real_navigation(
+                            frame, _page=new_page, _capture=capture, _recorded=recorded, _origin=origin,
+                        ) -> None:
+                            if _recorded["done"] or frame != _page.main_frame:
+                                return
+                            if frame.url in ("about:blank", "chrome://newtab/") or frame.url.startswith("chrome://"):
+                                return
+                            _recorded["done"] = True
+                            try:
+                                _capture.record_tab_opened(frame.url, "", origin=_origin)
+                            except Exception:
+                                logger.exception("Failed to record tab_opened for a new tab")
+
+                        new_page.on("framenavigated", _record_real_navigation)
+
+                        # Playwright fills every positional-or-keyword lambda
+                        # param from the event's own args (regardless of a
+                        # default) up to however many the lambda declares --
+                        # a lambda with ONLY `capture` as its one param gets
+                        # the closed Page object bound to it instead,
+                        # clobbering the intended default. Giving the real
+                        # event arg its own leading slot leaves the other
+                        # defaults (this loop iteration's values, not
+                        # whatever gets reassigned by a later iteration)
+                        # untouched.
+                        def _on_close(
+                            _closed_page, _page=new_page, _capture=capture, _recorded=recorded, _origin=origin,
+                        ) -> None:
+                            # Closed before ever navigating anywhere real (the
+                            # operator opened it and changed their mind) --
+                            # tab_closed must still pair with a tab_opened, so
+                            # fall back to whatever URL it had, even if blank.
+                            if not _recorded["done"]:
+                                _recorded["done"] = True
+                                try:
+                                    _capture.record_tab_opened(_page.url, "", origin=_origin)
+                                except Exception:
+                                    logger.exception("Failed to record tab_opened for a new tab")
+                            _capture.record_tab_closed()
+
+                        new_page.on("close", _on_close)
                         extra_captures.append((new_page, capture, started_at_ms))
 
                     while pending_grab_pages:

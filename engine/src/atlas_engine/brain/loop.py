@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable
@@ -133,12 +134,20 @@ class BrainLoopResult(list):
         return self.failed_step is None and self.failure_reason is None
 
 
-def _page_for_index(page, index: int, timeout: float = 15.0):
+def _page_for_index(page, index: int, page_registry: dict | None = None, timeout: float = 15.0):
     """Resolves the Nth page of the shared browser context — page 0 is the
-    page the run started on; pages 1+ are popups the app opened (e.g. a
-    target=_blank report viewer). Waits briefly for the popup to appear."""
+    page the run started on. When page_registry already tracks this index
+    (stamped there by an explicit tab_opened/tab_closed step — see run_step),
+    that identity wins; this is what keeps a LATER tab resolving correctly
+    even after an EARLIER one closed, since context.pages is positional and
+    a closed page drops out of it, shifting every later index down by one.
+    With no registry entry (old recordings with no tab_opened steps, or a
+    real popup the app spawned on its own), falls back to waiting for
+    context.pages to grow to this length, as before."""
     if index == 0:
         return page
+    if page_registry is not None and index in page_registry:
+        return page_registry[index]
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         pages = page.context.pages
@@ -148,13 +157,18 @@ def _page_for_index(page, index: int, timeout: float = 15.0):
     raise TimeoutError(f"Popup page {index} never opened")
 
 
-def _target_page(page, selector: str):
+def _target_page(page, selector: str, page_index: int = 0, page_registry: dict | None = None):
     """The page a step's selector refers to — the main page, or a popup page
-    when the selector carries a `page1.` codegen root."""
+    either when the selector carries a `page1.` codegen root (recorded by the
+    native codegen recorder's popup case) or, for every other selector kind
+    (plain CSS included), when the step itself carries a nonzero
+    page_index (recorded by the live-capture multi-tab merge)."""
     if selector.startswith(_CODEGEN_EXPR_PREFIX):
         m = _PAGE_ROOT_RE.match(selector[len(_CODEGEN_EXPR_PREFIX):])
         if m and m.group(1) != "page":
-            return _page_for_index(page, int(m.group(1)[4:]))
+            return _page_for_index(page, int(m.group(1)[4:]), page_registry)
+    if page_index:
+        return _page_for_index(page, page_index, page_registry)
     return page
 
 
@@ -280,6 +294,8 @@ def _simple_selector_to_expr(selector: dict | str) -> str:
 
 
 def _first_selector(step: TrajectoryStep) -> str:
+    if not step.selector_candidates:
+        return ""
     ranked = sorted(step.selector_candidates, key=lambda c: c["rank"])
     return ranked[0]["selector"]
 
@@ -294,6 +310,14 @@ def _save_shot(page, shot_dir: str | None, tag: str) -> str | None:
         return path
     except Exception:
         return None
+
+
+# A multi-match text/CSS fallback (e.g. "text=Login" matching both a page
+# heading and a submit button's icon text) should prefer the clickable
+# control over incidental text -- confirmed via a real site
+# (the-internet.herokuapp.com/login) where the first-visible tie-break
+# silently clicked the `<h2>Login Page</h2>` heading instead of the button.
+_INTERACTIVE_JS = "el => Boolean(el.closest('button, a, input, [role=\"button\"], [role=\"link\"], [onclick]'))"
 
 
 def _resolve_locator(page, candidates: list[dict], timeout_ms: int | None):
@@ -318,13 +342,22 @@ def _resolve_locator(page, candidates: list[dict], timeout_ms: int | None):
                 continue
             if n == 1:
                 return loc.first, ci, n
+            visible = []
             for i in range(min(n, 12)):
                 try:
                     cand_loc = loc.nth(i)
                     if cand_loc.is_visible():
+                        visible.append(cand_loc)
+                except Exception:
+                    pass
+            for cand_loc in visible:
+                try:
+                    if cand_loc.evaluate(_INTERACTIVE_JS):
                         return cand_loc, ci, n
                 except Exception:
                     pass
+            if visible:
+                return visible[0], ci, n
             return loc.first, ci, n
         if time.monotonic() >= deadline:
             break
@@ -335,10 +368,30 @@ def _resolve_locator(page, candidates: list[dict], timeout_ms: int | None):
     raise TimeoutError(f"resolve: no locator candidate matched within {timeout_ms}ms (last error: {last})")
 
 
+def _platform_click_modifiers(modifiers: tuple[str, ...]) -> list[str] | None:
+    """Chromium's "cmd/ctrl+click opens a new tab" check is keyed to the
+    browser's OWN platform, not whichever platform recorded the click: Meta
+    on macOS, Control everywhere else. Replaying a Mac-recorded Meta click
+    verbatim on Linux (CI, most servers) does nothing special -- the link
+    just navigates in place, no popup -- so translate to whatever this
+    platform's browser actually treats as the accelerator."""
+    if not modifiers:
+        return None
+    is_mac = sys.platform == "darwin"
+    def _translate(m: str) -> str:
+        if m == "Meta" and not is_mac:
+            return "Control"
+        if m == "Control" and is_mac:
+            return "Meta"
+        return m
+    return [_translate(m) for m in modifiers]
+
+
 def _act_on_locator(locator, step: TrajectoryStep, *, force: bool = False, timeout_ms: float | None = None, key: str | None = None) -> None:
     val = _rematerialize(step.value)
     if step.kind in ("click", "dblclick"):
-        getattr(locator, step.kind)(force=force, timeout=timeout_ms)
+        modifiers = _platform_click_modifiers(step.modifiers)
+        getattr(locator, step.kind)(force=force, timeout=timeout_ms, modifiers=modifiers)
     elif step.kind == "hover":
         locator.hover(force=force, timeout=timeout_ms)
         locator.page.wait_for_timeout(900)
@@ -422,6 +475,7 @@ def run_step(
     key: str | None = None,
     pre_action_ms: int = 0,
     settle_after_nav_ms: int = 0,
+    page_registry: dict | None = None,
 ) -> StepOutcome:
     """Executes ONE trajectory step against the live page and gathers the
     evidence the brain evaluates and (when off-track) thinks over: the error,
@@ -453,6 +507,42 @@ def run_step(
             extracted_data=extracted,
             elapsed_ms=0,
         )
+    if step.kind == "tab_opened":
+        if step.tab_origin == "popup":
+            # Nothing to do now — this page is spawned as a side effect of a
+            # DIFFERENT (earlier/later) step's click; manufacturing one here
+            # would create a spurious extra tab alongside the real popup.
+            # Whatever later step targets this page_index resolves it lazily
+            # via _page_for_index's existing wait-for-popup fallback.
+            return evaluate(
+                step, url_before=page.url, url_after=page.url, dom_before="", dom_after="",
+                resolved_selector="", elapsed_ms=0,
+            )
+        new_page = page.context.new_page()
+        url = _rematerialize(step.value) or step.value or "about:blank"
+        try:
+            new_page.goto(url, wait_until="load", timeout=30000)
+        except Exception:
+            pass
+        if page_registry is not None:
+            page_registry[step.page_index] = new_page
+        return evaluate(
+            step, url_before=url, url_after=new_page.url, dom_before="", dom_after="",
+            resolved_selector="", elapsed_ms=0,
+        )
+    if step.kind == "tab_closed":
+        target_tab = (page_registry or {}).get(step.page_index) or _page_for_index(page, step.page_index, page_registry)
+        try:
+            target_tab.close()
+        except Exception:
+            pass
+        if page_registry is not None:
+            page_registry.pop(step.page_index, None)
+        return evaluate(
+            step, url_before="", url_after="", dom_before="", dom_after="",
+            resolved_selector="", elapsed_ms=0,
+        )
+
     resolved_selector = selector or _first_selector(step)
     if step.kind == "close":
         page.close()
@@ -465,7 +555,7 @@ def run_step(
         )
     # A codegen popup step acts on a different page (page1, ...) — measure
     # and act on THAT page, not the main one.
-    target = _target_page(page, resolved_selector)
+    target = _target_page(page, resolved_selector, step.page_index, page_registry)
     pages_before = len(page.context.pages)
     t0 = time.monotonic()
 
@@ -653,6 +743,7 @@ class BrainLoop:
         pacing_settle_after_nav_ms: int = 0,
     ):
         self.page = page
+        self.page_registry: dict = {0: page}
         self.on_off_track = on_off_track
         self.llm = llm
         self.action_cache = action_cache
@@ -684,6 +775,9 @@ class BrainLoop:
             if working.kind == "close":
                 pos += 1
                 continue  # page closes are teardown, not flow
+            if working.kind == "tab_opened" and working.tab_origin == "popup":
+                pos += 1
+                continue  # spawned as a side effect of another step — nothing to execute here
 
             attempts: list[str] = []
             done = False
@@ -838,6 +932,7 @@ class BrainLoop:
             x=step.x, y=step.y, key=step.key,
             pre_action_ms=self.pacing_pre_action_ms,
             settle_after_nav_ms=self.pacing_settle_after_nav_ms,
+            page_registry=self.page_registry,
         )
 
     def _verified_step(self, working: TrajectoryStep, outcome: StepOutcome) -> TrajectoryStep:

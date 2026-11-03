@@ -190,6 +190,177 @@ def test_emitted_golden_script_runs_a_multi_page_flow(fixture_portal_url, tmp_pa
     assert result.returncode == 0, result.stderr
 
 
+def test_step_page_expr_uses_page_index_for_a_plain_css_step():
+    """A plain-CSS step recorded on a popup tab (live-capture multi-tab merge
+    stamps page_index, no codegen_expr involved) must still resolve to
+    _page(page, N) -- not silently fall back to the top-level page."""
+    from atlas_engine.codegen.emit import _step_page_expr
+    step = TrajectoryStep(1, "click", [{"selector": "#generate-report-btn", "rank": 0}], None, "dom_changed", page_index=1)
+    assert _step_page_expr(step) == "_page(page, 1)"
+
+
+def test_emitted_golden_script_runs_a_multi_page_flow_with_a_plain_css_popup_step(fixture_portal_url, tmp_path):
+    """Same latent-bug regression as the codegen_expr popup flow above, but
+    for a step recorded with page_index (live-capture multi-tab) instead of a
+    codegen_expr page1. selector -- it must still act on the popup, not the
+    top-level page."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "click", [{"selector": "#open-report", "rank": 0}],
+                None, "none",
+            ),
+            TrajectoryStep(
+                1, "click", [{"selector": "#generate-report-btn", "rank": 0}],
+                None, "dom_changed", page_index=1,
+            ),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/popup_trigger.html")
+    assert "_page(page, 1)" in script
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_emitted_golden_script_replays_a_cmd_click_so_a_same_window_link_opens_a_new_tab(fixture_portal_url, tmp_path):
+    """Confirmed via a real authoring run: without reproducing the recorded
+    Meta/Control modifier, the emitted script's plain .click() call just
+    navigates the link's own page in place instead of opening a new tab --
+    every certification run then failed with 'Popup page 1 never opened'
+    even though the live brain-loop replay (a separate code path, already
+    fixed) succeeded.
+
+    Also confirmed on Linux CI: a plain, un-translated Meta modifier does
+    nothing there -- Chromium's new-tab accelerator is Control on
+    Linux/Windows, Meta only on macOS -- so the emitted call must translate
+    at RUNTIME (_click_modifiers), not bake in whichever modifier was
+    recorded, since the authoring machine and the certifying machine can be
+    different platforms."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "click", [{"selector": "#open-report-samewindow", "rank": 0}],
+                None, "none", modifiers=("Meta",),
+            ),
+            TrajectoryStep(
+                1, "click", [{"selector": "#generate-report-btn", "rank": 0}],
+                None, "dom_changed", page_index=1,
+            ),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/popup_trigger.html")
+    assert "modifiers=_click_modifiers(['Meta'])" in script
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_emit_golden_script_opens_and_closes_a_manually_triggered_tab():
+    """A tab the operator opened themselves (Cmd+T, or already open at
+    recording start) has no app-side cause that will spawn it when the
+    golden script runs -- unlike a popup step, the emitted script must
+    manufacture it itself."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "tab_opened", [], "https://example.com/report", "none",
+                page_index=1, tab_origin="manual",
+            ),
+            TrajectoryStep(1, "tab_closed", [], None, "none", page_index=1),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url="https://example.com/login.html")
+
+    assert "_PAGE_REGISTRY[1] = page.context.new_page()" in script
+    assert "'https://example.com/report'" in script
+    assert "_page(page, 1).close()" in script
+    assert "_PAGE_REGISTRY.pop(1, None)" in script
+
+
+def test_emit_golden_script_treats_a_preexisting_tab_the_same_way_as_a_manual_one():
+    """Only the origin label differs from a mid-recording manual open --
+    emission does not branch on it, since a preexisting tab has exactly the
+    same replay need: nothing will spawn it, so the script must."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "tab_opened", [], "https://example.com/report", "none",
+                page_index=1, tab_origin="preexisting",
+            ),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url="https://example.com/login.html")
+
+    assert "_PAGE_REGISTRY[1] = page.context.new_page()" in script
+    assert "'https://example.com/report'" in script
+
+
+def test_emit_golden_script_skips_popup_origin_tab_opened_steps():
+    """Nothing to emit — the page is a side effect of a different (click)
+    step; emitting a context.new_page() here would create a spurious extra
+    tab alongside the real popup."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "tab_opened", [], "https://example.com/popup", "none",
+                page_index=1, tab_origin="popup",
+            ),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url="https://example.com/login.html")
+
+    assert "_PAGE_REGISTRY" not in script.split("def run_flow")[1].split("def run(")[0]
+
+
+def test_emitted_golden_script_resolves_a_later_tab_correctly_after_an_earlier_one_closed(
+    fixture_portal_url, tmp_path,
+):
+    """context.pages is POSITIONAL -- closing an earlier tab drops it from
+    the list, shifting every later tab's index down by one. The emitted
+    script's _page() helper must resolve tabs by identity (tracked via
+    _PAGE_REGISTRY, populated by the tab_opened/tab_closed steps below),
+    not by re-reading context.pages at call time, or the second tab
+    resolves to the wrong page (or times out)."""
+    trajectory = ReferenceTrajectory(
+        steps=(
+            TrajectoryStep(
+                0, "tab_opened", [], f"{fixture_portal_url}/dashboard.html", "none",
+                page_index=1, tab_origin="manual",
+            ),
+            TrajectoryStep(
+                1, "click", [{"selector": "#generate-report-btn", "rank": 0}],
+                None, "dom_changed", page_index=1,
+            ),
+            TrajectoryStep(2, "tab_closed", [], None, "none", page_index=1),
+            TrajectoryStep(
+                3, "tab_opened", [], f"{fixture_portal_url}/popup_trigger.html", "none",
+                page_index=2, tab_origin="manual",
+            ),
+            TrajectoryStep(
+                4, "click", [{"selector": "#open-report", "rank": 0}],
+                None, "none", page_index=2, expects_popup=True,
+            ),
+        )
+    )
+    script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/login.html")
+
+    script_path = tmp_path / "golden.py"
+    script_path.write_text(script)
+
+    result = subprocess.run([sys.executable, str(script_path)], capture_output=True, text=True, timeout=30)
+
+    assert result.returncode == 0, result.stderr
+
+
 # ── Tests for ported logic from emitGolden.ts ──────────────────────────
 
 
@@ -454,6 +625,51 @@ def test_argparse_block_registers_one_flag_per_duplicated_password_secret():
     assert block.count('params["password"] = args.password') == 1
 
 
+def test_argparse_block_registers_one_flag_per_duplicated_cli_param_name():
+    """Confirmed via a real authoring run: searching the same field twice
+    (e.g. the same #searchInput on two tabs) produced two CliParam entries
+    sharing the identical cli_name 'search-input' -- argparse errored on the
+    duplicate --search-input registration, crashing every certification run
+    immediately. Mirrors the existing secrets dedup (same conflict, same
+    fix) for plain params, which had none."""
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams, CliParam
+    classified = ClassifiedParams(
+        secrets=(),
+        params=(
+            CliParam(0, "search-input", "hello"),
+            CliParam(2, "search-input", "hello"),
+        ),
+    )
+    block = _build_argparse_and_main_params(classified)
+    assert block.count('"--search-input"') == 1
+    assert block.count('params["search_input"] = args.search_input') == 1
+
+
+def test_argparse_block_skips_a_plain_param_whose_name_collides_with_a_registered_secret():
+    """Confirmed via a real multi-tab authoring run: tab1's username fill is
+    classified as the SecretParam "username" (paired with the first password
+    step), but tab2's own separate login has its own #username fill that is
+    NOT paired with any password step on that page, so it falls through to a
+    plain CliParam -- which derives the identical cli_name "username" from
+    the shared selector. argparse errored on the duplicate --username
+    registration (ArgumentError: conflicting option string), crashing every
+    certification run. The plain param must be skipped once a secret has
+    already claimed that flag name."""
+    from atlas_engine.codegen.emit import _build_argparse_and_main_params
+    from atlas_engine.codegen.params import ClassifiedParams, CliParam, SecretParam
+    classified = ClassifiedParams(
+        secrets=(
+            SecretParam(0, "username", "username", "tomsmith"),
+            SecretParam(1, "password", "password", "SuperSecretPassword!"),
+        ),
+        params=(CliParam(9, "username", "wronguser"),),
+    )
+    block = _build_argparse_and_main_params(classified)
+    assert block.count('"--username"') == 1
+    assert block.count('params["username"] = args.username') == 1
+
+
 def test_argparse_block_always_declares_headless_and_diagnostics_dir():
     from atlas_engine.codegen.emit import _build_argparse_and_main_params
     from atlas_engine.codegen.params import ClassifiedParams
@@ -495,6 +711,37 @@ def test_login_block_is_empty_when_there_is_no_password_step():
         TrajectoryStep(0, "click", [{"selector": "#btn", "rank": 0}], None, "none"),
     ))
     block, consumed = _build_login_block(trajectory, ClassifiedParams(secrets=(), params=()), success_signal=None)
+    assert block == ""
+    assert consumed == set()
+
+
+def test_login_block_is_empty_when_the_only_password_step_is_on_a_secondary_tab():
+    """Confirmed via a real multi-tab authoring run: a login that happens on a
+    manually-opened tab (page_index > 0), not the main page, timed out every
+    certification run -- the generated login() always does
+    `page.goto(start_url)` + `page.fill("#username", ...)` against the
+    top-level `page`, which is the WRONG page for a tab-scoped login (the
+    main page is still on, e.g., Wikipedia and has no #username field).
+    Per-step emission already resolves the correct `_page(page, N)` for a
+    tab-scoped fill/click (proven by the brain/replay phases succeeding on
+    exactly these steps), so login-block synthesis -- whose retry wrapper is
+    only valid for the one page that owns `start_url` -- must not fire for a
+    password step recorded on any other page."""
+    from atlas_engine.codegen.emit import _build_login_block
+    from atlas_engine.codegen.params import ClassifiedParams, SecretParam
+    trajectory = ReferenceTrajectory(steps=(
+        TrajectoryStep(0, "fill", [{"selector": "#username", "rank": 0}], "tomsmith", "none", page_index=1),
+        TrajectoryStep(1, "fill", [{"selector": "#password", "rank": 0}], "SuperSecretPassword!", "none", page_index=1),
+        TrajectoryStep(2, "click", [{"selector": "button[type=submit]", "rank": 0}], None, "url_changed", page_index=1),
+    ))
+    classified = ClassifiedParams(
+        secrets=(
+            SecretParam(0, "username", "username", "tomsmith"),
+            SecretParam(1, "password", "password", "SuperSecretPassword!"),
+        ),
+        params=(),
+    )
+    block, consumed = _build_login_block(trajectory, classified, success_signal=None, start_url="https://www.wikipedia.org/")
     assert block == ""
     assert consumed == set()
 

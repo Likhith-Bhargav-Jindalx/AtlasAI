@@ -103,11 +103,20 @@ def log_step(msg):
     print(f"[step] {msg}", file=sys.stderr)
 
 
+_PAGE_REGISTRY = {}
+
 def _page(page, index):
     """Resolves the Nth page of the shared browser context: page 0 is the
-    page the run started on; pages 1+ are popups the app opened."""
+    page the run started on. A manually-opened tab (tab_opened/tab_closed
+    steps, below) is tracked here by IDENTITY, not position -- context.pages
+    is positional, and a closed page drops out of it, which would shift
+    every later index down by one and resolve the wrong tab. With no
+    registry entry (a real popup the app spawned on its own), falls back to
+    waiting for context.pages to grow to this length, as before."""
     if index == 0:
         return page
+    if index in _PAGE_REGISTRY:
+        return _PAGE_REGISTRY[index]
     deadline = time.time() + 15
     while time.time() < deadline:
         pages = page.context.pages
@@ -115,6 +124,25 @@ def _page(page, index):
             return pages[index]
         page.wait_for_timeout(200)
     raise TimeoutError(f"Popup page {index} never opened")
+
+def _click_modifiers(modifiers):
+    # Chromium's "cmd/ctrl+click opens a new tab" check is keyed to the
+    # browser's OWN platform, not whichever platform recorded the click:
+    # Meta on macOS, Control everywhere else. Translate so a Mac-recorded
+    # Meta click still opens a new tab when this script runs on Linux/
+    # Windows, and vice versa.
+    if not modifiers:
+        return None
+    is_mac = sys.platform == "darwin"
+    out = []
+    for m in modifiers:
+        if m == "Meta" and not is_mac:
+            out.append("Control")
+        elif m == "Control" and is_mac:
+            out.append("Meta")
+        else:
+            out.append(m)
+    return out
 '''
 
 _PACE_HELPER_TEMPLATE = '''
@@ -412,65 +440,73 @@ def _emit_css_step(
     step: TrajectoryStep, selector: str, *, pre_action_ms: int = 0, settle_after_nav_ms: int = 0,
     value_expr: str | None = None,
 ) -> list[str]:
-    """Emits calls for a step with a plain CSS selector."""
+    """Emits calls for a step with a plain CSS selector. Acts on `page` or,
+    for a step recorded on a popup tab via the live-capture multi-tab merge
+    (step.page_index > 0, no codegen_expr involved), on `_page(page, N)`."""
     lines: list[str] = []
+    pg = f"_page(page, {step.page_index})" if step.page_index else "page"
     if pre_action_ms > 0:
-        lines.append("    _pace(page)")
+        lines.append(f"    _pace({pg})")
 
     selector = _prefer_visible(selector, step.force_click)
     use_locator = ">>" in selector or not step.selector_candidates
 
     if step.kind == "click":
+        click_kwargs = []
+        if step.force_click:
+            click_kwargs.append("force=True")
+        if step.modifiers:
+            click_kwargs.append(f"modifiers=_click_modifiers({list(step.modifiers)!r})")
+        kwargs_str = ", ".join(click_kwargs)
         if use_locator:
-            click_call = ".click(force=True)" if step.force_click else ".click()"
-            lines.append(f"    page.locator({selector!r}).first{click_call}")
+            lines.append(f"    {pg}.locator({selector!r}).first.click({kwargs_str})")
         else:
-            lines.append(f"    page.click({selector!r}, force=True)" if step.force_click else f"    page.click({selector!r})")
+            lines.append(f"    {pg}.click({selector!r}, {kwargs_str})" if kwargs_str else f"    {pg}.click({selector!r})")
     elif step.kind == "dblclick":
-        lines.append(f"    page.locator({selector!r}).first.dblclick()" if use_locator else f"    page.dblclick({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.dblclick()" if use_locator else f"    {pg}.dblclick({selector!r})")
     elif step.kind == "hover":
-        lines.append(f"    page.locator({selector!r}).first.hover()" if use_locator else f"    page.hover({selector!r})")
-        lines.append("    page.wait_for_timeout(900)")
+        lines.append(f"    {pg}.locator({selector!r}).first.hover()" if use_locator else f"    {pg}.hover({selector!r})")
+        lines.append(f"    {pg}.wait_for_timeout(900)")
     elif step.kind == "hover_click":
-        lines.append(f"    page.locator({selector!r}).first.hover()" if use_locator else f"    page.hover({selector!r})")
-        lines.append("    page.wait_for_timeout(900)")
-        lines.append(f"    page.locator({selector!r}).first.click()" if use_locator else f"    page.click({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.hover()" if use_locator else f"    {pg}.hover({selector!r})")
+        lines.append(f"    {pg}.wait_for_timeout(900)")
+        lines.append(f"    {pg}.locator({selector!r}).first.click()" if use_locator else f"    {pg}.click({selector!r})")
     elif step.kind == "dispatch_click":
-        lines.append(f'    page.locator({selector!r}).first.dispatch_event("click")')
+        lines.append(f'    {pg}.locator({selector!r}).first.dispatch_event("click")')
     elif step.kind == "fill":
         val = value_expr if value_expr is not None else repr(step.value or "")
         if use_locator:
-            lines.append(f"    page.locator({selector!r}).first.fill({val})")
+            lines.append(f"    {pg}.locator({selector!r}).first.fill({val})")
         else:
-            lines.append(f"    page.fill({selector!r}, {val})")
+            lines.append(f"    {pg}.fill({selector!r}, {val})")
     elif step.kind == "type":
         seq = value_expr if value_expr is not None else repr(step.value or "")
         if use_locator:
-            lines.append(f"    page.locator({selector!r}).first.click()")
-            lines.append(f"    page.locator({selector!r}).first.fill('')")
-            lines.append(f"    page.locator({selector!r}).first.press_sequentially({seq}, delay=100)")
+            lines.append(f"    {pg}.locator({selector!r}).first.click()")
+            lines.append(f"    {pg}.locator({selector!r}).first.fill('')")
+            lines.append(f"    {pg}.locator({selector!r}).first.press_sequentially({seq}, delay=100)")
         else:
-            lines.append(f"    page.click({selector!r})")
-            lines.append(f"    page.fill({selector!r}, '')")
-            lines.append(f"    page.press_sequentially({selector!r}, {seq}, delay=100)")
+            lines.append(f"    {pg}.click({selector!r})")
+            lines.append(f"    {pg}.fill({selector!r}, '')")
+            lines.append(f"    {pg}.press_sequentially({selector!r}, {seq}, delay=100)")
     elif step.kind == "press":
         key = step.key or step.value or "Enter"
-        lines.append(f"    page.locator({selector!r}).first.press({key!r})" if use_locator else f"    page.press({selector!r}, {key!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.press({key!r})" if use_locator else f"    {pg}.press({selector!r}, {key!r})")
     elif step.kind == "select_option":
         value = value_expr if value_expr is not None else repr(step.value or "")
         lines.append(
-            f"    page.locator({selector!r}).first.select_option({value})"
-            if use_locator else f"    page.select_option({selector!r}, {value})"
+            f"    {pg}.locator({selector!r}).first.select_option({value})"
+            if use_locator else f"    {pg}.select_option({selector!r}, {value})"
         )
     elif step.kind == "check":
-        lines.append(f"    page.locator({selector!r}).first.check()" if use_locator else f"    page.check({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.check()" if use_locator else f"    {pg}.check({selector!r})")
     elif step.kind == "uncheck":
-        lines.append(f"    page.locator({selector!r}).first.uncheck()" if use_locator else f"    page.uncheck({selector!r})")
+        lines.append(f"    {pg}.locator({selector!r}).first.uncheck()" if use_locator else f"    {pg}.uncheck({selector!r})")
     else:
         raise ValueError(f"Unsupported step kind for emission: {step.kind}")
 
     if step.expected_effect == "url_changed":
-        lines.append("    page.wait_for_load_state()")
+        lines.append(f"    {pg}.wait_for_load_state()")
     return lines
 
 
@@ -620,12 +656,18 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config:
     first is registered with argparse."""
     lines = ["    parser = argparse.ArgumentParser()"]
     seen_secret_labels: set[str] = set()
+    registered_cli_names: set[str] = set()
     for s in classified.secrets:
         if s.label in seen_secret_labels:
             continue
         seen_secret_labels.add(s.label)
+        registered_cli_names.add(s.cli_name)
         lines.append(f'    parser.add_argument("--{s.cli_name}", default={s.default_value!r})')
+    seen_param_names: set[str] = set(registered_cli_names)
     for p in classified.params:
+        if p.cli_name in seen_param_names:
+            continue
+        seen_param_names.add(p.cli_name)
         lines.append(f'    parser.add_argument("--{p.cli_name}", default={p.default_value!r})')
     lines.append('    parser.add_argument("--headless", action="store_true", default=True)')
     lines.append('    parser.add_argument("--headed", dest="headless", action="store_false")')
@@ -638,13 +680,19 @@ def _build_argparse_and_main_params(classified: "ClassifiedParams", auth_config:
     lines.append('        "diagnostics_dir": args.diagnostics_dir,')
     lines.append("    }")
     seen_secret_labels = set()
+    registered_cli_names = set()
     for s in classified.secrets:
         if s.label in seen_secret_labels:
             continue
         seen_secret_labels.add(s.label)
+        registered_cli_names.add(s.cli_name)
         attr = s.cli_name.replace("-", "_")
         lines.append(f'    params["{s.label}"] = args.{attr}')
+    seen_param_names = set(registered_cli_names)
     for p in classified.params:
+        if p.cli_name in seen_param_names:
+            continue
+        seen_param_names.add(p.cli_name)
         attr = p.cli_name.replace("-", "_")
         lines.append(f'    params["{attr}"] = args.{attr}')
     auth_config = auth_config or {}
@@ -692,13 +740,18 @@ def _login_locator_expr(step: TrajectoryStep) -> str:
 def _step_page_expr(step: TrajectoryStep) -> str:
     """The page expression a step acts on — `page` or `_page(page, N)` for
     popup steps — used for the per-step _settle_frames() call (matches the
-    old app's `_settle_frames(${p.pageVar})` before every planned step)."""
+    old app's `_settle_frames(${p.pageVar})` before every planned step).
+    Checked first via a codegen_expr `pageN.` root (native codegen
+    recorder's popup case); falls back to step.page_index for every other
+    selector kind, plain CSS included (live-capture multi-tab merge)."""
     selector = _best_selector(step)
     if selector.startswith(_CODEGEN_EXPR_PREFIX):
         expr = selector[len(_CODEGEN_EXPR_PREFIX):]
         m = _PAGE_ROOT_RE.match(expr)
         if m and m.group(1) != "page":
             return f"_page(page, {int(m.group(1)[4:])})"
+    if step.page_index:
+        return f"_page(page, {step.page_index})"
     return "page"
 
 
@@ -1018,7 +1071,19 @@ def _build_login_block(
     password_entries = [s for s in classified.secrets if s.label == "password"]
     if not password_entries:
         return "", set()
-    password_secret = password_entries[0]
+    steps_by_index_pre = {s.index: s for s in trajectory.steps}
+    # The retry wrapper below always re-navigates to `start_url` on the
+    # top-level `page` before filling -- valid only for a login that happens
+    # on the main page. A password step recorded on a manually-opened tab
+    # (page_index > 0) is already handled correctly by per-step emission
+    # (which resolves the right `_page(page, N)`), so skip synthesis rather
+    # than generate a retry block that fills the wrong page and times out.
+    page0_password_entries = [
+        s for s in password_entries if steps_by_index_pre[s.step_index].page_index == 0
+    ]
+    if not page0_password_entries:
+        return "", set()
+    password_secret = page0_password_entries[0]
     username_entries = [s for s in classified.secrets if s.label == "username"]
 
     steps_by_index = {s.index: s for s in trajectory.steps}
@@ -1548,6 +1613,17 @@ def emit_golden_script(
                 body_lines.extend(f"    {line}" for line in _emit_extract_checkpoint(name, current_page_expr))
             else:
                 body_lines.extend(f"    {line}" for line in _emit_extract_step(current_page_expr))
+            continue
+        if step.kind == "tab_opened":
+            if step.tab_origin == "popup":
+                continue  # spawned as a side effect of another step — nothing to emit here
+            body_lines.append(f"    _PAGE_REGISTRY[{step.page_index}] = page.context.new_page()")
+            body_lines.append(f"    _PAGE_REGISTRY[{step.page_index}].goto({step.value!r}, wait_until='load', timeout=30000)")
+            current_page_expr = f"_page(page, {step.page_index})"
+            continue
+        if step.kind == "tab_closed":
+            body_lines.append(f"    _page(page, {step.page_index}).close()")
+            body_lines.append(f"    _PAGE_REGISTRY.pop({step.page_index}, None)")
             continue
         page_expr = _step_page_expr(step)
         current_page_expr = page_expr

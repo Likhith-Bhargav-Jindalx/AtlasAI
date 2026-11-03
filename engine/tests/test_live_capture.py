@@ -1,4 +1,5 @@
 import threading
+import time
 import uuid
 from pathlib import Path
 from unittest.mock import Mock
@@ -60,6 +61,93 @@ def test_start_live_capture_uses_a_custom_persist_fn(fixture_portal_url):
         # The fake never touched the database — proves the default,
         # DB-writing persist_recording was genuinely not called.
         assert session.get(Recording, recording_id) is None
+
+
+def test_live_capture_tags_a_popup_tab_with_popup_origin(fixture_portal_url):
+    """Confirmed via real recordings: without this, replay has no way to
+    tell a popup (which the app itself will spawn again when its triggering
+    click is replayed) apart from a tab the operator opened themselves
+    (which replay must manufacture on its own) -- see codegen/emit.py and
+    brain/loop.py's run_step."""
+    with session_scope() as session:
+        org = Organization(name="Popup Origin Org", slug=f"popup-origin-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/auto_popup.html"
+    captured = {}
+
+    def fake_persist(org_id_arg, start_url_arg, actions, **kwargs):
+        captured["additional_pages"] = kwargs.get("additional_pages")
+        return uuid.uuid4()
+
+    capture_session_id = start_live_capture(org_id, start_url, persist_fn=fake_persist)
+    time.sleep(6)  # browser launch + page load + the fixture's 500ms popup delay
+    stop_live_capture(capture_session_id)
+
+    additional_pages = captured["additional_pages"]
+    assert additional_pages and len(additional_pages) == 1
+    opened = [a for a in additional_pages[0].actions if a.kind == "tab_opened"]
+    assert len(opened) == 1
+    assert opened[0].tab_origin == "popup"
+    assert opened[0].value.endswith("/dashboard.html")
+
+
+def test_live_capture_records_a_tab_close(fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Tab Close Org", slug=f"tab-close-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/auto_popup_closing.html"
+    captured = {}
+
+    def fake_persist(org_id_arg, start_url_arg, actions, **kwargs):
+        captured["additional_pages"] = kwargs.get("additional_pages")
+        return uuid.uuid4()
+
+    capture_session_id = start_live_capture(org_id, start_url, persist_fn=fake_persist)
+    time.sleep(9)  # open delay + load + the target's own 2.5s self-close delay
+    stop_live_capture(capture_session_id)
+
+    additional_pages = captured["additional_pages"]
+    assert additional_pages and len(additional_pages) == 1
+    kinds = [a.kind for a in additional_pages[0].actions]
+    assert "tab_opened" in kinds
+    assert "tab_closed" in kinds
+
+
+def test_live_capture_records_the_url_a_slow_to_navigate_tab_eventually_reaches(fixture_portal_url):
+    """Reproduces a real bug: an operator opens a blank tab then takes their
+    time typing a destination into it. The old capture logic snapshotted the
+    new tab's URL after waiting at most 3000ms, so a navigation slower than
+    that got recorded as the tab's still-blank starting URL -- breaking
+    every later replayed step on that tab, which expects to already be on
+    the real destination."""
+    with session_scope() as session:
+        org = Organization(name="Delayed Nav Org", slug=f"delayed-nav-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/auto_popup_delayed_navigation.html"
+    captured = {}
+
+    def fake_persist(org_id_arg, start_url_arg, actions, **kwargs):
+        captured["additional_pages"] = kwargs.get("additional_pages")
+        return uuid.uuid4()
+
+    capture_session_id = start_live_capture(org_id, start_url, persist_fn=fake_persist)
+    time.sleep(7)  # open delay + the fixture's 4000ms-delayed navigation + buffer
+    stop_live_capture(capture_session_id)
+
+    additional_pages = captured["additional_pages"]
+    assert additional_pages and len(additional_pages) == 1
+    opened = [a for a in additional_pages[0].actions if a.kind == "tab_opened"]
+    assert len(opened) == 1
+    assert opened[0].value.endswith("/dashboard.html")
 
 
 def test_stop_live_capture_stores_a_native_codegen_script(fixture_portal_url):

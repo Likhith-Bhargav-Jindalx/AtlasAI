@@ -53,6 +53,20 @@ class SecretsRef(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 
+class RecordingFolder(Base):
+    __tablename__ = "recording_folders"
+    __table_args__ = (UniqueConstraint("org_id", "name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
+    name: Mapped[str]
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), default=None)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    org: Mapped["Organization"] = relationship()
+    creator: Mapped["User | None"] = relationship(foreign_keys=[created_by])
+
+
 class Recording(Base):
     __tablename__ = "recordings"
 
@@ -62,6 +76,9 @@ class Recording(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), default=None)
     request_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("recording_requests.id", ondelete="SET NULL"), default=None
+    )
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("recording_folders.id", ondelete="SET NULL"), default=None
     )
     role: Mapped[str] = mapped_column(Enum(*RECORDING_ROLES, name="recording_role"), default="demo")
     title: Mapped[str | None] = mapped_column(default=None)
@@ -97,6 +114,7 @@ class Recording(Base):
     portal_profile: Mapped["PortalProfile"] = relationship()
     user: Mapped["User | None"] = relationship(foreign_keys=[user_id])
     carc_code: Mapped["CarcCode | None"] = relationship()
+    folder: Mapped["RecordingFolder | None"] = relationship()
 
 
 class ReferenceTrajectory(Base):

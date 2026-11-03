@@ -1,6 +1,6 @@
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,6 +12,7 @@ from atlas_engine.db.models import (
     PageExtraction,
     PortalProfile,
     Recording,
+    RecordingFolder,
     RecordingRequest,
     ReferenceTrajectory,
     VideoAsset,
@@ -35,6 +36,22 @@ class PageCapture:
     video_path: Path | None = None
     video_started_at_ms: int | None = None
     video_ended_at_ms: int | None = None
+
+
+def _merge_actions_for_trajectory(
+    actions: list[RecordedAction], additional_pages: list["PageCapture"] | None,
+) -> list[RecordedAction]:
+    """Merges the main page's actions with every popup/tab's actions into one
+    globally-ordered list, by wall-clock timestamp, with `index` re-assigned
+    sequentially across the merge — the local per-tab index each
+    CaptureSession keeps (restarting at 0) is discarded here. This is the
+    only list extract_trajectory sees; actions.json/actions-page{N}.json
+    keep each page's own original (unmerged) actions untouched."""
+    merged = [replace(a, page_index=0) for a in actions]
+    for page_capture in additional_pages or []:
+        merged.extend(replace(a, page_index=page_capture.page_index) for a in page_capture.actions)
+    merged.sort(key=lambda a: a.timestamp_ms)
+    return [replace(a, index=i) for i, a in enumerate(merged)]
 
 
 def persist_recording(
@@ -122,7 +139,7 @@ def persist_recording(
                     ],
                 )
 
-        trajectory = extract_trajectory(actions)
+        trajectory = extract_trajectory(_merge_actions_for_trajectory(actions, additional_pages))
         trajectory_blob_ref = run_dir.write_json("trajectory.json", trajectory_to_dict(trajectory))
 
         if codegen_script is not None:
@@ -248,6 +265,7 @@ def _persist_video_asset(
 def list_recordings(
     org_id: str, status: str | None = None, user_id: str | None = None,
     *, lob: str | None = None, action: str | None = None, payer_id: str | None = None,
+    folder_id: str | None = None, q: str | None = None,
 ) -> list[dict]:
     with session_scope() as session:
         query = session.query(Recording).filter_by(org_id=uuid.UUID(org_id))
@@ -255,8 +273,18 @@ def list_recordings(
             query = query.filter_by(status=status)
         if user_id is not None:
             query = query.filter_by(user_id=uuid.UUID(user_id))
+        if folder_id == "unfiled":
+            query = query.filter(Recording.folder_id.is_(None))
+        elif folder_id is not None:
+            query = query.filter_by(folder_id=uuid.UUID(folder_id))
+
+        folders_by_id = {
+            f.id: f.name
+            for f in session.query(RecordingFolder).filter_by(org_id=uuid.UUID(org_id)).all()
+        }
 
         store = get_store()
+        q_lower = q.lower() if q else None
         results = []
         for recording in query.order_by(Recording.created_at.desc()).all():
             video_asset = (
@@ -276,6 +304,16 @@ def list_recordings(
                 continue
 
             profile = session.get(PortalProfile, recording.portal_profile_id)
+
+            if q_lower is not None:
+                haystack = " ".join(filter(None, [
+                    recording.title, recording.description,
+                    request.title if request is not None else None,
+                    profile.domain if profile is not None else None,
+                ])).lower()
+                if q_lower not in haystack:
+                    continue
+
             has_codegen = store.exists(f"{recording.capture_blob_prefix}/codegen.py")
             if not has_codegen:
                 has_codegen = store.exists(f"{recording.capture_blob_prefix}/trajectory.json")
@@ -292,9 +330,33 @@ def list_recordings(
                 "duration_seconds": recording.duration_seconds,
                 "has_video": video_asset is not None,
                 "has_codegen_script": has_codegen,
+                "folder_id": str(recording.folder_id) if recording.folder_id else None,
+                "folder_name": folders_by_id.get(recording.folder_id),
                 "created_at": recording.created_at.isoformat(),
             })
         return results
+
+
+def create_recording_folder(org_id: str, name: str, created_by: str | None = None) -> dict:
+    with session_scope() as session:
+        folder = RecordingFolder(
+            org_id=uuid.UUID(org_id), name=name,
+            created_by=uuid.UUID(created_by) if created_by else None,
+        )
+        session.add(folder)
+        session.flush()
+        return {"id": str(folder.id), "name": folder.name, "created_at": folder.created_at.isoformat()}
+
+
+def list_recording_folders(org_id: str) -> list[dict]:
+    with session_scope() as session:
+        folders = (
+            session.query(RecordingFolder)
+            .filter_by(org_id=uuid.UUID(org_id))
+            .order_by(RecordingFolder.name)
+            .all()
+        )
+        return [{"id": str(f.id), "name": f.name, "created_at": f.created_at.isoformat()} for f in folders]
 
 
 def get_recording_detail(recording_id: uuid.UUID) -> dict:
@@ -354,10 +416,15 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
                         pre_action_ms=(profile.pacing_pre_action_ms or 0) if profile else 0,
                         settle_after_nav_ms=(profile.pacing_settle_after_nav_ms or 0) if profile else 0,
                     )
-                    try:
-                        store.write_text(codegen_blob_ref, codegen_script)
-                    except Exception:
-                        pass
+                    # NOT cached back to codegen_blob_ref: authoring/run.py's
+                    # apply_stored_codegen_selectors treats any codegen.py
+                    # found there as the native Playwright codegen recorder's
+                    # ground-truth script and parses it assuming literal fill
+                    # values -- this synthesized script's fill values are
+                    # `params["x"]` expressions, not literals, so caching it
+                    # here poisoned every later authoring run on this
+                    # recording (confirmed via a real authoring run: it typed
+                    # the literal text 'params["search_input"]' into the page).
             except Exception:
                 pass
 
@@ -409,16 +476,23 @@ def update_recording_details(
     resolution_path: list[str] | None = None, evidence_required: list[str] | None = None,
     report_id: str | None = None, date_param_logic: str | None = None,
     output_destination: str | None = None, post_processing: str | None = None,
-    scenario_description: str | None = None,
+    scenario_description: str | None = None, folder_id: str | None = None,
 ) -> None:
     """title/description are the pre-existing fields; everything else is
     Section B of the recording form (see recording_form_validation.py for
     the business rules the caller — update_recording_details_endpoint — is
-    expected to have already checked before calling this)."""
+    expected to have already checked before calling this).
+
+    folder_id follows the same "not None means set" convention as every
+    other field here, with one addition: "" explicitly means "remove from
+    its folder" — the one case where this endpoint needs to clear a value
+    rather than only ever set one."""
     with session_scope() as session:
         recording = session.get(Recording, recording_id)
         if recording is None:
             raise ValueError(f"No such recording: {recording_id}")
+        if folder_id is not None:
+            recording.folder_id = uuid.UUID(folder_id) if folder_id else None
         if title is not None:
             recording.title = title
         if description is not None:

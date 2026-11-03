@@ -91,3 +91,11 @@ def test_attach_extraction_button_notifies_on_click(fixture_portal_url):
         browser.close()
 
     assert requested_pages == [page]
+
+
+# The optional, always-visible "why this step?" corner note box (and its
+# window.__atlas_note binding) was replaced by a mandatory per-action modal
+# (see recorder.py's _LISTENER_SCRIPT/showPendingNoteModal and
+# test_capture_recorder.py's test_capture_session_* note/modal tests) that
+# targets the action still in flight correctly, rather than whatever was
+# last finalized.

@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head><title>Fixture Portal — Self-Closing Popup Target</title></head>
+<body>
+  <h1>Closes itself shortly</h1>
+  <script>
+    // Long enough that the capture session has definitely finished
+    // attaching to this tab (on_tick polls at ~1s) before it closes --
+    // a tab closing faster than that is a separate, pre-existing
+    // attach-race not covered by this test.
+    setTimeout(function () { window.close(); }, 2500);
+  </script>
+</body>
+</html>

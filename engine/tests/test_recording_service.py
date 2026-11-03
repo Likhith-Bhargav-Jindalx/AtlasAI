@@ -247,6 +247,47 @@ def test_persist_recording_creates_a_video_asset_per_additional_page(tmp_path, f
     assert "dom_after" not in popup_actions_stored[0]
 
 
+def test_persist_recording_merges_multi_tab_actions_into_one_trajectory_by_timestamp(fixture_portal_url):
+    from atlas_engine.recording_service import PageCapture
+
+    with session_scope() as session:
+        org = Organization(name="Multi Tab Trajectory Org", slug=f"multi-tab-trajectory-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    main_actions = [
+        RecordedAction(0, "click", [{"selector": "#open-report", "rank": 0}], None,
+                        start_url, start_url, "", "", timestamp_ms=1000),
+        RecordedAction(1, "click", [{"selector": "#close", "rank": 0}], None,
+                        start_url, start_url, "", "", timestamp_ms=3000),
+    ]
+    popup_actions = [
+        RecordedAction(0, "click", [{"selector": "#generate-report-btn", "rank": 0}], None,
+                        start_url, start_url, "", "", timestamp_ms=2000),
+    ]
+
+    recording_id = persist_recording(
+        org_id, start_url, main_actions,
+        additional_pages=[PageCapture(page_index=1, actions=popup_actions)],
+    )
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        trajectory_row = session.query(ReferenceTrajectory).filter_by(recording_id=recording_id).one()
+        data = json.loads((settings.run_root / trajectory_row.trajectory_blob_ref).read_text())
+
+    steps = data["steps"]
+    assert len(steps) == 3
+    # merged in timestamp_ms order: main@1000, popup@2000, main@3000
+    assert [s["selector_candidates"][0]["selector"] for s in steps] == [
+        "#open-report", "#generate-report-btn", "#close",
+    ]
+    assert [s["index"] for s in steps] == [0, 1, 2]
+    assert [s["page_index"] for s in steps] == [0, 1, 0]
+
+
 def test_persist_recording_writes_no_extra_actions_file_when_a_popup_page_has_no_actions(tmp_path, fixture_portal_url):
     from atlas_engine.recording_service import PageCapture
 
@@ -546,6 +587,42 @@ def test_get_recording_detail_synthesizes_codegen_script_when_missing(fixture_po
     assert detail["codegen_script"] is not None
     assert "#username" in detail["codegen_script"]
     assert "#login-btn" in detail["codegen_script"]
+
+
+def test_get_recording_detail_does_not_cache_the_synthesized_script_as_codegen_py(fixture_portal_url):
+    """Confirmed via a real authoring run: caching the synthesized PREVIEW
+    golden script (parameterized -- fill values are `params["x"]` expressions,
+    not literals) at capture_blob_prefix/codegen.py poisons every later
+    authoring run on this recording. authoring/run.py's
+    apply_stored_codegen_selectors treats any codegen.py found there as the
+    native Playwright codegen recorder's ground-truth script and parses it
+    assuming literal fill values -- so it extracted the literal text
+    'params["search_input"]' as a step's value and typed that string into the
+    page instead of the real recorded text. get_recording_detail is a
+    read-only GET endpoint; it must never leave behind a file another
+    pipeline treats as authoritative."""
+    from atlas_engine.recording_service import get_recording_detail
+    from atlas_engine.storage import get_store
+
+    with session_scope() as session:
+        org = Organization(name="Codegen No Cache Org", slug=f"codegen-no-cache-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    actions = [
+        RecordedAction(0, "fill", [{"selector": "#username", "rank": 0}], "user1", f"{fixture_portal_url}/login.html", f"{fixture_portal_url}/login.html", "", ""),
+    ]
+    recording_id = persist_recording(org_id, f"{fixture_portal_url}/login.html", actions)
+
+    get_recording_detail(recording_id)
+
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        capture_blob_prefix = recording.capture_blob_prefix
+
+    store = get_store()
+    assert not store.exists(f"{capture_blob_prefix}/codegen.py")
 
 
 def test_persist_recording_stores_user_id(fixture_portal_url):

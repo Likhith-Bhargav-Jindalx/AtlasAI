@@ -166,7 +166,10 @@ BUTTON = """
     b.id = '__atlasGrabBtn';
     b.type = 'button';
     b.textContent = '\\uD83D\\uDCF8 Extract this page \\u2192 JSON';
-    b.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:2147483647;background:#5b8cff;color:#fff;border:0;padding:12px 16px;border-radius:10px;font:600 14px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer';
+    // top-right, not bottom-right: EHR note editors commonly put their own
+    // Save/Post FAB at bottom-right, and this button's fixed position +
+    // max z-index was silently eating clicks meant for it during recording.
+    b.style.cssText = 'position:fixed;top:20px;right:20px;z-index:2147483647;background:#5b8cff;color:#fff;border:0;padding:12px 16px;border-radius:10px;font:600 14px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer';
     b.addEventListener('click', function(e){
       e.preventDefault(); e.stopPropagation();
       var o = b.textContent; b.textContent = '\\u23F3 extracting\\u2026';
@@ -179,7 +182,6 @@ BUTTON = """
   setInterval(mount, 1500);
 })();
 """
-
 
 def sanitize_collected_text(value: Any) -> Any:
     """Scrubs anything Postgres JSONB will refuse from every string in a

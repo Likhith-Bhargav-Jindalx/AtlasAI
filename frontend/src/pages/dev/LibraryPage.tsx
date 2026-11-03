@@ -1,14 +1,19 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { FileCode, VideoOff } from 'lucide-react'
 import { useAuth } from '../../auth/AuthContext'
 import { useRecordings } from '../../lib/recordings'
 import { StatusPill } from '../../components/StatusPill'
+import { RecordingLibraryToolbar } from '../../components/RecordingLibraryToolbar'
+import { RecordingFolderPicker } from '../../components/RecordingFolderPicker'
 import { formatDuration, formatRelativeTime } from '../../lib/format'
 
 export function LibraryPage() {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const { data: recordings, isLoading } = useRecordings(user!.org_id)
+  const [q, setQ] = useState('')
+  const [folderId, setFolderId] = useState('')
+  const { data: recordings, isLoading } = useRecordings(user!.org_id, undefined, undefined, { folderId, q })
 
   if (isLoading) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
@@ -18,6 +23,8 @@ export function LibraryPage() {
         <h1 className="font-display text-[30px] font-semibold tracking-tight m-0">Recording library</h1>
         <div className="text-sm text-atlas-body">Recordings waiting to become golden scripts.</div>
       </div>
+
+      <RecordingLibraryToolbar q={q} onQChange={setQ} folderId={folderId} onFolderIdChange={setFolderId} />
 
       {recordings && recordings.length > 0 ? (
         <div className="grid grid-cols-3 gap-5">
@@ -54,6 +61,9 @@ export function LibraryPage() {
                       <FileCode size={12} /> Python ready
                     </span>
                   )}
+                </div>
+                <div className="flex justify-end">
+                  <RecordingFolderPicker recordingId={r.id} folderId={r.folder_id} />
                 </div>
               </div>
             </button>

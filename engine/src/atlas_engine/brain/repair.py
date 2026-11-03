@@ -97,6 +97,8 @@ def _build_user_text(
         "",
         f"LIVE evidence this attempt: {json.dumps({'error': outcome.error, 'matchCount': outcome.match_count, 'elapsedMs': outcome.elapsed_ms, 'urlAfter': outcome.url_after, 'domChanged': dom_changed, 'popupOpened': outcome.popup_opened, 'downloadStarted': outcome.download_started})}",
     ]
+    if step.operator_note:
+        lines.append(f"Operator note (captured live during recording): {step.operator_note}")
     if attempts:
         lines.extend(["", "Already tried on THIS step (do not repeat):"] + [f"- {a}" for a in attempts])
     lines.append("")
@@ -173,8 +175,14 @@ def think(
             temperature=0.0,
             max_tokens=700,
         )
-    except Exception:
-        return RepairAction(action="give_up", reason="brain returned non-JSON")
+    except Exception as exc:
+        # The LLM call can fail for many distinct reasons -- a network error,
+        # an HTTP error (auth, rate limit, a VNet-restricted endpoint), a
+        # malformed response shape, or an actual JSON parse error -- and only
+        # the last of those is really "non-JSON". Confirmed via a real Azure
+        # 403 that relabeling all of them the same way makes the actual
+        # cause undiagnosable from the authoring run's own logs.
+        return RepairAction(action="give_up", reason=f"LLM call failed: {type(exc).__name__}: {exc}")
 
     action = response.get("action")
     return RepairAction(

@@ -23,6 +23,10 @@ def extract_trajectory(actions: list[RecordedAction]) -> ReferenceTrajectory:
             selector_candidates=action.selector_candidates,
             value=action.value,
             expected_effect=expected_effect_for_action(action),
+            page_index=action.page_index,
+            operator_note=action.operator_note,
+            modifiers=tuple(action.modifiers),
+            tab_origin=action.tab_origin,
         )
         for action in actions
     )
