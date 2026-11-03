@@ -2,65 +2,23 @@ name: Build desktop exe
 
 on:
   workflow_dispatch:
-  # Was `push: branches: [main]` with its own path filter. Switched to
-  # workflow_run so this exe build can never land ahead of CI's
-  # migrate-production job -- the exe talks straight to prod Postgres with
-  # no migration step of its own (see ci.yml's migrate-production job), so
-  # a build produced in parallel with (or before) a pending migration could
-  # ship new model fields a not-yet-migrated prod schema doesn't have. A
-  # `push`-triggered workflow in a separate file runs concurrently with
-  # `ci.yml`'s own `push` trigger, not after it -- only workflow_run
-  # actually waits for the other workflow's conclusion.
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  push:
     branches: [main]
+    paths:
+      - "desktop/**"
+      - "engine/src/**"
+      - "frontend/src/**"
+      - ".github/workflows/build-exe.yml"
 
 jobs:
-  check-paths:
-    # workflow_run has no equivalent of push.paths, so this reimplements
-    # that filter by diffing the commit CI just ran against its parent --
-    # an unrelated change (docs, test-only, etc.) still skips the Windows
-    # build instead of rebuilding on every merge to main. Compares against
-    # HEAD^ specifically (not the push's original `before` SHA, which
-    # workflow_run's payload doesn't carry) -- correct for the common case
-    # of one commit landing on main per merge; a multi-commit push could
-    # under-detect a relevant change further back than the immediate parent.
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
-    outputs:
-      relevant: ${{ steps.diff.outputs.relevant }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 2
-      - id: diff
-        shell: bash
-        run: |
-          if git diff --name-only HEAD^ HEAD | grep -qE '^(desktop/|engine/src/|frontend/src/|\.github/workflows/build-exe\.yml)'; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "relevant=false" >> "$GITHUB_OUTPUT"
-          fi
-
   build-windows-exe:
-    needs: [check-paths]
-    # always() is required because workflow_dispatch skips check-paths
-    # entirely (its own `if` only matches workflow_run) -- without it, this
-    # job would inherit that skip via `needs` instead of evaluating its own
-    # condition.
-    if: |
-      always() &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.conclusion == 'success' && needs.check-paths.outputs.relevant == 'true'))
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      ATLAS_DATABASE_URL: ${{ secrets.ATLAS_DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: actions/setup-python@v5
         with:
@@ -73,6 +31,32 @@ jobs:
       - name: Install engine
         working-directory: engine
         run: pip install -e ".[dev]"
+
+      # Applies pending Alembic migrations to the real production database
+      # before the exe is built from the same commit -- a plain step, not a
+      # separate job: the desktop exe (desktop/app.py) connects straight to
+      # prod Postgres with no migration step of its own, so a packaged
+      # build with new model fields could run against a schema that was
+      # never migrated (confirmed: prod `atlas` sat one revision behind,
+      # missing recording_folders, with no migration step anywhere until
+      # this one). A step that fails stops every step after it in this same
+      # job, so the exe simply never gets built on a migration failure --
+      # no `needs`, no cross-job gating, and (deliberately) no dependency on
+      # the engine/frontend test jobs in ci.yml, which fail often right now
+      # for reasons unrelated to a given change -- testing and shipping are
+      # separate concerns here.
+      - name: Run production database migrations
+        working-directory: engine
+        run: |
+          alembic upgrade head
+          CURRENT=$(alembic current | head -1 | cut -d' ' -f1)
+          HEAD=$(alembic heads | head -1 | cut -d' ' -f1)
+          echo "current=$CURRENT head=$HEAD"
+          if [ "$CURRENT" != "$HEAD" ]; then
+            echo "::error::Production is at $CURRENT, expected head $HEAD"
+            exit 1
+          fi
+        shell: bash
 
       - name: Install desktop packaging deps
         run: pip install -r desktop/requirements-desktop.txt
