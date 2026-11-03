@@ -173,24 +173,35 @@ _LISTENER_SCRIPT = """
   // NO "change" at all unless something else actually steals focus
   // afterward. Debouncing off "input" itself (reset on every further
   // keystroke on the SAME field) sidesteps that unreliable blur-timing
-  // entirely: one modal, ~600ms after typing in a field last stops,
-  // whether that's from a real pause or the single atomic value fill()
-  // sets.
+  // entirely. The 1200ms gives real typing room for a mid-word thinking
+  // pause without popping the modal early; blur/change below shortcuts
+  // that wait to 0ms for the common case (operator tabs or clicks away),
+  // so the timer only ever fires for a field that stays focused (e.g. a
+  // programmatic fill with no blur).
   let fillNoteTimer = null;
+  let fillNoteEl = null;
+  function flushFillNote() {
+    if (fillNoteTimer) { clearTimeout(fillNoteTimer); fillNoteTimer = null; }
+    if (fillNoteEl) {
+      const el = fillNoteEl;
+      fillNoteEl = null;
+      showPendingNoteModal(`Filled "${fieldLabel(el)}" with "${el.value}"`);
+    }
+  }
   document.addEventListener(
     "input",
     (event) => {
       push("fill", event.target, event.target.value);
       const el = event.target;
       if (el.closest && (el.closest("#__atlasGrabBtn") || el.closest("#__atlasNoteModal") || el.closest("#__atlasUndoBtn"))) return;
+      fillNoteEl = el;
       if (fillNoteTimer) clearTimeout(fillNoteTimer);
-      fillNoteTimer = setTimeout(() => {
-        fillNoteTimer = null;
-        showPendingNoteModal(`Filled "${fieldLabel(el)}" with "${el.value}"`);
-      }, 600);
+      fillNoteTimer = setTimeout(flushFillNote, 1200);
     },
     true,
   );
+  document.addEventListener("change", (event) => { if (fillNoteEl === event.target) flushFillNote(); }, true);
+  document.addEventListener("blur", (event) => { if (fillNoteEl === event.target) flushFillNote(); }, true);
 })();
 """
 
