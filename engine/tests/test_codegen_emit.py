@@ -233,7 +233,14 @@ def test_emitted_golden_script_replays_a_cmd_click_so_a_same_window_link_opens_a
     navigates the link's own page in place instead of opening a new tab --
     every certification run then failed with 'Popup page 1 never opened'
     even though the live brain-loop replay (a separate code path, already
-    fixed) succeeded."""
+    fixed) succeeded.
+
+    Also confirmed on Linux CI: a plain, un-translated Meta modifier does
+    nothing there -- Chromium's new-tab accelerator is Control on
+    Linux/Windows, Meta only on macOS -- so the emitted call must translate
+    at RUNTIME (_click_modifiers), not bake in whichever modifier was
+    recorded, since the authoring machine and the certifying machine can be
+    different platforms."""
     trajectory = ReferenceTrajectory(
         steps=(
             TrajectoryStep(
@@ -247,7 +254,7 @@ def test_emitted_golden_script_replays_a_cmd_click_so_a_same_window_link_opens_a
         )
     )
     script = emit_golden_script(trajectory, start_url=f"{fixture_portal_url}/popup_trigger.html")
-    assert "modifiers=['Meta']" in script
+    assert "modifiers=_click_modifiers(['Meta'])" in script
 
     script_path = tmp_path / "golden.py"
     script_path.write_text(script)

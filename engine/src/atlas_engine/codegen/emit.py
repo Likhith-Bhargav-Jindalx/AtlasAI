@@ -124,6 +124,25 @@ def _page(page, index):
             return pages[index]
         page.wait_for_timeout(200)
     raise TimeoutError(f"Popup page {index} never opened")
+
+def _click_modifiers(modifiers):
+    # Chromium's "cmd/ctrl+click opens a new tab" check is keyed to the
+    # browser's OWN platform, not whichever platform recorded the click:
+    # Meta on macOS, Control everywhere else. Translate so a Mac-recorded
+    # Meta click still opens a new tab when this script runs on Linux/
+    # Windows, and vice versa.
+    if not modifiers:
+        return None
+    is_mac = sys.platform == "darwin"
+    out = []
+    for m in modifiers:
+        if m == "Meta" and not is_mac:
+            out.append("Control")
+        elif m == "Control" and is_mac:
+            out.append("Meta")
+        else:
+            out.append(m)
+    return out
 '''
 
 _PACE_HELPER_TEMPLATE = '''
@@ -437,7 +456,7 @@ def _emit_css_step(
         if step.force_click:
             click_kwargs.append("force=True")
         if step.modifiers:
-            click_kwargs.append(f"modifiers={list(step.modifiers)!r}")
+            click_kwargs.append(f"modifiers=_click_modifiers({list(step.modifiers)!r})")
         kwargs_str = ", ".join(click_kwargs)
         if use_locator:
             lines.append(f"    {pg}.locator({selector!r}).first.click({kwargs_str})")

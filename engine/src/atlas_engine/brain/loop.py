@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 import uuid
 from collections.abc import Callable
@@ -367,10 +368,29 @@ def _resolve_locator(page, candidates: list[dict], timeout_ms: int | None):
     raise TimeoutError(f"resolve: no locator candidate matched within {timeout_ms}ms (last error: {last})")
 
 
+def _platform_click_modifiers(modifiers: tuple[str, ...]) -> list[str] | None:
+    """Chromium's "cmd/ctrl+click opens a new tab" check is keyed to the
+    browser's OWN platform, not whichever platform recorded the click: Meta
+    on macOS, Control everywhere else. Replaying a Mac-recorded Meta click
+    verbatim on Linux (CI, most servers) does nothing special -- the link
+    just navigates in place, no popup -- so translate to whatever this
+    platform's browser actually treats as the accelerator."""
+    if not modifiers:
+        return None
+    is_mac = sys.platform == "darwin"
+    def _translate(m: str) -> str:
+        if m == "Meta" and not is_mac:
+            return "Control"
+        if m == "Control" and is_mac:
+            return "Meta"
+        return m
+    return [_translate(m) for m in modifiers]
+
+
 def _act_on_locator(locator, step: TrajectoryStep, *, force: bool = False, timeout_ms: float | None = None, key: str | None = None) -> None:
     val = _rematerialize(step.value)
     if step.kind in ("click", "dblclick"):
-        modifiers = list(step.modifiers) or None
+        modifiers = _platform_click_modifiers(step.modifiers)
         getattr(locator, step.kind)(force=force, timeout=timeout_ms, modifiers=modifiers)
     elif step.kind == "hover":
         locator.hover(force=force, timeout=timeout_ms)
