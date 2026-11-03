@@ -11,7 +11,59 @@ on:
       - ".github/workflows/build-exe.yml"
 
 jobs:
+  migrate-production:
+    # Applies pending Alembic migrations to the real production database
+    # before the exe is even built -- as its own job (mirrors EVmodule's
+    # deploy.yml/deployment.yml build -> migrate -> deploy job graph), not a
+    # step inside build-windows-exe: migrating first means a migration
+    # failure never wastes a slow Windows build, and the two have no real
+    # dependency on each other anyway -- the desktop exe (desktop/app.py)
+    # connects straight to prod Postgres with no migration step of its own,
+    # so a packaged build with new model fields could run against a schema
+    # that was never migrated (confirmed: prod `atlas` sat one revision
+    # behind, missing recording_folders, with no migration step anywhere
+    # until this one).
+    #
+    # Deliberately NOT part of ci.yml / gated on its tests: those are flaky
+    # enough right now to fail often for reasons unrelated to a given
+    # change, and blocking a migration + build on a flaky, unrelated test
+    # run just delays shipping for no safety benefit. Testing and shipping
+    # are separate concerns.
+    name: Migrate production database
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      ATLAS_DATABASE_URL: ${{ secrets.ATLAS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: engine/pyproject.toml
+      - name: Install engine
+        working-directory: engine
+        run: pip install -e .
+      - name: Run migrations against production
+        working-directory: engine
+        run: alembic upgrade head
+      - name: Verify production is at head
+        # Belt-and-suspenders: `upgrade head` already fails loudly on error,
+        # but this confirms the DB actually landed exactly on the revision
+        # this checkout defines as head -- not a stale branch, not multiple
+        # heads.
+        working-directory: engine
+        run: |
+          CURRENT=$(alembic current | head -1 | cut -d' ' -f1)
+          HEAD=$(alembic heads | head -1 | cut -d' ' -f1)
+          echo "current=$CURRENT head=$HEAD"
+          if [ "$CURRENT" != "$HEAD" ]; then
+            echo "::error::Production is at $CURRENT, expected head $HEAD"
+            exit 1
+          fi
+
   build-windows-exe:
+    needs: [migrate-production]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -31,32 +83,6 @@ jobs:
       - name: Install engine
         working-directory: engine
         run: pip install -e ".[dev]"
-
-      # Applies pending Alembic migrations to the real production database
-      # before the exe is built from the same commit -- a plain step, not a
-      # separate job: the desktop exe (desktop/app.py) connects straight to
-      # prod Postgres with no migration step of its own, so a packaged
-      # build with new model fields could run against a schema that was
-      # never migrated (confirmed: prod `atlas` sat one revision behind,
-      # missing recording_folders, with no migration step anywhere until
-      # this one). A step that fails stops every step after it in this same
-      # job, so the exe simply never gets built on a migration failure --
-      # no `needs`, no cross-job gating, and (deliberately) no dependency on
-      # the engine/frontend test jobs in ci.yml, which fail often right now
-      # for reasons unrelated to a given change -- testing and shipping are
-      # separate concerns here.
-      - name: Run production database migrations
-        working-directory: engine
-        run: |
-          alembic upgrade head
-          CURRENT=$(alembic current | head -1 | cut -d' ' -f1)
-          HEAD=$(alembic heads | head -1 | cut -d' ' -f1)
-          echo "current=$CURRENT head=$HEAD"
-          if [ "$CURRENT" != "$HEAD" ]; then
-            echo "::error::Production is at $CURRENT, expected head $HEAD"
-            exit 1
-          fi
-        shell: bash
 
       - name: Install desktop packaging deps
         run: pip install -r desktop/requirements-desktop.txt
