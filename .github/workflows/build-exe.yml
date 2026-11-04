@@ -205,3 +205,52 @@ jobs:
           name: atlas-desktop-windows
           path: dist/atlas-desktop/
           include-hidden-files: true
+
+  build-macos-app:
+    # Manual-trigger only, for testing the desktop app on a Mac (e.g. the
+    # check-for-updates feature) — not part of real distribution, which is
+    # Windows-only. A workflow_dispatch run also fires build-windows-exe
+    # above (it has no such guard), so triggering this to get a mac build
+    # costs a Windows rebuild too; harmless (the version gate there skips
+    # re-publishing an unchanged release) but worth knowing.
+    if: github.event_name == 'workflow_dispatch'
+    needs: [migrate-production]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # desktop/build.sh hardcodes VENV=engine/.venv and expects atlas_engine
+      # and its dependencies already installed there — it doesn't install
+      # anything itself beyond the frontend build and Playwright's browser.
+      - name: Set up the venv desktop/build.sh expects
+        run: |
+          python3 -m venv engine/.venv
+          engine/.venv/bin/pip install -e "./engine[dev]"
+          engine/.venv/bin/pip install -r desktop/requirements-desktop.txt
+
+      - name: Write baked-in production credentials
+        run: |
+          cat > desktop/production.env <<EOF
+          ATLAS_DATABASE_URL=${{ secrets.ATLAS_DATABASE_URL }}
+          ATLAS_SESSION_SECRET=${{ secrets.ATLAS_SESSION_SECRET }}
+          ATLAS_AZURE_STORAGE_CONNECTION_STRING=${{ secrets.ATLAS_AZURE_STORAGE_CONNECTION_STRING }}
+          ATLAS_AZURE_STORAGE_CONTAINER=atlas-runs
+          ATLAS_REQUIRE_AZURE_STORAGE=true
+          EOF
+
+      - name: Build the macOS app
+        run: ./desktop/build.sh
+
+      - name: Upload macOS app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-desktop-macos
+          path: dist/atlas-desktop-app.zip
