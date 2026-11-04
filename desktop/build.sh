@@ -51,6 +51,7 @@ echo "Building with PyInstaller..."
 rm -rf build dist atlas-desktop.spec
 "$VENV/bin/pyinstaller" --onedir --windowed --name atlas-desktop \
   --add-data "frontend/dist:frontend_dist" --add-data "$PRODUCTION_ENV:." \
+  --add-data "desktop/VERSION:." \
   --paths engine/src desktop/app.py
 
 echo "Copying the vendored browser into the frozen bundle..."

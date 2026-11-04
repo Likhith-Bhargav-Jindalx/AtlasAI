@@ -55,7 +55,10 @@ def parse_checksums(text: str) -> dict[str, str]:
         if len(parts) != 2:
             continue
         digest, filename = parts
-        result[filename.strip()] = digest.strip()
+        # sha256sum's binary-mode format prefixes the filename with "*"
+        # (the Windows CI runner's sha256sum uses this by default); text
+        # mode doesn't. Strip it either way so lookups by plain filename work.
+        result[filename.strip().lstrip("*")] = digest.strip()
     return result
 
 
@@ -92,7 +95,10 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
         if not app_asset_name or not checksums_url or not is_newer(remote_version, local_version):
             return UpdateCheckResult(update_available=False)
 
-        checksums_response = httpx.get(checksums_url, timeout=_REQUEST_TIMEOUT_SECONDS)
+        # GitHub release asset URLs 302-redirect to signed blob storage URLs —
+        # without follow_redirects, raise_for_status() treats that redirect
+        # itself as an error and this whole check silently reports no update.
+        checksums_response = httpx.get(checksums_url, timeout=_REQUEST_TIMEOUT_SECONDS, follow_redirects=True)
         checksums_response.raise_for_status()
         checksums = parse_checksums(checksums_response.text)
 
