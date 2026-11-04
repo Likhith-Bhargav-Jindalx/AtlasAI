@@ -20,3 +20,13 @@ def test_settings_tolerates_unrelated_atlas_prefixed_env_keys(monkeypatch, tmp_p
     settings = Settings()
 
     assert settings.database_url
+
+
+def test_settings_sentry_dsn_defaults_to_none(monkeypatch):
+    monkeypatch.delenv("ATLAS_SENTRY_DSN", raising=False)
+    assert Settings().sentry_dsn is None
+
+
+def test_settings_sentry_dsn_reads_from_env(monkeypatch):
+    monkeypatch.setenv("ATLAS_SENTRY_DSN", "https://fake@example.ingest.sentry.io/1")
+    assert Settings().sentry_dsn == "https://fake@example.ingest.sentry.io/1"
