@@ -10,6 +10,8 @@ export interface UpdateCheckResult {
   vendor_update_required: boolean
   vendor_asset_url: string | null
   vendor_sha256: string | null
+  app_version: string
+  vendor_version: string
 }
 
 export function useUpdateCheck() {

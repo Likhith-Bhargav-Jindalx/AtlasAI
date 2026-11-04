@@ -115,8 +115,13 @@ def _read_vendor_version() -> str:
 
 @fastapi_app.get("/update/check")
 def update_check_endpoint() -> dict:
-    result = check_for_update(_read_app_version(), _read_vendor_version())
-    return dataclasses.asdict(result)
+    app_version = _read_app_version()
+    vendor_version = _read_vendor_version()
+    result = check_for_update(app_version, vendor_version)
+    # Surfaces what this exact install is actually running — the only way to
+    # confirm from outside the machine that a self-update really swapped in
+    # the files it claimed to, instead of digging through _internal/ by hand.
+    return {**dataclasses.asdict(result), "app_version": app_version, "vendor_version": vendor_version}
 
 
 _update_state_lock = threading.Lock()
