@@ -66,6 +66,36 @@ def configure_logging(level: int = logging.INFO) -> None:
     logging.getLogger("azure").setLevel(logging.WARNING)
 
 
+def init_error_tracking(release: str | None = None) -> None:
+    """Reports unhandled exceptions to Sentry in real time -- a double-
+    clicked desktop exe has no console and no one watching it, so without
+    this, a crash in the webview main thread, the background uvicorn
+    thread, or a FastAPI route is only ever visible (if at all) as a line
+    in ~/.atlas/logs/atlas-desktop.log that nobody is tailing.
+
+    No-op if ATLAS_SENTRY_DSN isn't set -- local dev and the test suite
+    never set it, so Sentry stays fully inert there.
+
+    include_local_variables=False and send_default_pii=False are not
+    defaults to revisit casually: the exe bakes ATLAS_DATABASE_URL and
+    ATLAS_SESSION_SECRET into its environment at build time, and a
+    captured stack frame's local variables would otherwise be able to leak
+    them straight into Sentry."""
+    dsn = os.environ.get("ATLAS_SENTRY_DSN")
+    if not dsn:
+        return
+
+    import sentry_sdk
+
+    sentry_sdk.init(
+        dsn=dsn,
+        environment="desktop-exe",
+        release=release,
+        send_default_pii=False,
+        include_local_variables=False,
+    )
+
+
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Assigns a fresh request id to every inbound request, exposed to
     application code via get_request_id() and echoed back as the

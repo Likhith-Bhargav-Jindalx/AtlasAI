@@ -10,6 +10,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
+import sentry_sdk
+
 from atlas_engine.observability import RequestIdMiddleware, configure_logging, get_request_id
 
 logger = logging.getLogger(__name__)
@@ -87,6 +89,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
 
     logger.exception("Unhandled exception handling %s %s", request.method, request.url.path)
+    sentry_sdk.set_tag("request_id", request_id)
+    sentry_sdk.capture_exception(exc)
     response = JSONResponse(
         status_code=500,
         content={"error": "internal_server_error", "request_id": request_id},

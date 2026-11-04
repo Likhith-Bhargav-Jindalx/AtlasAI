@@ -39,6 +39,10 @@ def _resource_path(relative: str) -> Path:
     return base / relative
 
 
+def _read_app_version() -> str:
+    return _resource_path("VERSION").read_text().strip()
+
+
 def _load_production_env() -> None:
     """Only runs in a frozen (packaged) build. Reads the production.env
     baked into the bundle by desktop/build.sh and sets each key via
@@ -78,6 +82,10 @@ def _configure_log_file() -> None:
 _load_production_env()
 _configure_log_file()
 
+from atlas_engine.observability import init_error_tracking
+
+init_error_tracking(release=_read_app_version())
+
 import dataclasses
 import importlib.metadata
 import tempfile
@@ -99,10 +107,6 @@ from atlas_engine.desktop_update import (
 
 def _run_server() -> None:
     uvicorn.run(fastapi_app, host="127.0.0.1", port=PORT, log_level="info")
-
-
-def _read_app_version() -> str:
-    return _resource_path("VERSION").read_text().strip()
 
 
 def _read_vendor_version() -> str:
@@ -173,25 +177,31 @@ def _unblock_windows_bundle() -> None:
 
 
 def main() -> None:
-    _unblock_windows_bundle()
-    frontend_dist = _resource_path("frontend_dist")
+    try:
+        _unblock_windows_bundle()
+        frontend_dist = _resource_path("frontend_dist")
 
-    # Mounted after the app's own routes are already registered at import
-    # time, so /health, /auth/login, etc. still win — this / mount only
-    # catches what no route matched (the SPA's static assets).
-    fastapi_app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
+        # Mounted after the app's own routes are already registered at import
+        # time, so /health, /auth/login, etc. still win — this / mount only
+        # catches what no route matched (the SPA's static assets).
+        fastapi_app.mount("/", StaticFiles(directory=str(frontend_dist), html=True), name="frontend")
 
-    threading.Thread(target=_run_server, daemon=True).start()
-    time.sleep(1.5)
+        threading.Thread(target=_run_server, daemon=True).start()
+        time.sleep(1.5)
 
-    # "localhost", not "127.0.0.1" — the frontend's compiled JS calls
-    # http://localhost:8000 by default (VITE_API_BASE_URL's fallback), and
-    # browsers treat 127.0.0.1 and localhost as different origins even
-    # though they resolve to the same machine. Loading the window from a
-    # different origin than the frontend's own fetch calls turns every API
-    # request into a cross-origin one the CORS allowlist doesn't cover.
-    webview.create_window("Atlas AI", f"http://localhost:{PORT}/", width=1280, height=800)
-    webview.start()
+        # "localhost", not "127.0.0.1" — the frontend's compiled JS calls
+        # http://localhost:8000 by default (VITE_API_BASE_URL's fallback), and
+        # browsers treat 127.0.0.1 and localhost as different origins even
+        # though they resolve to the same machine. Loading the window from a
+        # different origin than the frontend's own fetch calls turns every API
+        # request into a cross-origin one the CORS allowlist doesn't cover.
+        webview.create_window("Atlas AI", f"http://localhost:{PORT}/", width=1280, height=800)
+        webview.start()
+    except Exception as exc:
+        import sentry_sdk
+
+        sentry_sdk.capture_exception(exc)
+        raise
 
 
 if __name__ == "__main__":

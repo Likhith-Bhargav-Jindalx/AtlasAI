@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     azure_storage_connection_string: str | None = None
     azure_storage_container: str = "atlas-runs"
     require_azure_storage: bool = False
+    sentry_dsn: str | None = None
 
     def ensure_run_root(self) -> Path:
         self.run_root.mkdir(parents=True, exist_ok=True)

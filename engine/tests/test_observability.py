@@ -3,7 +3,7 @@ import logging
 from fastapi.testclient import TestClient
 
 from atlas_engine.api import app
-from atlas_engine.observability import _JsonFormatter, configure_logging, get_request_id
+from atlas_engine.observability import _JsonFormatter, configure_logging, get_request_id, init_error_tracking
 
 
 def test_request_id_header_is_set_and_unique_per_request():
@@ -51,3 +51,28 @@ def test_configure_logging_writes_to_a_file_when_atlas_log_file_is_set(tmp_path,
     finally:
         monkeypatch.delenv("ATLAS_LOG_FILE", raising=False)
         configure_logging()  # restore the default (stdout-only) handler set for later tests
+
+
+def test_init_error_tracking_is_a_noop_without_a_dsn(monkeypatch):
+    monkeypatch.delenv("ATLAS_SENTRY_DSN", raising=False)
+    calls = []
+    monkeypatch.setattr("sentry_sdk.init", lambda **kwargs: calls.append(kwargs))
+
+    init_error_tracking()
+
+    assert calls == []
+
+
+def test_init_error_tracking_calls_sentry_init_with_a_dsn(monkeypatch):
+    monkeypatch.setenv("ATLAS_SENTRY_DSN", "https://fake@example.ingest.sentry.io/1")
+    calls = []
+    monkeypatch.setattr("sentry_sdk.init", lambda **kwargs: calls.append(kwargs))
+
+    init_error_tracking(release="1.2.3")
+
+    assert len(calls) == 1
+    assert calls[0]["dsn"] == "https://fake@example.ingest.sentry.io/1"
+    assert calls[0]["environment"] == "desktop-exe"
+    assert calls[0]["release"] == "1.2.3"
+    assert calls[0]["send_default_pii"] is False
+    assert calls[0]["include_local_variables"] is False
