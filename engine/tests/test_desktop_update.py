@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from atlas_engine.desktop_update import (
+    _REQUEST_TIMEOUT_SECONDS,
     UpdateApplyError,
     UpdateCheckResult,
     check_for_update,
@@ -73,6 +74,20 @@ def test_parse_checksums_ignores_blank_lines():
     assert parse_checksums("\nabc123  one.zip\n\n") == {"one.zip": "abc123"}
 
 
+def test_parse_checksums_strips_sha256sum_binary_mode_asterisk():
+    # Real format from the Windows CI runner's sha256sum (confirmed against
+    # a real published release's checksums.txt): "<hex> *<filename>", not
+    # "<hex>  <filename>".
+    text = (
+        "274a73d2a58dc039d62d06e2fe875bfe28b00cd7bfc04c9b114d451033bd26da *atlas-desktop-app-1.0.0.zip\n"
+        "55f4fdc9bdda1dc1f06fc8c2cb8f37c9a97001f2103b153ab220f8b0a8669f19 *atlas-desktop-vendor-1.63.0.zip\n"
+    )
+    assert parse_checksums(text) == {
+        "atlas-desktop-app-1.0.0.zip": "274a73d2a58dc039d62d06e2fe875bfe28b00cd7bfc04c9b114d451033bd26da",
+        "atlas-desktop-vendor-1.63.0.zip": "55f4fdc9bdda1dc1f06fc8c2cb8f37c9a97001f2103b153ab220f8b0a8669f19",
+    }
+
+
 class _FakeResponse:
     def __init__(self, json_data=None, text_data=""):
         self._json = json_data
@@ -113,8 +128,11 @@ def test_check_for_update_reports_available_update_without_vendor_change(monkeyp
         "bbb222  atlas-desktop-vendor-1.49.0.zip\n"
     )
 
+    checksums_calls = []
+
     def fake_get(url, **kwargs):
         if url.endswith("checksums.txt"):
+            checksums_calls.append(kwargs)
             return _FakeResponse(text_data=checksums_text)
         return _FakeResponse(json_data=payload)
 
@@ -130,6 +148,12 @@ def test_check_for_update_reports_available_update_without_vendor_change(monkeyp
     assert result.vendor_update_required is False
     assert result.vendor_asset_url is None
     assert result.vendor_sha256 is None
+    # Regression: GitHub asset URLs 302-redirect to signed blob storage URLs.
+    # Without follow_redirects=True, a real httpx call's raise_for_status()
+    # treats the unfollowed redirect itself as an error and this whole
+    # check silently reports no update — this mock wouldn't catch that on
+    # its own, so assert the call site actually asks to follow redirects.
+    assert checksums_calls == [{"timeout": _REQUEST_TIMEOUT_SECONDS, "follow_redirects": True}]
 
 
 def test_check_for_update_requires_vendor_zip_when_vendor_version_changed(monkeypatch):
