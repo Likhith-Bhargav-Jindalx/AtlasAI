@@ -318,6 +318,49 @@ def test_capture_session_shows_a_mandatory_note_modal_after_a_click_with_a_mecha
     assert capture.actions[0].operator_note == default_text
 
 
+def test_capture_session_does_not_show_a_note_modal_for_a_page_triggered_click(fixture_portal_url):
+    """A real portal's own script can click a button programmatically --
+    auto-advance, a hidden trigger, a restore-draft action -- with no human
+    anywhere near it. The modal must not pop for that; only a real,
+    trusted click should ever prompt the operator."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.evaluate("document.getElementById('login-btn').click()")
+            page.wait_for_timeout(300)
+            assert page.locator("#__atlasNoteModal").count() == 0
+
+        browser.close()
+
+    assert capture.actions[0].kind == "click"
+
+
+def test_capture_session_does_not_show_a_note_modal_for_a_page_triggered_input(fixture_portal_url):
+    """Same as above for a programmatic value + dispatched 'input' event --
+    e.g. browser autofill, a restore-draft script, or a framework
+    re-rendering a controlled input. No real typing happened, so no modal."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.evaluate(
+                "const el = document.getElementById('username');"
+                "el.value = 'restored-draft';"
+                "el.dispatchEvent(new Event('input', {bubbles: true}));"
+            )
+            page.wait_for_timeout(1400)
+            assert page.locator("#__atlasNoteModal").count() == 0
+
+        browser.close()
+
+    assert capture.actions[0].value == "restored-draft"
+
+
 def test_capture_session_note_modal_blocks_a_subsequent_click_until_confirmed(fixture_portal_url):
     """Proves the overlay is genuinely blocking, not cosmetic: a second real
     click attempted while the modal from the first is still open must fail

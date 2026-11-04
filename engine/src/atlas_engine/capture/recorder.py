@@ -154,6 +154,11 @@ _LISTENER_SCRIPT = """
       if (event.altKey) mods.push("Alt");
       const text = (event.target.textContent || "").trim().slice(0, 80);
       push("click", event.target, null, text, mods);
+      // A page's own script can click a button programmatically (an
+      // auto-advance, a hidden trigger, a restore-draft action) with no
+      // human anywhere near it -- isTrusted is false for those, and only a
+      // real click should ever prompt the operator for a reason.
+      if (!event.isTrusted) return;
       if (event.target.closest && (event.target.closest("#__atlasGrabBtn") || event.target.closest("#__atlasNoteModal") || event.target.closest("#__atlasUndoBtn"))) return;
       // A click into a text field is just focusing it to type next -- not
       // itself a meaningful action. The resulting fill (debounced on
@@ -189,6 +194,10 @@ _LISTENER_SCRIPT = """
     "input",
     (event) => {
       push("fill", event.target, event.target.value);
+      // Same as the click listener -- a programmatic value + dispatched
+      // 'input' (autofill, a restore-draft script, a framework re-render)
+      // is not a real operator typing, so it must not queue a note.
+      if (!event.isTrusted) return;
       const el = event.target;
       if (el.closest && (el.closest("#__atlasGrabBtn") || el.closest("#__atlasNoteModal") || el.closest("#__atlasUndoBtn"))) return;
       if (fillNoteTimer) clearTimeout(fillNoteTimer);
