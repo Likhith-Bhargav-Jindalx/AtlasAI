@@ -44,19 +44,6 @@ _LISTENER_SCRIPT = """
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mountUndoButton); else mountUndoButton();
   setInterval(mountUndoButton, 1500);
 
-  // A field's own label, for the mandatory note's mechanical default only
-  // -- never fed into selector_candidates (that stays driven solely by the
-  // existing id/testId/text fields push() already sends).
-  const fieldLabel = (el) => {
-    if (el.labels && el.labels.length && el.labels[0].textContent) return el.labels[0].textContent.trim();
-    const aria = el.getAttribute && el.getAttribute("aria-label");
-    if (aria) return aria.trim();
-    if (el.placeholder) return el.placeholder;
-    if (el.name) return el.name;
-    if (el.id) return el.id;
-    return "field";
-  };
-
   // Mandatory per-action note: shown after every click, and once per field
   // (on "change", not "input" -- a real operator's keystrokes each fire
   // their own "input" event, so triggering on that would pop a new modal
@@ -182,29 +169,14 @@ _LISTENER_SCRIPT = """
   // long enough to clear a real mid-word thinking pause -- whether that's
   // from a real pause or the single atomic value fill() sets.
   //
-  // Deliberately NOT also flushed on blur/change: blur fires synchronously
-  // as part of a click that moves focus elsewhere, so flushing there once
-  // raised the modal overlay WHILE that very click (e.g. a login button
-  // right after filling the password field) was still resolving, and
-  // Playwright/the operator's click then retried into the intercepting
-  // overlay instead of ever landing -- a same-page click-after-fill hang,
-  // caught via the authoring-run tests that drive a login this way.
-  let fillNoteTimer = null;
+  // The note modal only ever prompts for clicks now -- typing is recorded
+  // (push below) but never interrupts the operator with a popup, since a
+  // single click can still fire this listener many times (one per
+  // keystroke-like input event) and was popping the modal mid-typing.
   document.addEventListener(
     "input",
     (event) => {
       push("fill", event.target, event.target.value);
-      // Same as the click listener -- a programmatic value + dispatched
-      // 'input' (autofill, a restore-draft script, a framework re-render)
-      // is not a real operator typing, so it must not queue a note.
-      if (!event.isTrusted) return;
-      const el = event.target;
-      if (el.closest && (el.closest("#__atlasGrabBtn") || el.closest("#__atlasNoteModal") || el.closest("#__atlasUndoBtn"))) return;
-      if (fillNoteTimer) clearTimeout(fillNoteTimer);
-      fillNoteTimer = setTimeout(() => {
-        fillNoteTimer = null;
-        showPendingNoteModal(`Filled "${fieldLabel(el)}" with "${el.value}"`);
-      }, 1200);
     },
     true,
   );
