@@ -126,6 +126,7 @@ jobs:
           ATLAS_AZURE_STORAGE_CONNECTION_STRING=${{ secrets.ATLAS_AZURE_STORAGE_CONNECTION_STRING }}
           ATLAS_AZURE_STORAGE_CONTAINER=atlas-runs
           ATLAS_REQUIRE_AZURE_STORAGE=true
+          ATLAS_SENTRY_DSN=${{ secrets.SENTRY_DSN }}
           EOF
 
       - name: Build desktop exe
