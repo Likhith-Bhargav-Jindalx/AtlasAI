@@ -29,10 +29,44 @@ _LISTENER_SCRIPT = """
     btn.id = "__atlasUndoBtn";
     btn.type = "button";
     btn.textContent = "\\u21b6 Undo last step";
-    btn.style.cssText = "position:fixed;bottom:20px;left:20px;z-index:2147483647;background:#d9534f;color:#fff;border:0;padding:10px 14px;border-radius:10px;font:600 13px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer";
+    // Directly below the extraction button (top:20px;right:20px in
+    // extraction.py, roughly 44px tall) -- same corner, stacked, so both
+    // of this capture session's own controls live in one predictable spot
+    // instead of two opposite corners.
+    btn.style.cssText = "position:fixed;top:74px;right:20px;z-index:2147483647;background:#d9534f;color:#fff;border:0;padding:10px 14px;border-radius:10px;font:600 13px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:grab";
+    // Draggable, same reasoning as the extraction button: a real portal's
+    // own fixed-position UI (or, confirmed live, the native Playwright
+    // codegen overlay's top-layer glass pane, which sits above z-index
+    // entirely) can end up covering this button's default corner with no
+    // way to get at what's underneath -- the operator needs to drag it
+    // somewhere clear instead. A real drag must not also fire undo.
+    let moved = false;
+    btn.addEventListener("mousedown", (e) => {
+      moved = false;
+      const startX = e.clientX, startY = e.clientY;
+      const rect = btn.getBoundingClientRect();
+      const origLeft = rect.left, origTop = rect.top;
+      btn.style.cursor = "grabbing";
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) moved = true;
+        if (!moved) return;
+        btn.style.left = Math.min(Math.max(origLeft + dx, 0), window.innerWidth - rect.width) + "px";
+        btn.style.top = Math.min(Math.max(origTop + dy, 0), window.innerHeight - rect.height) + "px";
+        btn.style.bottom = "auto";
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove, true);
+        document.removeEventListener("mouseup", onUp, true);
+        btn.style.cursor = "grab";
+      };
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+    }, true);
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (moved) return;
       const original = btn.textContent;
       Promise.resolve(window.__atlas_undo_last && window.__atlas_undo_last()).then((removed) => {
         btn.textContent = removed ? "\\u2713 removed" : "Nothing to undo";

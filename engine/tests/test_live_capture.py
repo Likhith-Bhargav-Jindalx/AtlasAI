@@ -150,6 +150,14 @@ def test_live_capture_records_the_url_a_slow_to_navigate_tab_eventually_reaches(
     assert opened[0].value.endswith("/dashboard.html")
 
 
+@pytest.mark.xfail(
+    reason=(
+        "playwright>=1.64 removed the private BrowserContext.enableRecorder "
+        "channel this relies on -- see test_capture_codegen.py's matching "
+        "xfail for why we stopped pinning <1.64 to keep it alive."
+    ),
+    strict=True,
+)
 def test_stop_live_capture_stores_a_native_codegen_script(fixture_portal_url):
     with session_scope() as session:
         org = Organization(name="Codegen Capture Org", slug=f"codegen-capture-org-{uuid.uuid4()}")

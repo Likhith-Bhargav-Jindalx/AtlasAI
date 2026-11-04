@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +10,16 @@ from pathlib import Path
 from playwright.sync_api import BrowserContext
 
 logger = logging.getLogger(__name__)
+
+# Must be set before sync_playwright() ever starts the Node driver
+# subprocess (not inside attach_codegen_recorder, which runs after that
+# subprocess -- and its env snapshot -- already exist): Playwright's
+# enableRecorder otherwise launches its own second headed Chromium window
+# (the Inspector app, via RecorderApp._show), confirmed by reading the
+# driver's own source. This module is imported at process startup (via
+# live_capture.py's top-level import), well before any real sync_playwright()
+# call, so setting it here at import time actually lands before that spawn.
+os.environ.setdefault("PWTEST_CLI_HEADLESS", "1")
 
 # The action methods Playwright's codegen recorder can emit for a locator or
 # page. `goto` is handled separately (it's a navigation, not a page method).

@@ -484,6 +484,41 @@ def test_undo_button_removes_the_most_recently_finalized_action(fixture_portal_u
     assert capture.actions[0].selector_candidates[0]["selector"] == "#password"
 
 
+def test_undo_button_is_draggable_and_a_drag_does_not_trigger_undo(fixture_portal_url):
+    """Same reasoning as the extraction button's drag test: a real portal's
+    own fixed UI (or the native Playwright codegen overlay, confirmed live)
+    can cover this button's default corner, so it must be draggable -- and
+    dragging it must not also undo the last action."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            page.click("#username")  # becomes pending
+            page.click("#password")  # finalizes #username; becomes pending
+            page.wait_for_selector("#__atlasUndoBtn")
+
+            before = page.eval_on_selector("#__atlasUndoBtn", "el => el.getBoundingClientRect()")
+            box = page.locator("#__atlasUndoBtn").bounding_box()
+            start_x, start_y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+            page.mouse.move(start_x, start_y)
+            page.mouse.down()
+            # Into empty page body, away from the extraction button this
+            # sits directly under by default and away from the form fields.
+            page.mouse.move(start_x - 200, start_y + 300, steps=10)
+            page.mouse.up()
+            after = page.eval_on_selector("#__atlasUndoBtn", "el => el.getBoundingClientRect()")
+            label_after_drag = page.text_content("#__atlasUndoBtn")
+
+        browser.close()
+
+    assert (after["left"], after["top"]) != (before["left"], before["top"])
+    assert "Undo last step" in label_after_drag
+    # Both #username and #password still finalized -- the drag never undid anything.
+    assert [a.kind for a in capture.actions] == ["click", "click"]
+
+
 def test_undo_button_shows_distinct_feedback_when_nothing_is_removed(fixture_portal_url):
     """A no-op undo (nothing finalized yet, or a repeat click re-targeting an
     already-removed action) must look different from a real removal -- the
