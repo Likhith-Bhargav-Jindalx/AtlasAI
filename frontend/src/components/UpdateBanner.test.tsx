@@ -32,6 +32,13 @@ beforeEach(() => {
     if (path === '/update/apply' && init?.method === 'POST') {
       return Promise.resolve({ ok: true, status: 200, json: async () => ({ ok: true }) })
     }
+    if (path === '/update/progress') {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ phase: 'downloading_app', bytes_downloaded: 50, total_bytes: 100, error: null }),
+      })
+    }
     return Promise.reject(new Error(`unexpected fetch: ${path}`))
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -69,5 +76,12 @@ describe('UpdateBanner', () => {
         expect.objectContaining({ method: 'POST' }),
       ),
     )
+  })
+
+  it('shows download progress after clicking "Update now"', async () => {
+    renderBanner()
+    const updateButton = await screen.findByText('Update now')
+    fireEvent.click(updateButton)
+    expect(await screen.findByText('Downloading… 50%')).toBeInTheDocument()
   })
 })

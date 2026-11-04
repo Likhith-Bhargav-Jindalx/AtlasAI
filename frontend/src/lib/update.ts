@@ -26,3 +26,20 @@ export function useApplyUpdate() {
     mutationFn: () => apiFetch<{ ok: boolean }>('/update/apply', { method: 'POST' }),
   })
 }
+
+export interface UpdateProgress {
+  phase: 'idle' | 'downloading_app' | 'downloading_vendor' | 'relaunching' | 'error'
+  bytes_downloaded: number
+  total_bytes: number | null
+  error: string | null
+}
+
+export function useUpdateProgress(enabled: boolean) {
+  return useQuery({
+    queryKey: ['update-progress'],
+    queryFn: () => apiFetch<UpdateProgress>('/update/progress'),
+    enabled,
+    retry: false,
+    refetchInterval: 500,
+  })
+}
