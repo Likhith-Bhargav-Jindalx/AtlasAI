@@ -10,8 +10,9 @@ from atlas_engine.trajectory.extract import expected_effect_for_action
 
 def _confirm_note(page) -> None:
     """Dismisses the mandatory note modal with its pre-filled default —
-    every real click/fill in these tests shows one, and it blocks any
-    further click from reaching its real target until confirmed."""
+    every real click in these tests shows one, and it blocks any further
+    click from reaching its real target until confirmed. Fills never show
+    this modal."""
     page.wait_for_selector("#__atlasNoteModal input")
     page.keyboard.press("Enter")
     page.wait_for_selector("#__atlasNoteModal", state="detached")
@@ -25,9 +26,7 @@ def test_capture_session_records_click_and_fill(fixture_portal_url):
 
         with CaptureSession(page) as capture:
             page.fill("#username", "demo")
-            _confirm_note(page)
             page.fill("#password", "demo-pass")
-            _confirm_note(page)
             page.click("#login-btn")
             page.wait_for_url("**/dashboard.html")
 
@@ -151,7 +150,6 @@ def test_action_timestamp_reflects_when_the_event_fired_not_when_it_was_finalize
         with CaptureSession(page) as capture:
             page.fill("#username", "demo")  # fires now, becomes pending
             fired_at_ms = int(time.time() * 1000)
-            _confirm_note(page)
             page.wait_for_timeout(300)  # a real gap before anything finalizes it
             page.fill("#password", "demo-pass")  # finalizes the username fill, ~300ms later
 
@@ -209,7 +207,6 @@ def test_recorded_dom_snapshots_exclude_the_extraction_button(fixture_portal_url
         with CaptureSession(page) as capture:
             page.click("#__atlasGrabBtn")  # starts the label mutation
             page.fill("#username", "demo")  # a real action, mid-mutation
-            _confirm_note(page)
             page.fill("#password", "demo-pass")  # finalizes the username fill
 
         browser.close()
@@ -269,8 +266,8 @@ def test_capture_session_does_not_show_a_note_modal_for_a_click_that_only_focuse
     the operator could never actually type a single letter without first
     confirming a note for the mere act of clicking the field, so they kept
     re-clicking it instead. A click into an INPUT/TEXTAREA/SELECT is just
-    setup for the fill that follows (which already gets its own debounced
-    prompt) and is not itself a meaningful action."""
+    setup for the fill that follows (fills never show this modal at all)
+    and is not itself a meaningful action."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -281,15 +278,15 @@ def test_capture_session_does_not_show_a_note_modal_for_a_click_that_only_focuse
             page.wait_for_timeout(200)
             assert page.locator("#__atlasNoteModal").count() == 0
             page.type("#username", "demo")  # now able to actually type
-            _confirm_note(page)
+            page.wait_for_timeout(200)
+            assert page.locator("#__atlasNoteModal").count() == 0
 
         browser.close()
 
     # The focus-only click is still recorded (unchanged, pre-existing
     # behavior) -- only the mandatory modal is skipped for it. page.type()
     # fires one "input" per keystroke, each its own fill action (matching
-    # real per-keystroke recording), with the debounce still collapsing
-    # that to a single confirmed note on the last one.
+    # real per-keystroke recording); none of them ever show a modal.
     kinds = [a.kind for a in capture.actions]
     assert kinds == ["click"] + ["fill"] * (len(kinds) - 1)
     assert capture.actions[0].operator_note is None
@@ -353,7 +350,7 @@ def test_capture_session_does_not_show_a_note_modal_for_a_page_triggered_input(f
                 "el.value = 'restored-draft';"
                 "el.dispatchEvent(new Event('input', {bubbles: true}));"
             )
-            page.wait_for_timeout(1400)
+            page.wait_for_timeout(300)
             assert page.locator("#__atlasNoteModal").count() == 0
 
         browser.close()
@@ -380,16 +377,12 @@ def test_capture_session_note_modal_blocks_a_subsequent_click_until_confirmed(fi
         browser.close()
 
 
-def test_capture_session_shows_the_note_modal_once_per_field_not_per_keystroke(fixture_portal_url):
+def test_capture_session_never_shows_a_note_modal_for_typing(fixture_portal_url):
     """A real operator typing into a field fires one 'input' event per
     keystroke (see the real multi-keystroke trajectories this session
-    captured) -- a modal on every keystroke would make the field unusable.
-    The modal must debounce off the keystrokes themselves instead (resetting
-    on every further one) rather than relying on a 'change'/blur event --
-    confirmed empirically that page.fill() never fires 'change' unless
-    something else actually steals focus afterward, which a real operator
-    typing and then clicking Submit won't reliably do before this modal is
-    meant to appear."""
+    captured) -- a modal on every keystroke (or even once per field) made
+    typing unusable and popped up unexpectedly mid-flow, so fills no longer
+    ever trigger the mandatory modal; only clicks do."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -397,8 +390,8 @@ def test_capture_session_shows_the_note_modal_once_per_field_not_per_keystroke(f
 
         with CaptureSession(page) as capture:
             page.locator("#username").press_sequentially("demo", delay=30)
-            assert page.locator("#__atlasNoteModal").count() == 0  # not yet -- debounce still pending
-            _confirm_note(page)  # waits out the debounce, then dismisses the one modal that appears
+            page.wait_for_timeout(1500)
+            assert page.locator("#__atlasNoteModal").count() == 0
 
         browser.close()
 
@@ -556,7 +549,6 @@ def test_recorded_dom_snapshots_exclude_the_undo_button(fixture_portal_url):
         with CaptureSession(page) as capture:
             page.click("#__atlasUndoBtn")  # starts the label mutation
             page.fill("#username", "demo")  # a real action, mid-mutation
-            _confirm_note(page)
             page.fill("#password", "demo-pass")  # finalizes the username fill
 
         browser.close()
