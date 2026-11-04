@@ -169,9 +169,42 @@ BUTTON = """
     // top-right, not bottom-right: EHR note editors commonly put their own
     // Save/Post FAB at bottom-right, and this button's fixed position +
     // max z-index was silently eating clicks meant for it during recording.
-    b.style.cssText = 'position:fixed;top:20px;right:20px;z-index:2147483647;background:#5b8cff;color:#fff;border:0;padding:12px 16px;border-radius:10px;font:600 14px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer';
+    b.style.cssText = 'position:fixed;top:20px;right:20px;z-index:2147483647;background:#5b8cff;color:#fff;border:0;padding:12px 16px;border-radius:10px;font:600 14px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:grab';
+    // Draggable: a real portal's own header/FAB can end up wherever this
+    // button's fixed default position is (or, confirmed via a live
+    // recording, the native Playwright codegen overlay's own top-layer
+    // glass pane can render over a fixed-position button regardless of
+    // z-index), with no way to get at what's underneath -- so the operator
+    // needs to be able to just drag it out of the way. A real drag (moved
+    // past a few px) must not also fire the extract click.
+    var moved = false;
+    b.addEventListener('mousedown', function(e){
+      moved = false;
+      var startX = e.clientX, startY = e.clientY;
+      var rect = b.getBoundingClientRect();
+      var origLeft = rect.left, origTop = rect.top;
+      b.style.cursor = 'grabbing';
+      function onMove(ev){
+        var dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) moved = true;
+        if (!moved) return;
+        var left = Math.min(Math.max(origLeft + dx, 0), window.innerWidth - rect.width);
+        var top = Math.min(Math.max(origTop + dy, 0), window.innerHeight - rect.height);
+        b.style.left = left + 'px';
+        b.style.top = top + 'px';
+        b.style.right = 'auto';
+      }
+      function onUp(){
+        document.removeEventListener('mousemove', onMove, true);
+        document.removeEventListener('mouseup', onUp, true);
+        b.style.cursor = 'grab';
+      }
+      document.addEventListener('mousemove', onMove, true);
+      document.addEventListener('mouseup', onUp, true);
+    }, true);
     b.addEventListener('click', function(e){
       e.preventDefault(); e.stopPropagation();
+      if (moved) return;
       var o = b.textContent; b.textContent = '\\u23F3 extracting\\u2026';
       Promise.resolve(window.__atlasGrab && window.__atlasGrab()).then(function(r){ b.textContent = '\\u2713 ' + ((r && r.summary) || 'captured'); }).catch(function(err){ b.textContent = '\\u2717 ' + err; });
       setTimeout(function(){ b.textContent = o; }, 2500);

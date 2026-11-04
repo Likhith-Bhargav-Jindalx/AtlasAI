@@ -93,6 +93,38 @@ def test_attach_extraction_button_notifies_on_click(fixture_portal_url):
     assert requested_pages == [page]
 
 
+def test_atlas_grab_btn_is_draggable_and_a_drag_does_not_trigger_extraction(fixture_portal_url):
+    """A real portal's own fixed UI (or the native Playwright codegen
+    overlay, confirmed live) can end up covering this button's default
+    corner -- the operator must be able to drag it clear, and that drag
+    must not also fire an extraction (it's not a click)."""
+    from atlas_engine.capture.extraction import attach_extraction_button
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context()
+        attach_extraction_button(context, lambda _page: None)
+        page = context.new_page()
+        page.goto(f"{fixture_portal_url}/extraction_target.html")
+        page.wait_for_selector("#__atlasGrabBtn")
+
+        before = page.eval_on_selector("#__atlasGrabBtn", "el => el.getBoundingClientRect()")
+        box = page.locator("#__atlasGrabBtn").bounding_box()
+        start_x, start_y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+        page.mouse.move(start_x, start_y)
+        page.mouse.down()
+        page.mouse.move(start_x - 200, start_y + 150, steps=10)
+        page.mouse.up()
+        after = page.eval_on_selector("#__atlasGrabBtn", "el => el.getBoundingClientRect()")
+        # Still shows the original label -- a drag never started an extraction.
+        label_after_drag = page.text_content("#__atlasGrabBtn")
+
+        browser.close()
+
+    assert (after["left"], after["top"]) != (before["left"], before["top"])
+    assert "Extract this page" in label_after_drag
+
+
 # The optional, always-visible "why this step?" corner note box (and its
 # window.__atlas_note binding) was replaced by a mandatory per-action modal
 # (see recorder.py's _LISTENER_SCRIPT/showPendingNoteModal and
