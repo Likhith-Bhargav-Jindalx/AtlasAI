@@ -61,7 +61,7 @@ describe('useApplyUpdate', () => {
 
 describe('useUpdateProgress', () => {
   it('fetches /update/progress only while enabled', async () => {
-    const fetchMock = vi.fn(() =>
+    const fetchMock = vi.fn((_url: string) =>
       Promise.resolve({
         ok: true,
         status: 200,
