@@ -367,7 +367,16 @@ class CaptureSession:
         # of claiming "removed" every time regardless.
         if not self.actions:
             return False
-        index = self.actions[-1].index
+        last = self.actions[-1]
+        # A manually-opened tab's own tab_opened record is the only thing
+        # that tells codegen/replay to ever create that tab (see emit.py and
+        # brain/loop.py) -- unlike a popup's, which is re-derived lazily from
+        # the click that spawns it. Undoing it here would silently orphan
+        # every later action recorded on this same tab: replay would wait
+        # forever for a page that's never opened. Refuse instead of removing.
+        if last.kind == "tab_opened" and last.tab_origin == "manual":
+            return False
+        index = last.index
         if index in self._removed:
             return False
         self._removed.add(index)
