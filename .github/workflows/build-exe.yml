@@ -235,3 +235,91 @@ jobs:
           name: atlas-desktop-windows
           path: dist/atlas-desktop/
           include-hidden-files: true
+
+  build-macos-app:
+    # Manual only, never on push -- this build isn't published anywhere (no
+    # blob upload, no manifest entry): it exists purely so someone can grab a
+    # real packaged .app to test the /update/check banner and download/verify
+    # flow against whatever the last real (Windows) release already put in
+    # desktop-releases/latest.json. Actually applying an update
+    # (write_swap_script/launch_swap_script) is PowerShell/robocopy-based and
+    # Windows-only, so this build can't self-update -- it's for exercising the
+    # check side, not a second release channel.
+    if: github.event_name == 'workflow_dispatch'
+    needs: [migrate-production]
+    runs-on: macos-latest
+    env:
+      ATLAS_DATABASE_URL: ${{ secrets.ATLAS_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install engine
+        working-directory: engine
+        run: pip install -e ".[dev]"
+
+      - name: Install desktop packaging deps
+        run: pip install -r desktop/requirements-desktop.txt
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Vendor Chromium inside the playwright package
+        run: PLAYWRIGHT_BROWSERS_PATH=0 python -m playwright install chromium
+
+      - name: Move the vendored browser aside for a clean build
+        run: |
+          pkg_dir=$(python -c "import playwright, os; print(os.path.dirname(playwright.__file__))")
+          mv "$pkg_dir/driver/package/.local-browsers" "$RUNNER_TEMP/local-browsers"
+
+      - name: Write baked-in production credentials
+        run: |
+          cat > desktop/production.env <<EOF
+          ATLAS_DATABASE_URL=${{ secrets.ATLAS_DATABASE_URL }}
+          ATLAS_SESSION_SECRET=${{ secrets.ATLAS_SESSION_SECRET }}
+          ATLAS_AZURE_STORAGE_CONNECTION_STRING=${{ secrets.ATLAS_AZURE_STORAGE_CONNECTION_STRING }}
+          ATLAS_AZURE_STORAGE_CONTAINER=atlas-runs
+          ATLAS_REQUIRE_AZURE_STORAGE=true
+          ATLAS_SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          EOF
+
+      - name: Build desktop app
+        run: |
+          rm -rf build dist
+          pyinstaller --onedir --windowed --name atlas-desktop --add-data "frontend/dist:frontend_dist" --add-data "desktop/production.env:." --add-data "desktop/VERSION:." --paths engine/src desktop/app.py
+
+      # --onedir --windowed on macOS produces TWO separate output trees (see
+      # desktop/build.sh for the full explanation): the flat dist/atlas-desktop/
+      # folder, and a real dist/atlas-desktop.app bundle -- the vendored browser
+      # has to be reinserted into each one by hand.
+      - name: Copy the vendored browser into both output trees
+        run: |
+          cp -R "$RUNNER_TEMP/local-browsers" "dist/atlas-desktop/_internal/playwright/driver/package/.local-browsers"
+          cp -R "$RUNNER_TEMP/local-browsers" "dist/atlas-desktop.app/Contents/Resources/playwright/driver/package/.local-browsers"
+
+      - name: Re-sign the .app bundle now that the browser is actually in it
+        # Ad-hoc (identity "-", no real certificate) -- PyInstaller already
+        # signed the bundle before the browser was copied back in, so without
+        # this Gatekeeper sees an unsigned set of files inside an otherwise
+        # signed bundle on any machine other than the one that built it.
+        run: codesign --force --deep --sign - "dist/atlas-desktop.app"
+
+      - name: Zip the .app for distribution
+        run: (cd dist && zip -qry atlas-desktop-app-macos.zip atlas-desktop.app)
+
+      - name: Upload macOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: atlas-desktop-macos
+          path: dist/atlas-desktop-app-macos.zip
+          retention-days: 14
