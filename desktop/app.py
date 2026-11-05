@@ -13,6 +13,7 @@ no server to deploy, no setup step for whoever runs it.
 """
 
 import os
+import shutil
 import sys
 import threading
 import time
@@ -79,8 +80,33 @@ def _configure_log_file() -> None:
     os.environ.setdefault("ATLAS_LOG_FILE", str(log_path))
 
 
+def _cleanup_stale_vendor_metadata() -> None:
+    """The self-update swap's robocopy is deliberately non-mirroring (see
+    write_swap_script) so an app-only update doesn't wipe the untouched
+    playwright/ folder — but that means a vendor update can leave the
+    *previous* version's playwright-X.Y.Z.dist-info directory sitting
+    next to the new one it doesn't overwrite (dist-info dirs are named
+    after their version, so they never collide). Two dist-infos for the
+    same package makes importlib.metadata.version("playwright") resolve
+    to whichever one it finds, not necessarily the real one — confirmed
+    live via Sentry reporting a stale playwright version after an update
+    that had actually landed. Only the one matching the code actually on
+    disk (read from the package itself) is correct."""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        from playwright._repo_version import version as real_version
+    except Exception:
+        return
+    current_name = f"playwright-{real_version}.dist-info"
+    for entry in _resource_path(".").glob("playwright-*.dist-info"):
+        if entry.name != current_name:
+            shutil.rmtree(entry, ignore_errors=True)
+
+
 _load_production_env()
 _configure_log_file()
+_cleanup_stale_vendor_metadata()
 
 from atlas_engine.observability import init_error_tracking
 
@@ -110,7 +136,17 @@ def _run_server() -> None:
 
 
 def _read_vendor_version() -> str:
-    return importlib.metadata.version("playwright")
+    """Reads playwright's version straight from the installed package
+    rather than importlib.metadata, which can resolve to a stale
+    playwright-X.Y.Z.dist-info left behind by a self-update (see
+    _cleanup_stale_vendor_metadata) — this stays correct even before that
+    cleanup has had a chance to run."""
+    try:
+        from playwright._repo_version import version
+
+        return version
+    except Exception:
+        return importlib.metadata.version("playwright")
 
 
 @fastapi_app.get("/update/check")
