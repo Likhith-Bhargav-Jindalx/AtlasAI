@@ -65,10 +65,14 @@ jobs:
   build-windows-exe:
     needs: [migrate-production]
     runs-on: windows-latest
-    permissions:
-      contents: write
     env:
       ATLAS_DATABASE_URL: ${{ secrets.ATLAS_DATABASE_URL }}
+      # Same container the exe already reads recordings from — release zips
+      # just live under a "desktop-releases/" prefix within it, since the
+      # exe's own baked ATLAS_AZURE_STORAGE_CONNECTION_STRING already has
+      # full read/write access to the whole container anyway.
+      AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.ATLAS_AZURE_STORAGE_CONNECTION_STRING }}
+      RELEASE_CONTAINER: atlas-runs
     steps:
       - uses: actions/checkout@v4
 
@@ -154,10 +158,10 @@ jobs:
       - name: Check whether this version was already released
         id: existing
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "desktop-v${{ steps.version.outputs.value }}" >/dev/null 2>&1; then
+          app_version="${{ steps.version.outputs.value }}"
+          if az storage blob exists --container-name "$RELEASE_CONTAINER" \
+               --name "desktop-releases/v${app_version}/atlas-desktop-app-${app_version}.zip" --query exists -o tsv | grep -q true; then
             echo "already_released=true" >> "$GITHUB_OUTPUT"
           else
             echo "already_released=false" >> "$GITHUB_OUTPUT"
@@ -184,20 +188,45 @@ jobs:
           sha256sum "dist/atlas-desktop-app-${app_version}.zip" "dist/atlas-desktop-vendor-${vendor_version}.zip" \
             | sed 's#dist/##' > dist/checksums.txt
 
-      - name: Publish GitHub release
+      - name: Publish release to blob storage
         if: steps.existing.outputs.already_released == 'false'
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Uploads under a versioned prefix first, then writes latest.json last
+        # — so a client never sees a manifest pointing at a blob that isn't
+        # fully uploaded yet.
         run: |
+          set -euo pipefail
           app_version="${{ steps.version.outputs.value }}"
           vendor_version="${{ steps.vendor.outputs.value }}"
-          gh release create "desktop-v${app_version}" \
-            "dist/atlas-desktop-app-${app_version}.zip" \
-            "dist/atlas-desktop-vendor-${vendor_version}.zip" \
-            dist/checksums.txt \
-            --title "Atlas Desktop v${app_version}" \
-            --notes "Automated Windows build."
+          app_blob="atlas-desktop-app-${app_version}.zip"
+          vendor_blob="atlas-desktop-vendor-${vendor_version}.zip"
+          prefix="desktop-releases/v${app_version}"
+
+          az storage blob upload --container-name "$RELEASE_CONTAINER" \
+            --name "$prefix/$app_blob" --file "dist/$app_blob" --overwrite
+          az storage blob upload --container-name "$RELEASE_CONTAINER" \
+            --name "$prefix/$vendor_blob" --file "dist/$vendor_blob" --overwrite
+          az storage blob upload --container-name "$RELEASE_CONTAINER" \
+            --name "$prefix/checksums.txt" --file "dist/checksums.txt" --overwrite
+
+          app_sha256=$(grep " $app_blob\$" dist/checksums.txt | cut -d' ' -f1)
+          vendor_sha256=$(grep " $vendor_blob\$" dist/checksums.txt | cut -d' ' -f1)
+
+          python - <<PY
+          import json
+          json.dump({
+              "version": "$app_version",
+              "notes": "Automated Windows build.",
+              "app_blob": "$prefix/$app_blob",
+              "app_sha256": "$app_sha256",
+              "vendor_version": "$vendor_version",
+              "vendor_blob": "$prefix/$vendor_blob",
+              "vendor_sha256": "$vendor_sha256",
+          }, open("dist/latest.json", "w"))
+          PY
+
+          az storage blob upload --container-name "$RELEASE_CONTAINER" \
+            --name "desktop-releases/latest.json" --file "dist/latest.json" --overwrite
 
       - name: Upload exe artifact (optional fallback)
         continue-on-error: true

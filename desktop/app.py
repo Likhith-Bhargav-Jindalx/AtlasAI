@@ -153,7 +153,7 @@ def _read_vendor_version() -> str:
 def update_check_endpoint() -> dict:
     app_version = _read_app_version()
     vendor_version = _read_vendor_version()
-    result = check_for_update(app_version, vendor_version)
+    result = check_for_update(app_version, vendor_version, connection_string=os.environ.get("ATLAS_AZURE_STORAGE_CONNECTION_STRING"))
     # Surfaces what this exact install is actually running — the only way to
     # confirm from outside the machine that a self-update really swapped in
     # the files it claimed to, instead of digging through _internal/ by hand.
@@ -181,7 +181,12 @@ def _on_download_progress(phase: str, bytes_downloaded: int, total_bytes: int | 
 def _run_update_in_background(result) -> None:
     staging_dir = Path(tempfile.mkdtemp(prefix="atlas-desktop-update-"))
     try:
-        stage_update(result, staging_dir, on_progress=_on_download_progress)
+        stage_update(
+            result,
+            staging_dir,
+            connection_string=os.environ["ATLAS_AZURE_STORAGE_CONNECTION_STRING"],
+            on_progress=_on_download_progress,
+        )
     except UpdateApplyError as exc:
         _set_update_progress(phase="error", error=str(exc))
         return
@@ -213,7 +218,9 @@ def update_apply_endpoint():
     if _update_progress_snapshot()["phase"] not in ("idle", "error"):
         raise HTTPException(status_code=409, detail="update already in progress")
 
-    result = check_for_update(_read_app_version(), _read_vendor_version())
+    result = check_for_update(
+        _read_app_version(), _read_vendor_version(), connection_string=os.environ.get("ATLAS_AZURE_STORAGE_CONNECTION_STRING")
+    )
     if not result.update_available:
         raise HTTPException(status_code=409, detail="no update available")
 
