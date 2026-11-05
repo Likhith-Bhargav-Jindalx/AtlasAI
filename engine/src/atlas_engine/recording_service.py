@@ -1,5 +1,6 @@
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -285,14 +286,31 @@ def list_recordings(
 
         store = get_store()
         q_lower = q.lower() if q else None
-        results = []
-        for recording in query.order_by(Recording.created_at.desc()).all():
-            video_asset = (
-                session.query(VideoAsset)
-                .filter_by(recording_id=recording.id, page_index=0)
-                .one_or_none()
-            )
-            request = session.get(RecordingRequest, recording.request_id) if recording.request_id else None
+
+        recordings = query.order_by(Recording.created_at.desc()).all()
+        recording_ids = [r.id for r in recordings]
+        request_ids = {r.request_id for r in recordings if r.request_id}
+        profile_ids = {r.portal_profile_id for r in recordings if r.portal_profile_id}
+
+        # Batched instead of one query/get() per recording (was N+1 — every
+        # recording in the list triggered 3 extra round trips).
+        video_assets_by_recording = {
+            va.recording_id: va
+            for va in session.query(VideoAsset)
+            .filter(VideoAsset.recording_id.in_(recording_ids), VideoAsset.page_index == 0)
+            .all()
+        } if recording_ids else {}
+        requests_by_id = {
+            req.id: req for req in session.query(RecordingRequest).filter(RecordingRequest.id.in_(request_ids)).all()
+        } if request_ids else {}
+        profiles_by_id = {
+            p.id: p for p in session.query(PortalProfile).filter(PortalProfile.id.in_(profile_ids)).all()
+        } if profile_ids else {}
+
+        candidates = []
+        for recording in recordings:
+            video_asset = video_assets_by_recording.get(recording.id)
+            request = requests_by_id.get(recording.request_id) if recording.request_id else None
 
             # lob/action live on the linked request (Section A); no join is
             # worth it here since every row already loads its request above.
@@ -303,7 +321,7 @@ def list_recordings(
             if payer_id is not None and not (recording.payer_ids and payer_id in recording.payer_ids):
                 continue
 
-            profile = session.get(PortalProfile, recording.portal_profile_id)
+            profile = profiles_by_id.get(recording.portal_profile_id)
 
             if q_lower is not None:
                 haystack = " ".join(filter(None, [
@@ -314,10 +332,22 @@ def list_recordings(
                 if q_lower not in haystack:
                     continue
 
-            has_codegen = store.exists(f"{recording.capture_blob_prefix}/codegen.py")
-            if not has_codegen:
-                has_codegen = store.exists(f"{recording.capture_blob_prefix}/trajectory.json")
+            candidates.append((recording, video_asset, request, profile))
 
+        def _has_codegen(recording: Recording) -> bool:
+            if store.exists(f"{recording.capture_blob_prefix}/codegen.py"):
+                return True
+            return store.exists(f"{recording.capture_blob_prefix}/trajectory.json")
+
+        # Each check is a blocking blob-storage network call (up to 2 per
+        # recording) — run them concurrently instead of serially in the loop
+        # above, since a large library otherwise pays for every round trip
+        # one at a time.
+        with ThreadPoolExecutor(max_workers=min(32, max(1, len(candidates)))) as pool:
+            has_codegen_results = list(pool.map(_has_codegen, [c[0] for c in candidates]))
+
+        results = []
+        for (recording, video_asset, request, profile), has_codegen in zip(candidates, has_codegen_results):
             results.append({
                 "id": str(recording.id),
                 "status": recording.status,

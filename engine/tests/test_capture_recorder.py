@@ -667,6 +667,26 @@ def test_capture_session_can_record_a_manually_opened_tab(fixture_portal_url):
     assert capture.actions[1].kind == "click"
 
 
+def test_undo_refuses_to_remove_a_manually_opened_tabs_own_tab_opened_step(fixture_portal_url):
+    """Undoing this step would orphan every later action recorded on this
+    same tab -- codegen/replay only ever opens the tab via this step (see
+    recorder.py's _on_undo_last), unlike a popup's, which is re-derived
+    from the click that spawns it."""
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(f"{fixture_portal_url}/login.html")
+
+        with CaptureSession(page) as capture:
+            capture.record_tab_opened("https://example.com/report", "<html></html>", origin="manual")
+            removed = capture._on_undo_last({})
+
+        browser.close()
+
+    assert removed is False
+    assert capture.actions[0].kind == "tab_opened"
+
+
 def test_capture_session_can_record_a_tab_close(fixture_portal_url):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
