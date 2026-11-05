@@ -196,12 +196,23 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
-class _FakeDownloadResponse:
-    def __init__(self, content):
-        self.content = content
+class _FakeStreamResponse:
+    def __init__(self, content: bytes):
+        self._content = content
+        self.headers = {"content-length": str(len(content))}
 
     def raise_for_status(self):
         pass
+
+    def iter_bytes(self, chunk_size: int = 65536):
+        for i in range(0, len(self._content), chunk_size):
+            yield self._content[i : i + chunk_size]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
 
 
 def test_stage_update_downloads_and_extracts_app_zip_only(tmp_path, monkeypatch):
@@ -216,13 +227,36 @@ def test_stage_update_downloads_and_extracts_app_zip_only(tmp_path, monkeypatch)
         vendor_update_required=False,
     )
 
-    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeDownloadResponse(app_zip_bytes))
+    monkeypatch.setattr(httpx, "stream", lambda method, url, **k: _FakeStreamResponse(app_zip_bytes))
 
     staging_dir = tmp_path / "staging"
     stage_update(result, staging_dir)
 
     assert (staging_dir / "atlas-desktop.exe").read_bytes() == b"new exe bytes"
     assert not (staging_dir / "playwright").exists()
+
+
+def test_stage_update_reports_download_progress(tmp_path, monkeypatch):
+    app_zip_bytes = _zip_bytes({"atlas-desktop.exe": b"x" * 200_000})
+    app_sha256 = hashlib.sha256(app_zip_bytes).hexdigest()
+
+    result = UpdateCheckResult(
+        update_available=True,
+        latest_version="1.1.0",
+        app_asset_url="https://example.test/app.zip",
+        app_sha256=app_sha256,
+        vendor_update_required=False,
+    )
+
+    monkeypatch.setattr(httpx, "stream", lambda method, url, **k: _FakeStreamResponse(app_zip_bytes))
+
+    progress_calls = []
+    stage_update(result, tmp_path / "staging", on_progress=lambda *args: progress_calls.append(args))
+
+    assert progress_calls[0][0] == "app"
+    assert progress_calls[-1] == ("app", len(app_zip_bytes), len(app_zip_bytes))
+    # Reported incrementally, not just once at the end.
+    assert len(progress_calls) > 1
 
 
 def test_stage_update_raises_on_checksum_mismatch(tmp_path, monkeypatch):
@@ -236,10 +270,13 @@ def test_stage_update_raises_on_checksum_mismatch(tmp_path, monkeypatch):
         vendor_update_required=False,
     )
 
-    monkeypatch.setattr(httpx, "get", lambda *a, **k: _FakeDownloadResponse(app_zip_bytes))
+    monkeypatch.setattr(httpx, "stream", lambda method, url, **k: _FakeStreamResponse(app_zip_bytes))
 
+    staging_dir = tmp_path / "staging"
     with pytest.raises(UpdateApplyError):
-        stage_update(result, tmp_path / "staging")
+        stage_update(result, staging_dir)
+
+    assert not (staging_dir / "_app.zip").exists()
 
 
 def test_stage_update_also_extracts_vendor_zip_when_required(tmp_path, monkeypatch):
@@ -258,18 +295,20 @@ def test_stage_update_also_extracts_vendor_zip_when_required(tmp_path, monkeypat
         vendor_sha256=vendor_sha256,
     )
 
-    def fake_get(url, **kwargs):
+    def fake_stream(method, url, **kwargs):
         if "vendor" in url:
-            return _FakeDownloadResponse(vendor_zip_bytes)
-        return _FakeDownloadResponse(app_zip_bytes)
+            return _FakeStreamResponse(vendor_zip_bytes)
+        return _FakeStreamResponse(app_zip_bytes)
 
-    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "stream", fake_stream)
 
+    progress_calls = []
     staging_dir = tmp_path / "staging"
-    stage_update(result, staging_dir)
+    stage_update(result, staging_dir, on_progress=lambda *args: progress_calls.append(args))
 
     assert (staging_dir / "atlas-desktop.exe").read_bytes() == b"exe"
     assert (staging_dir / "playwright" / "driver" / "node.exe").read_bytes() == b"node"
+    assert {phase for phase, _, _ in progress_calls} == {"app", "vendor"}
 
 
 def test_write_swap_script_contains_pid_and_paths(tmp_path):

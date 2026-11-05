@@ -12,10 +12,15 @@ import subprocess
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# phase ("app" | "vendor"), bytes downloaded so far, total bytes (None if the
+# server didn't send Content-Length).
+ProgressCallback = Callable[[str, int, int | None], None]
 
 GITHUB_RELEASES_LATEST_URL = (
     "https://api.github.com/repos/Likhith-Bhargav-Jindalx/AtlasAI/releases/latest"
@@ -126,20 +131,39 @@ class UpdateApplyError(Exception):
     pass
 
 
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+def _download_and_verify(
+    url: str,
+    expected_sha256: str | None,
+    dest_zip: Path,
+    *,
+    phase: str,
+    on_progress: ProgressCallback | None,
+) -> None:
+    # Streamed (not httpx.get(...).content) so a large vendor zip (hundreds
+    # of MB) is never held in memory whole, and so on_progress can be called
+    # as bytes arrive instead of only once at the end.
+    hasher = hashlib.sha256()
+    downloaded = 0
+    with dest_zip.open("wb") as f:
+        with httpx.stream("GET", url, timeout=120.0, follow_redirects=True) as response:
+            response.raise_for_status()
+            content_length = response.headers.get("content-length")
+            total_bytes = int(content_length) if content_length is not None else None
+            for chunk in response.iter_bytes():
+                f.write(chunk)
+                hasher.update(chunk)
+                downloaded += len(chunk)
+                if on_progress is not None:
+                    on_progress(phase, downloaded, total_bytes)
 
-
-def _download_and_verify(url: str, expected_sha256: str | None, dest_zip: Path) -> None:
-    response = httpx.get(url, timeout=120.0, follow_redirects=True)
-    response.raise_for_status()
-    content = response.content
-    if expected_sha256 is None or _sha256_bytes(content) != expected_sha256:
+    if expected_sha256 is None or hasher.hexdigest() != expected_sha256:
+        dest_zip.unlink(missing_ok=True)
         raise UpdateApplyError(f"checksum mismatch downloading {url}")
-    dest_zip.write_bytes(content)
 
 
-def stage_update(result: UpdateCheckResult, staging_dir: Path) -> None:
+def stage_update(
+    result: UpdateCheckResult, staging_dir: Path, on_progress: ProgressCallback | None = None
+) -> None:
     """Downloads and verifies this update's assets into staging_dir,
     extracted so staging_dir ends up laid out exactly like the install
     directory (app files at the top level; playwright/... only present
@@ -149,14 +173,16 @@ def stage_update(result: UpdateCheckResult, staging_dir: Path) -> None:
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     app_zip = staging_dir / "_app.zip"
-    _download_and_verify(result.app_asset_url, result.app_sha256, app_zip)
+    _download_and_verify(result.app_asset_url, result.app_sha256, app_zip, phase="app", on_progress=on_progress)
     with zipfile.ZipFile(app_zip) as zf:
         zf.extractall(staging_dir)
     app_zip.unlink()
 
     if result.vendor_update_required:
         vendor_zip = staging_dir / "_vendor.zip"
-        _download_and_verify(result.vendor_asset_url, result.vendor_sha256, vendor_zip)
+        _download_and_verify(
+            result.vendor_asset_url, result.vendor_sha256, vendor_zip, phase="vendor", on_progress=on_progress
+        )
         with zipfile.ZipFile(vendor_zip) as zf:
             zf.extractall(staging_dir)
         vendor_zip.unlink()

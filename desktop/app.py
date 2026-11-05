@@ -13,6 +13,7 @@ no server to deploy, no setup step for whoever runs it.
 """
 
 import os
+import shutil
 import sys
 import threading
 import time
@@ -79,8 +80,33 @@ def _configure_log_file() -> None:
     os.environ.setdefault("ATLAS_LOG_FILE", str(log_path))
 
 
+def _cleanup_stale_vendor_metadata() -> None:
+    """The self-update swap's robocopy is deliberately non-mirroring (see
+    write_swap_script) so an app-only update doesn't wipe the untouched
+    playwright/ folder — but that means a vendor update can leave the
+    *previous* version's playwright-X.Y.Z.dist-info directory sitting
+    next to the new one it doesn't overwrite (dist-info dirs are named
+    after their version, so they never collide). Two dist-infos for the
+    same package makes importlib.metadata.version("playwright") resolve
+    to whichever one it finds, not necessarily the real one — confirmed
+    live via Sentry reporting a stale playwright version after an update
+    that had actually landed. Only the one matching the code actually on
+    disk (read from the package itself) is correct."""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        from playwright._repo_version import version as real_version
+    except Exception:
+        return
+    current_name = f"playwright-{real_version}.dist-info"
+    for entry in _resource_path(".").glob("playwright-*.dist-info"):
+        if entry.name != current_name:
+            shutil.rmtree(entry, ignore_errors=True)
+
+
 _load_production_env()
 _configure_log_file()
+_cleanup_stale_vendor_metadata()
 
 from atlas_engine.observability import init_error_tracking
 
@@ -110,29 +136,57 @@ def _run_server() -> None:
 
 
 def _read_vendor_version() -> str:
-    return importlib.metadata.version("playwright")
+    """Reads playwright's version straight from the installed package
+    rather than importlib.metadata, which can resolve to a stale
+    playwright-X.Y.Z.dist-info left behind by a self-update (see
+    _cleanup_stale_vendor_metadata) — this stays correct even before that
+    cleanup has had a chance to run."""
+    try:
+        from playwright._repo_version import version
+
+        return version
+    except Exception:
+        return importlib.metadata.version("playwright")
 
 
 @fastapi_app.get("/update/check")
 def update_check_endpoint() -> dict:
-    result = check_for_update(_read_app_version(), _read_vendor_version())
-    return dataclasses.asdict(result)
+    app_version = _read_app_version()
+    vendor_version = _read_vendor_version()
+    result = check_for_update(app_version, vendor_version)
+    # Surfaces what this exact install is actually running — the only way to
+    # confirm from outside the machine that a self-update really swapped in
+    # the files it claimed to, instead of digging through _internal/ by hand.
+    return {**dataclasses.asdict(result), "app_version": app_version, "vendor_version": vendor_version}
 
 
-@fastapi_app.post("/update/apply")
-def update_apply_endpoint():
-    if not getattr(sys, "frozen", False):
-        raise HTTPException(status_code=400, detail="updates only apply to a packaged build")
+_update_state_lock = threading.Lock()
+_update_progress: dict = {"phase": "idle", "bytes_downloaded": 0, "total_bytes": None, "error": None}
 
-    result = check_for_update(_read_app_version(), _read_vendor_version())
-    if not result.update_available:
-        raise HTTPException(status_code=409, detail="no update available")
 
+def _update_progress_snapshot() -> dict:
+    with _update_state_lock:
+        return dict(_update_progress)
+
+
+def _set_update_progress(**fields) -> None:
+    with _update_state_lock:
+        _update_progress.update(fields)
+
+
+def _on_download_progress(phase: str, bytes_downloaded: int, total_bytes: int | None) -> None:
+    _set_update_progress(phase=f"downloading_{phase}", bytes_downloaded=bytes_downloaded, total_bytes=total_bytes)
+
+
+def _run_update_in_background(result) -> None:
     staging_dir = Path(tempfile.mkdtemp(prefix="atlas-desktop-update-"))
     try:
-        stage_update(result, staging_dir)
+        stage_update(result, staging_dir, on_progress=_on_download_progress)
     except UpdateApplyError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        _set_update_progress(phase="error", error=str(exc))
+        return
+
+    _set_update_progress(phase="relaunching", bytes_downloaded=0, total_bytes=None, error=None)
 
     install_dir = Path(sys.executable).resolve().parent
     script_path = staging_dir.parent / f"{staging_dir.name}-swap.ps1"
@@ -145,11 +199,32 @@ def update_apply_endpoint():
     )
     launch_swap_script(script_path)
 
-    # Exit after a short delay, not immediately — the HTTP response below
-    # must reach the frontend before this process disappears, otherwise
-    # the "Update now" click looks like it silently failed.
+    # Exit after a short delay, not immediately — the frontend's last
+    # /update/progress poll must land before this process disappears,
+    # otherwise the swap looks like it silently failed.
     threading.Timer(1.0, lambda: os._exit(0)).start()
+
+
+@fastapi_app.post("/update/apply")
+def update_apply_endpoint():
+    if not getattr(sys, "frozen", False):
+        raise HTTPException(status_code=400, detail="updates only apply to a packaged build")
+
+    if _update_progress_snapshot()["phase"] not in ("idle", "error"):
+        raise HTTPException(status_code=409, detail="update already in progress")
+
+    result = check_for_update(_read_app_version(), _read_vendor_version())
+    if not result.update_available:
+        raise HTTPException(status_code=409, detail="no update available")
+
+    _set_update_progress(phase="downloading_app", bytes_downloaded=0, total_bytes=None, error=None)
+    threading.Thread(target=_run_update_in_background, args=(result,), daemon=True).start()
     return {"ok": True}
+
+
+@fastapi_app.get("/update/progress")
+def update_progress_endpoint() -> dict:
+    return _update_progress_snapshot()
 
 
 def _unblock_windows_bundle() -> None:

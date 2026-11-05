@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
-import { useApplyUpdate, useUpdateCheck } from './update'
+import { useApplyUpdate, useUpdateCheck, useUpdateProgress } from './update'
 
 let queryClient: QueryClient
 
@@ -56,5 +56,30 @@ describe('useApplyUpdate', () => {
     result.current.mutate()
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
+  })
+})
+
+describe('useUpdateProgress', () => {
+  it('fetches /update/progress only while enabled', async () => {
+    const fetchMock = vi.fn((_url: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () => ({ phase: 'downloading_app', bytes_downloaded: 10, total_bytes: 100, error: null }),
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result, rerender } = renderHook(({ enabled }) => useUpdateProgress(enabled), {
+      wrapper,
+      initialProps: { enabled: false },
+    })
+
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    rerender({ enabled: true })
+
+    await waitFor(() => expect(result.current.data?.bytes_downloaded).toBe(10))
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/update/progress')
   })
 })
