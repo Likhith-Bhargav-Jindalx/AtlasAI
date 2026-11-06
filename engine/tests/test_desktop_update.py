@@ -307,7 +307,14 @@ def test_stage_update_also_extracts_vendor_zip_when_required(tmp_path, monkeypat
     stage_update(result, staging_dir, on_progress=lambda *args: progress_calls.append(args))
 
     assert (staging_dir / "atlas-desktop.exe").read_bytes() == b"exe"
-    assert (staging_dir / "playwright" / "driver" / "node.exe").read_bytes() == b"node"
+    # The real vendor zip's own root is bare "playwright/" (it's zipped
+    # from inside the build's _internal/ dir), but the real install's
+    # playwright/ lives at _internal/playwright/ — extracting straight
+    # into staging_dir would misplace it as a sibling of _internal/
+    # instead of inside it, which robocopy would then silently never
+    # merge into the real _internal/playwright/ at all.
+    assert (staging_dir / "_internal" / "playwright" / "driver" / "node.exe").read_bytes() == b"node"
+    assert not (staging_dir / "playwright").exists()
     assert {phase for phase, _, _ in progress_calls} == {"app", "vendor"}
 
 

@@ -166,10 +166,10 @@ def stage_update(
 ) -> None:
     """Downloads and verifies this update's assets into staging_dir,
     extracted so staging_dir ends up laid out exactly like the install
-    directory (app files at the top level; playwright/... only present
-    when a vendor update was actually required). Raises UpdateApplyError
-    on any checksum mismatch — never touches anything outside
-    staging_dir, so the real install is untouched on failure."""
+    directory (app files at the top level; _internal/playwright/... only
+    present when a vendor update was actually required). Raises
+    UpdateApplyError on any checksum mismatch — never touches anything
+    outside staging_dir, so the real install is untouched on failure."""
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     app_zip = staging_dir / "_app.zip"
@@ -183,8 +183,18 @@ def stage_update(
         _download_and_verify(
             result.vendor_asset_url, result.vendor_sha256, vendor_zip, phase="vendor", on_progress=on_progress
         )
+        # The vendor zip's own root is bare "playwright/" (it's zipped from
+        # inside the build's _internal/ dir — see build-exe.yml's "Split
+        # into app and vendor zips" step), but the real install's
+        # playwright/ lives at _internal/playwright/. Extracting straight
+        # into staging_dir would land it at staging_dir/playwright instead
+        # — a stray folder robocopy would then create next to _internal/
+        # rather than inside it, silently leaving the real _internal/playwright/
+        # (and its driver code) untouched by every vendor update.
+        vendor_extract_dir = staging_dir / "_internal"
+        vendor_extract_dir.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(vendor_zip) as zf:
-            zf.extractall(staging_dir)
+            zf.extractall(vendor_extract_dir)
         vendor_zip.unlink()
 
 
