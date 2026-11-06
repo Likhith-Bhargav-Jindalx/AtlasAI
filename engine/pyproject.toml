@@ -4,15 +4,17 @@ version = "0.1.0"
 description = "Atlas AI capture/trajectory/brain/codegen/certify engine"
 requires-python = ">=3.11"
 dependencies = [
-    # Deliberately unconstrained above 1.49, including into 1.64+ (which removed
-    # the private "enableRecorder" channel attach_codegen_recorder calls): that
-    # channel's own native recorder UI (a separate Inspector window, and an
-    # in-page toolbar that can swallow real clicks near the top of the page --
-    # confirmed via a live recording) made pinning back down to keep it alive
-    # worse than losing the native codegen script. attach_codegen_recorder's
-    # own try/except absorbs the resulting failure; codegen_script is simply
-    # None until that call is ported to whatever replaced the channel.
-    "playwright>=1.49",
+    # <1.64: atlas_engine.capture.codegen.attach_codegen_recorder calls Playwright's
+    # private "enableRecorder" channel directly, which 1.64.0 removed (last verified
+    # working at 1.63.0). That channel's own native recorder UI (a separate Inspector
+    # window, and an in-page toolbar that can swallow real clicks near the top of the
+    # page) is a known, accepted tradeoff for keeping the native codegen script --
+    # confirmed no clean way to suppress that overlay while the channel stays live
+    # (it's rendered by the injected recorder script whenever mode="recording",
+    # regardless of recorderMode="api"/PW_CODEGEN_NO_INSPECTOR, which only kill the
+    # separate Inspector window, not the in-page toolbar). Bump this ceiling only
+    # after enableRecorder is ported to whatever replaces it.
+    "playwright>=1.49,<1.64",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlalchemy>=2.0",

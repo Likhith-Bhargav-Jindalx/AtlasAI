@@ -1,7 +1,6 @@
 import tempfile
 from pathlib import Path
 
-import pytest
 from playwright.sync_api import sync_playwright
 
 from atlas_engine.capture.codegen import (
@@ -13,18 +12,6 @@ from atlas_engine.capture.codegen import (
 )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "playwright>=1.64 removed the private BrowserContext.enableRecorder "
-        "channel this relies on (we deliberately stopped pinning <1.64: that "
-        "channel's own recorder UI -- a separate Inspector window, plus an "
-        "in-page toolbar confirmed to swallow real clicks near the top of "
-        "the page -- was worse than losing the native codegen script). "
-        "Un-xfail once attach_codegen_recorder is ported to whatever "
-        "replaced this channel."
-    ),
-    strict=True,
-)
 def test_attach_codegen_recorder_emits_a_playwright_script():
     out = Path(tempfile.mkdtemp()) / "codegen.py"
     with sync_playwright() as playwright:
