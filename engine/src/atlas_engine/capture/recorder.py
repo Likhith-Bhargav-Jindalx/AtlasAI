@@ -78,14 +78,61 @@ _LISTENER_SCRIPT = """
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mountUndoButton); else mountUndoButton();
   setInterval(mountUndoButton, 1500);
 
-  // Mandatory per-action note: shown after every click, and once per field
-  // (on "change", not "input" -- a real operator's keystrokes each fire
-  // their own "input" event, so triggering on that would pop a new modal
-  // after every single letter typed). Non-intercepting: the real click/fill
-  // already happened and already reached __atlas_record by the time this
-  // shows, so a fast navigation can still carry the modal away before the
-  // operator sees it -- an accepted tradeoff, not a bug, for not having to
-  // preventDefault/replay every click (real risk on a production portal).
+  // Opt-in, operator-triggered note for the step still in flight -- not an
+  // automatic popup after every click anymore. An earlier version showed
+  // this unconditionally after every click and raced the click's own
+  // handlers no matter how long it waited first: a real EHR portal's side
+  // panel (confirmed live, ecwapp.pelvicpainnewyork.com) watches focus
+  // continuously for as long as it's open and closes itself the instant
+  // focus moves to ANY other element in the same document -- there is no
+  // delay that avoids that once the modal exists and takes focus at all.
+  // Making it manual sidesteps the entire problem: the operator decides
+  // when to open it, same as Undo already does for removing a step.
+  function mountNoteButton() {
+    if (document.getElementById("__atlasNoteBtn")) return;
+    if (!document.body) { setTimeout(mountNoteButton, 300); return; }
+    const btn = document.createElement("button");
+    btn.id = "__atlasNoteBtn";
+    btn.type = "button";
+    btn.textContent = "\\u270e Add note";
+    // Third control stacked in the same corner as Extract (top:20px) and
+    // Undo (top:74px) -- same reasoning: one predictable spot for all of
+    // this capture session's own controls instead of scattering them.
+    btn.style.cssText = "position:fixed;top:128px;right:20px;z-index:2147483647;background:#4a6fa5;color:#fff;border:0;padding:10px 14px;border-radius:10px;font:600 13px system-ui,sans-serif;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:grab";
+    let moved = false;
+    btn.addEventListener("mousedown", (e) => {
+      moved = false;
+      const startX = e.clientX, startY = e.clientY;
+      const rect = btn.getBoundingClientRect();
+      const origLeft = rect.left, origTop = rect.top;
+      btn.style.cursor = "grabbing";
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)) moved = true;
+        if (!moved) return;
+        btn.style.left = Math.min(Math.max(origLeft + dx, 0), window.innerWidth - rect.width) + "px";
+        btn.style.top = Math.min(Math.max(origTop + dy, 0), window.innerHeight - rect.height) + "px";
+        btn.style.bottom = "auto";
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove, true);
+        document.removeEventListener("mouseup", onUp, true);
+        btn.style.cursor = "grab";
+      };
+      document.addEventListener("mousemove", onMove, true);
+      document.addEventListener("mouseup", onUp, true);
+    }, true);
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (moved) return;
+      showPendingNoteModal("");
+    }, true);
+    document.body.appendChild(btn);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", mountNoteButton); else mountNoteButton();
+  setInterval(mountNoteButton, 1500);
+
   function showPendingNoteModal(defaultText) {
     if (!document.body) return;
     const existing = document.getElementById("__atlasNoteModal");
@@ -133,7 +180,7 @@ _LISTENER_SCRIPT = """
 
   const push = (kind, el, value, text, modifiers) => {
     if (!el) return;
-    if (el.closest && (el.closest("#__atlasGrabBtn") || el.closest("#__atlasNoteModal") || el.closest("#__atlasUndoBtn"))) return;
+    if (el.closest && (el.closest("#__atlasGrabBtn") || el.closest("#__atlasNoteModal") || el.closest("#__atlasUndoBtn") || el.closest("#__atlasNoteBtn"))) return;
     // The extraction button's own label mutates while a grab is in flight
     // ("extracting…" -> "captured" -> reverts after 2.5s), and the undo
     // button mutates its own text the same way ("✓ removed") — leaving
@@ -143,7 +190,7 @@ _LISTENER_SCRIPT = """
     // trajectory/extract.py. Clone-and-strip only when at least one is
     // actually present — during authoring replay/brain phases none of them
     // ever are, so this stays free.
-    const overlayIds = ["__atlasGrabBtn", "__atlasNoteModal", "__atlasUndoBtn"];
+    const overlayIds = ["__atlasGrabBtn", "__atlasNoteModal", "__atlasUndoBtn", "__atlasNoteBtn"];
     const present = overlayIds.some((id) => document.getElementById(id));
     let dom = document.documentElement.outerHTML;
     if (present) {
@@ -175,36 +222,9 @@ _LISTENER_SCRIPT = """
       if (event.altKey) mods.push("Alt");
       const text = (event.target.textContent || "").trim().slice(0, 80);
       push("click", event.target, null, text, mods);
-      // A page's own script can click a button programmatically (an
-      // auto-advance, a hidden trigger, a restore-draft action) with no
-      // human anywhere near it -- isTrusted is false for those, and only a
-      // real click should ever prompt the operator for a reason.
-      if (!event.isTrusted) return;
-      if (event.target.closest && (event.target.closest("#__atlasGrabBtn") || event.target.closest("#__atlasNoteModal") || event.target.closest("#__atlasUndoBtn"))) return;
-      // A click into a text field is just focusing it to type next -- not
-      // itself a meaningful action. The resulting fill (debounced on
-      // "input") gets its own mandatory prompt; forcing one here too
-      // would steal focus to the modal before a single letter is typed,
-      // as a real recording confirmed: 8 re-clicks of a search box, zero
-      // fills, since the operator could never get past this modal to type.
-      const tag = event.target.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      // Deferred, not shown synchronously inside this capture-phase handler:
-      // we run before the click's own target/bubble-phase handlers (capture
-      // always fires first), so showing this modal here -- and stealing
-      // focus onto its input -- would race whatever the real click was about
-      // to do. Confirmed live on a real EHR portal: clicking to open a
-      // "Billing" side panel immediately closed it again, because the panel
-      // checks (on mount) whether it actually has focus and closes itself if
-      // not -- this modal had already stolen focus before that check ran.
-      // Not site-specific to fix: a short real delay (not setTimeout(fn, 0),
-      // which only pushes one task later -- some frameworks settle their own
-      // open/focus logic over several render or effect cycles) gives ANY
-      // site's own click-triggered UI however long it needs to finish first,
-      // before this modal exists at all, regardless of what mechanism that
-      // site uses to decide it lost focus or was clicked outside.
-      const clickedText = text || event.target.id || "element";
-      setTimeout(() => showPendingNoteModal(`Clicked "${clickedText}"`), 50);
+      // Noting a reason is now opt-in via the "Add note" button (see
+      // mountNoteButton) instead of an automatic popup after every click --
+      // see mountNoteButton's comment for why.
     },
     true,
   );
@@ -218,10 +238,8 @@ _LISTENER_SCRIPT = """
   // long enough to clear a real mid-word thinking pause -- whether that's
   // from a real pause or the single atomic value fill() sets.
   //
-  // The note modal only ever prompts for clicks now -- typing is recorded
-  // (push below) but never interrupts the operator with a popup, since a
-  // single click can still fire this listener many times (one per
-  // keystroke-like input event) and was popping the modal mid-typing.
+  // Typing never shows the note modal at all -- it's opt-in via the "Add
+  // note" button now, not tied to any particular DOM event.
   document.addEventListener(
     "input",
     (event) => {
@@ -364,11 +382,11 @@ class CaptureSession:
         self._record_lifecycle_action("tab_closed", value=None, url=url, dom=dom)
 
     def _on_pending_note(self, source: dict, text: str) -> None:
-        # Targets the action still _pending — the one the operator was just
-        # prompted about by the mandatory modal — not self.actions[-1]
-        # (which is always one event behind, per the class docstring). A
-        # no-op if nothing is pending (e.g. the modal's binding call races
-        # a navigation that already dropped it).
+        # Targets the action still _pending — the one the operator opened
+        # the "Add note" modal for — not self.actions[-1] (which is always
+        # one event behind, per the class docstring). A no-op if nothing is
+        # pending (e.g. the modal's binding call races a navigation that
+        # already dropped it).
         if self._pending is not None:
             self._pending["operator_note"] = text
 

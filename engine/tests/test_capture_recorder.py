@@ -8,16 +8,6 @@ from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.trajectory.extract import expected_effect_for_action
 
 
-def _confirm_note(page) -> None:
-    """Dismisses the mandatory note modal with its pre-filled default —
-    every real click in these tests shows one, and it blocks any further
-    click from reaching its real target until confirmed. Fills never show
-    this modal."""
-    page.wait_for_selector("#__atlasNoteModal input")
-    page.keyboard.press("Enter")
-    page.wait_for_selector("#__atlasNoteModal", state="detached")
-
-
 def test_capture_session_records_click_and_fill(fixture_portal_url):
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
@@ -221,7 +211,7 @@ def test_recorded_dom_snapshots_exclude_the_extraction_button(fixture_portal_url
 
 
 def test_capture_session_attaches_a_pending_note_to_the_action_still_in_flight(fixture_portal_url):
-    """A note submitted via __atlas_pending_note (the mandatory modal's
+    """A note submitted via __atlas_pending_note (the Add Note modal's
     binding) attaches to the action still _pending — the one the operator
     was just prompted about — not to whatever was last finalized. This is
     the opposite targeting from the old optional note box, which could only
@@ -232,12 +222,8 @@ def test_capture_session_attaches_a_pending_note_to_the_action_still_in_flight(f
         page.goto(f"{fixture_portal_url}/login.html")
 
         with CaptureSession(page) as capture:
-            page.click("#username")  # becomes pending, its mandatory modal appears
+            page.click("#username")  # becomes pending
             page.evaluate("() => window.__atlas_pending_note('per payer instructions')")
-            # Bypassing the modal's own UI (unlike a real operator) to target
-            # the binding directly -- still must dismiss it exactly as a real
-            # confirm would, or it blocks the next click like any other.
-            page.evaluate("() => document.getElementById('__atlasNoteModal')?.remove()")
             page.click("#password")  # finalizes the #username click, now carrying the note
 
         browser.close()
@@ -261,13 +247,9 @@ def test_capture_session_ignores_a_pending_note_submitted_when_nothing_is_pendin
 
 
 def test_capture_session_does_not_show_a_note_modal_for_a_click_that_only_focuses_a_field(fixture_portal_url):
-    """Reproduced via a real recording: clicking a search box to start
-    typing immediately popped the mandatory modal, which steals focus --
-    the operator could never actually type a single letter without first
-    confirming a note for the mere act of clicking the field, so they kept
-    re-clicking it instead. A click into an INPUT/TEXTAREA/SELECT is just
-    setup for the fill that follows (fills never show this modal at all)
-    and is not itself a meaningful action."""
+    """Note-taking is opt-in now (via the Add Note button, see
+    mountNoteButton) -- no click ever auto-shows a modal, including a click
+    that's just setup for typing into the field."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -284,42 +266,54 @@ def test_capture_session_does_not_show_a_note_modal_for_a_click_that_only_focuse
         browser.close()
 
     # The focus-only click is still recorded (unchanged, pre-existing
-    # behavior) -- only the mandatory modal is skipped for it. page.type()
-    # fires one "input" per keystroke, each its own fill action (matching
-    # real per-keystroke recording); none of them ever show a modal.
+    # behavior). page.type() fires one "input" per keystroke, each its own
+    # fill action (matching real per-keystroke recording); none of them
+    # ever show a modal.
     kinds = [a.kind for a in capture.actions]
     assert kinds == ["click"] + ["fill"] * (len(kinds) - 1)
     assert capture.actions[0].operator_note is None
     assert capture.actions[-1].value == "demo"
 
 
-def test_capture_session_shows_a_mandatory_note_modal_after_a_click_with_a_mechanical_default(fixture_portal_url):
+def test_add_note_button_shows_a_modal_targeting_the_action_still_pending(fixture_portal_url):
+    """Note-taking is opt-in via the "Add note" button (see
+    mountNoteButton), not an automatic popup after every click -- an
+    earlier version showed it automatically and raced the click's own
+    handlers no matter how long it waited first first (confirmed live
+    against a real EHR portal: a side panel it opened closed itself again
+    the instant the modal's focus-steal happened). The modal still targets
+    whatever action is still _pending when the operator opens it."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{fixture_portal_url}/login.html")
 
         with CaptureSession(page) as capture:
-            page.click("#login-btn")
+            page.click("#login-btn")  # becomes pending -- no modal pops automatically
+            page.wait_for_timeout(100)
+            assert page.locator("#__atlasNoteModal").count() == 0
+
+            page.wait_for_selector("#__atlasNoteBtn")
+            page.click("#__atlasNoteBtn")
             modal_input = page.locator("#__atlasNoteModal input")
             modal_input.wait_for(state="visible")
             assert modal_input.input_value() == ""  # not prefilled
-            assert modal_input.get_attribute("placeholder") is None  # not even shown as a hint
-            default_text = modal_input.get_attribute("data-default-text")
-            assert default_text  # non-empty mechanical default, no LLM call
-            page.keyboard.press("Enter")
+            assert modal_input.get_attribute("placeholder") is None
+            modal_input.fill("submitting the claim")
+            page.click("#__atlasNoteModalContinueBtn")
+            page.wait_for_selector("#__atlasNoteModal", state="detached")
             page.click("#username")  # finalizes the login-btn click, carrying its note
 
         browser.close()
 
-    assert capture.actions[0].operator_note == default_text
+    assert capture.actions[0].operator_note == "submitting the claim"
 
 
 def test_capture_session_does_not_show_a_note_modal_for_a_page_triggered_click(fixture_portal_url):
     """A real portal's own script can click a button programmatically --
     auto-advance, a hidden trigger, a restore-draft action -- with no human
-    anywhere near it. The modal must not pop for that; only a real,
-    trusted click should ever prompt the operator."""
+    anywhere near it. Nothing ever auto-shows the modal regardless, but
+    this is still recorded either way."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -360,9 +354,9 @@ def test_capture_session_does_not_show_a_note_modal_for_a_page_triggered_input(f
 
 def test_capture_session_note_modal_blocks_a_subsequent_click_until_confirmed(fixture_portal_url):
     """Proves the overlay is genuinely blocking, not cosmetic: a second real
-    click attempted while the modal from the first is still open must fail
-    to reach its target (Playwright's actionability check raises) rather
-    than silently landing on the overlay."""
+    click attempted while the modal (opened via the Add Note button) is
+    still open must fail to reach its target (Playwright's actionability
+    check raises) rather than silently landing on the overlay."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -370,6 +364,8 @@ def test_capture_session_note_modal_blocks_a_subsequent_click_until_confirmed(fi
 
         with CaptureSession(page) as capture:
             page.click("#login-btn")
+            page.wait_for_selector("#__atlasNoteBtn")
+            page.click("#__atlasNoteBtn")
             page.wait_for_selector("#__atlasNoteModal")
             with pytest.raises(Exception):
                 page.click("#username", timeout=1000)
@@ -381,8 +377,8 @@ def test_capture_session_never_shows_a_note_modal_for_typing(fixture_portal_url)
     """A real operator typing into a field fires one 'input' event per
     keystroke (see the real multi-keystroke trajectories this session
     captured) -- a modal on every keystroke (or even once per field) made
-    typing unusable and popped up unexpectedly mid-flow, so fills no longer
-    ever trigger the mandatory modal; only clicks do."""
+    typing unusable and popped up unexpectedly mid-flow, so fills never
+    auto-trigger it; the Add Note button is the only way to open it."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -399,10 +395,11 @@ def test_capture_session_never_shows_a_note_modal_for_typing(fixture_portal_url)
 
 
 def test_capture_session_use_default_button_fills_the_box_without_confirming(fixture_portal_url):
-    """Use Default only populates the input with the mechanical default,
-    replacing whatever was typed -- it never confirms by itself, so the
-    default text is only ever shown once the operator explicitly asks for
-    it, and Continue is still required to actually submit the note."""
+    """Use Default only populates the input with the (blank, now that the
+    modal is opened manually via the Add Note button rather than
+    auto-populated with a "Clicked ..." description) default, replacing
+    whatever was typed -- it never confirms by itself, so Continue is
+    still required to actually submit the note."""
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
@@ -410,12 +407,13 @@ def test_capture_session_use_default_button_fills_the_box_without_confirming(fix
 
         with CaptureSession(page) as capture:
             page.click("#login-btn")
+            page.wait_for_selector("#__atlasNoteBtn")
+            page.click("#__atlasNoteBtn")
             modal_input = page.locator("#__atlasNoteModal input")
             modal_input.wait_for(state="visible")
-            default_text = modal_input.get_attribute("data-default-text")
             modal_input.fill("something the operator typed instead")
             page.click("#__atlasNoteModalDefaultBtn")
-            assert modal_input.input_value() == default_text  # box now shows it
+            assert modal_input.input_value() == ""  # cleared back to the (blank) default
             assert page.locator("#__atlasNoteModal").count() == 1  # still open, not confirmed
             page.click("#__atlasNoteModalContinueBtn")
             page.wait_for_selector("#__atlasNoteModal", state="detached")
@@ -423,7 +421,7 @@ def test_capture_session_use_default_button_fills_the_box_without_confirming(fix
 
         browser.close()
 
-    assert capture.actions[0].operator_note == default_text
+    assert capture.actions[0].operator_note == ""
 
 
 def test_capture_session_undoes_the_most_recently_finalized_action(fixture_portal_url):
@@ -615,7 +613,6 @@ def test_capture_session_falls_back_to_a_text_selector_when_no_id_or_testid(fixt
 
         with CaptureSession(page) as capture:
             page.click("text=Forgot password?")
-            _confirm_note(page)
             page.fill("#username", "demo")  # finalizes the click above
 
         browser.close()
