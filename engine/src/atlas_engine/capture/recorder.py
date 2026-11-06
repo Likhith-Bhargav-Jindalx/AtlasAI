@@ -189,7 +189,22 @@ _LISTENER_SCRIPT = """
       // fills, since the operator could never get past this modal to type.
       const tag = event.target.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      showPendingNoteModal(`Clicked "${text || event.target.id || "element"}"`);
+      // Deferred, not shown synchronously inside this capture-phase handler:
+      // we run before the click's own target/bubble-phase handlers (capture
+      // always fires first), so showing this modal here -- and stealing
+      // focus onto its input -- would race whatever the real click was about
+      // to do. Confirmed live on a real EHR portal: clicking to open a
+      // "Billing" side panel immediately closed it again, because the panel
+      // checks (on mount) whether it actually has focus and closes itself if
+      // not -- this modal had already stolen focus before that check ran.
+      // Not site-specific to fix: a short real delay (not setTimeout(fn, 0),
+      // which only pushes one task later -- some frameworks settle their own
+      // open/focus logic over several render or effect cycles) gives ANY
+      // site's own click-triggered UI however long it needs to finish first,
+      // before this modal exists at all, regardless of what mechanism that
+      // site uses to decide it lost focus or was clicked outside.
+      const clickedText = text || event.target.id || "element";
+      setTimeout(() => showPendingNoteModal(`Clicked "${clickedText}"`), 50);
     },
     true,
   );
