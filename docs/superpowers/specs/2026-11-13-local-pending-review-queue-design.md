@@ -87,7 +87,8 @@ during Stop):
 ```
 ATLAS_RUN_ROOT/pending_recordings/<uuid>/
   manifest.json          # org_id, user_id, start_url, created_at, role,
-                          # request_id, duration_seconds, action_count,
+                          # request_id, video_started_at_ms, video_ended_at_ms,
+                          # action_count, per-extra-page timing/video info,
                           # upload_error (set only after a failed Upload attempt)
   actions.json
   trajectory.json
@@ -95,7 +96,15 @@ ATLAS_RUN_ROOT/pending_recordings/<uuid>/
   video.webm
   video-page{N}.webm      (optional, multi-tab)
   actions-page{N}.json    (optional, multi-tab)
+  extraction-{i}.json     (optional, one per page-data grab during capture)
+  trace.zip, network.har  (optional, rarely present — capture_artifacts
+                           today's persist_recording already supports)
 ```
+
+All of the above mirrors exactly what `persist_recording` writes today
+(`recording_service.py`), minus the Azure upload and Postgres row — every
+kwarg it accepts must have a local-only equivalent here, or that data is
+silently lost the moment a recording passes through the pending queue.
 
 `manifest.json` is the only new data model this feature introduces — a
 flat local JSON file per pending recording. No ORM model, no DB table.
