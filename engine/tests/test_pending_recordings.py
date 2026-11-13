@@ -2,8 +2,13 @@ import json
 import uuid
 from pathlib import Path
 
+import pytest
+
 from atlas_engine.capture.events import RecordedAction
-from atlas_engine.pending_recordings import PendingManifest, pending_root, write_pending_recording
+from atlas_engine.pending_recordings import (
+    PendingManifest, get_pending_dir, get_pending_recording, list_pending_recordings,
+    load_pending_actions, pending_recording_steps, pending_root, write_pending_recording,
+)
 
 
 def _action(index: int, kind: str = "click") -> RecordedAction:
@@ -65,3 +70,44 @@ def test_write_pending_recording_never_imports_azure_or_db_at_call_time(monkeypa
 
     pending_id = write_pending_recording("org-1", "https://x.test", [_action(0)])
     assert (pending_root() / str(pending_id)).is_dir()
+
+
+def test_get_pending_dir_raises_value_error_for_an_unknown_id():
+    with pytest.raises(ValueError, match="No pending recording"):
+        get_pending_dir(str(uuid.uuid4()))
+
+
+def test_list_pending_recordings_returns_newest_first():
+    first_id = write_pending_recording("org-1", "https://x.test/first", [_action(0)])
+    second_id = write_pending_recording("org-1", "https://x.test/second", [_action(0)])
+
+    manifests = list_pending_recordings()
+    ids_in_order = [m.id for m in manifests if m.id in (str(first_id), str(second_id))]
+    assert ids_in_order == [str(second_id), str(first_id)]
+
+
+def test_get_pending_recording_returns_the_manifest():
+    pending_id = write_pending_recording("org-1", "https://x.test", [_action(0)])
+    manifest = get_pending_recording(str(pending_id))
+    assert manifest.id == str(pending_id)
+
+
+def test_load_pending_actions_reconstructs_recorded_actions():
+    pending_id = write_pending_recording("org-1", "https://x.test", [_action(0), _action(1)])
+    pending_dir = get_pending_dir(str(pending_id))
+
+    actions = load_pending_actions(pending_dir, "actions.json")
+
+    assert len(actions) == 2
+    assert actions[0].kind == "click"
+    assert actions[0].dom_before == ""
+
+
+def test_pending_recording_steps_computes_captions_and_offsets():
+    actions = [_action(0), _action(1)]
+    steps = pending_recording_steps(actions, video_started_at_ms=1000)
+
+    assert steps[0]["order_index"] == 0
+    assert steps[0]["caption"] == "Click #go"
+    assert steps[0]["offset_ms"] == 0
+    assert steps[1]["offset_ms"] == 10

@@ -7,7 +7,7 @@ from pathlib import Path
 from atlas_engine.brain.serialize import trajectory_to_dict
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.config import settings
-from atlas_engine.recording_service import PageCapture, _merge_actions_for_trajectory
+from atlas_engine.recording_service import PageCapture, _caption_for, _merge_actions_for_trajectory
 from atlas_engine.trajectory.extract import extract_trajectory
 
 
@@ -142,3 +142,45 @@ def write_pending_recording(
     manifest.save(pending_dir)
 
     return pending_id
+
+
+def get_pending_dir(pending_id: str) -> Path:
+    pending_dir = pending_root() / pending_id
+    if not pending_dir.is_dir():
+        raise ValueError(f"No pending recording: {pending_id}")
+    return pending_dir
+
+
+def list_pending_recordings() -> list[PendingManifest]:
+    manifests = []
+    for child in pending_root().iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            manifests.append(PendingManifest.load(child))
+        except (FileNotFoundError, json.JSONDecodeError):
+            continue
+    manifests.sort(key=lambda m: m.created_at, reverse=True)
+    return manifests
+
+
+def get_pending_recording(pending_id: str) -> PendingManifest:
+    return PendingManifest.load(get_pending_dir(pending_id))
+
+
+def load_pending_actions(pending_dir: Path, filename: str) -> list[RecordedAction]:
+    path = pending_dir / filename
+    if not path.exists():
+        return []
+    raw = json.loads(path.read_text())
+    return [RecordedAction(**{**item, "dom_before": "", "dom_after": ""}) for item in raw]
+
+
+def pending_recording_steps(actions: list[RecordedAction], video_started_at_ms: int | None) -> list[dict]:
+    steps = []
+    for action in actions:
+        offset_ms = None
+        if video_started_at_ms is not None:
+            offset_ms = max(0, action.timestamp_ms - video_started_at_ms)
+        steps.append({"order_index": action.index, "caption": _caption_for(action), "offset_ms": offset_ms})
+    return steps
