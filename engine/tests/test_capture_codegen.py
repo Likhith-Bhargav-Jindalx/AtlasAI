@@ -438,6 +438,17 @@ def test_strip_note_markers_preserves_position_as_a_marker_comment():
     assert lines[1] == 'page.click("#next")'
 
 
+def test_parse_codegen_actions_skips_undo_button_clicks():
+    codegen = (
+        'page.get_by_role("button", name="Search").click()\n'
+        'page.get_by_role("button", name="↶ Undo last step").click()\n'
+        'page.locator("#__atlasUndoBtn").click()\n'
+        'page.click("#next")\n'
+    )
+    actions = parse_codegen_actions(codegen)
+    assert [a.selector for a in actions] == ['codegen_expr:page.get_by_role("button", name="Search")', "#next"]
+
+
 def test_parse_codegen_actions_drops_the_note_marker_with_no_step():
     codegen = "# __ATLAS_NOTE__\npage.click(\"#next\")\n"
     actions = parse_codegen_actions(codegen)

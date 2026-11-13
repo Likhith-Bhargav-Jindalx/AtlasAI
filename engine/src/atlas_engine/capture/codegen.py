@@ -234,6 +234,10 @@ def parse_codegen_actions(codegen: str) -> list[CodegenAction]:
             continue
         if not line or line.startswith("#"):
             continue
+        # The Undo button only exists during recording. Skipped here, not in a
+        # strip_* pass, so already-stored scripts are fixed at authoring time too.
+        if "__atlasUndoBtn" in line or "Undo last step" in line:
+            continue
 
         with_block = re.match(r"^with \w+\.(expect_popup|expect_download)\b", line)
         if with_block:
