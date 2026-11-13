@@ -1,0 +1,55 @@
+name: Audit codegen.py note-button bug
+
+# One-off diagnostic: counts how many stored recordings' native codegen.py
+# scripts contain the unfiltered "Add note" button/modal span (the bug
+# fixed by strip_note_markers). Manual trigger only, never runs
+# automatically. Prints only aggregate counts and recording-folder
+# prefixes (not secret, just UUIDs) - never blob contents, never the
+# storage connection string itself.
+on:
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install azure-storage-blob
+        run: pip install azure-storage-blob
+
+      - name: Scan recordings/*/codegen.py for the unfiltered note span
+        env:
+          ATLAS_AZURE_STORAGE_CONNECTION_STRING: ${{ secrets.ATLAS_AZURE_STORAGE_CONNECTION_STRING }}
+        run: |
+          python3 <<'PYEOF'
+          import os
+          from azure.storage.blob import BlobServiceClient
+
+          conn_str = os.environ["ATLAS_AZURE_STORAGE_CONNECTION_STRING"]
+          client = BlobServiceClient.from_connection_string(conn_str)
+          container = client.get_container_client("atlas-runs")
+
+          total_codegen = 0
+          affected = []
+
+          for blob in container.list_blobs(name_starts_with="recordings/"):
+              if not blob.name.endswith("/codegen.py"):
+                  continue
+              total_codegen += 1
+              text = container.download_blob(blob.name).readall().decode("utf-8", errors="replace")
+              if "Add note" in text or "__atlasNoteBtn" in text:
+                  # recordings/<uuid>/codegen.py -> just the uuid, not sensitive
+                  prefix = blob.name.split("/")[1]
+                  affected.append(prefix)
+
+          print(f"codegen.py blobs scanned: {total_codegen}")
+          print(f"affected by the note-button bug: {len(affected)}")
+          if affected:
+              print("affected recording folder ids:")
+              for a in affected:
+                  print(f"  - {a}")
+          PYEOF
