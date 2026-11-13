@@ -5,6 +5,7 @@ import {
   pendingRecordingVideoUrl, useDiscardPendingRecording, usePendingRecordingDetail, useUploadPendingRecording,
 } from '../../lib/pendingRecordings'
 import { formatDuration } from '../../lib/format'
+import { VideoStepPlayer } from '../../components/VideoStepPlayer'
 
 export function PendingReviewPage() {
   const { pendingId } = useParams<{ pendingId: string }>()
@@ -17,6 +18,7 @@ export function PendingReviewPage() {
   if (isLoading || !pending) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
   const mainPage = pending.pages[0]
+  const totalActions = pending.pages.reduce((sum, page) => sum + page.steps.length, 0)
 
   async function handleUpload() {
     const result = await upload.mutateAsync()
@@ -35,8 +37,9 @@ export function PendingReviewPage() {
         <div className="flex flex-col gap-2">
           <h1 className="font-display text-[28px] font-semibold tracking-tight m-0">Review before upload</h1>
           <div className="text-[13.5px] text-atlas-body">
-            {pending.start_url} · {pending.action_count} action{pending.action_count === 1 ? '' : 's'}
+            {pending.start_url} · {totalActions} action{totalActions === 1 ? '' : 's'}
             {mainPage ? ` · ${formatDuration(mainPage.duration_seconds)}` : ''}
+            {pending.pages.length > 1 ? ` · ${pending.pages.length} tabs` : ''}
           </div>
           <div className="text-[12.5px] text-atlas-body">
             Only on this machine until uploaded — nobody else can see this recording yet.
@@ -90,17 +93,23 @@ export function PendingReviewPage() {
         <div className="text-[13px] text-atlas-danger">{(upload.error as Error).message}</div>
       )}
 
-      {mainPage?.has_video && (
-        <video src={pendingRecordingVideoUrl(pending.id, 0)} controls className="rounded-2xl overflow-hidden border border-atlas-border bg-black aspect-video w-full max-w-[720px]" />
-      )}
-
-      <div className="flex flex-col gap-2">
-        {mainPage?.steps.map((step) => (
-          <div key={step.order_index} className="text-[13.5px] text-atlas-ink py-1.5 border-b border-atlas-rowBorder">
-            {step.caption}
-          </div>
-        ))}
-      </div>
+      {pending.pages.map((page) => (
+        <div key={page.page_index} className="flex flex-col gap-3">
+          {pending.pages.length > 1 && (
+            <div className="text-[12.5px] font-medium text-atlas-body">
+              {page.page_index === 0 ? 'Main window' : `Tab ${page.page_index + 1}`}
+            </div>
+          )}
+          <VideoStepPlayer
+            recordingId={pending.id}
+            pageIndex={page.page_index}
+            hasVideo={page.has_video}
+            steps={page.steps}
+            durationSeconds={page.duration_seconds}
+            videoUrl={pendingRecordingVideoUrl(pending.id, page.page_index)}
+          />
+        </div>
+      ))}
     </div>
   )
 }

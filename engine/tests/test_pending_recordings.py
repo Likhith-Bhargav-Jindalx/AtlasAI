@@ -7,6 +7,7 @@ import pytest
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import Organization, Recording, VideoAsset
+from atlas_engine.recording_service import PageCapture, _caption_for
 from atlas_engine.pending_recordings import (
     PendingManifest, discard_pending_recording, get_pending_dir, get_pending_recording,
     list_pending_recordings, load_pending_actions, pending_recording_steps, pending_root,
@@ -184,3 +185,16 @@ def test_upload_pending_recording_keeps_the_folder_and_records_the_error_on_fail
     assert pending_dir.exists()
     manifest = get_pending_recording(str(pending_id))
     assert "blob upload exploded" in manifest.upload_error
+
+
+def test_action_count_includes_every_tab():
+    tab = PageCapture(page_index=1, actions=[_action(0, "tab_opened"), _action(1), _action(2, "tab_closed")])
+    pending_id = write_pending_recording("org-1", "https://x.test", [_action(0)], additional_pages=[tab])
+    assert get_pending_recording(str(pending_id)).action_count == 4
+
+
+def test_tab_lifecycle_actions_get_their_own_captions():
+    opened = _action(0, "tab_opened")
+    opened.value = "https://x.test/start"
+    assert _caption_for(opened) == "Open new tab at https://x.test/start"
+    assert _caption_for(_action(1, "tab_closed")) == "Close tab"
