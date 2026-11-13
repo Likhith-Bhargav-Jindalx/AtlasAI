@@ -634,6 +634,10 @@ def _caption_for(action: RecordedAction) -> str:
         return f"Click {selector}"
     if action.kind == "fill":
         return f"Fill {selector}"
+    if action.kind == "tab_opened":
+        return f"Open new tab at {action.value or action.url_after}"
+    if action.kind == "tab_closed":
+        return "Close tab"
     return f"Navigate to {action.url_after}"
 
 

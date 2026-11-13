@@ -136,7 +136,7 @@ def write_pending_recording(
         user_id=user_id,
         video_started_at_ms=video_started_at_ms,
         video_ended_at_ms=video_ended_at_ms,
-        action_count=len(actions),
+        action_count=len(actions) + sum(len(p.actions) for p in additional_pages or []),
         has_video=has_video,
         pages=pages_info,
     )
