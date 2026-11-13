@@ -39,7 +39,7 @@ export function LiveRecordingPage() {
     setStopError(null)
     try {
       const result = await stopRecording.mutateAsync(captureSessionId)
-      navigate(`/agent/recordings/${result.recording_id}`)
+      navigate(`/agent/pending/${result.pending_id}`)
     } catch (err) {
       setStopError(err instanceof ApiError ? err.message : 'Could not stop the recording. If you closed the browser window, wait a moment and try again.')
     }

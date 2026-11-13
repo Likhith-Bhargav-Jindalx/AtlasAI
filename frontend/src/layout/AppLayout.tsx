@@ -7,6 +7,7 @@ const NAV: Record<ViewRole, { to: string; label: string }[]> = {
   agent: [
     { to: '/agent', label: 'Request inbox' },
     { to: '/agent/library', label: 'Recording library' },
+    { to: '/agent/pending', label: 'Pending uploads' },
   ],
   dev: [
     { to: '/dev', label: 'Recording library' },

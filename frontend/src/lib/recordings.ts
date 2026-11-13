@@ -129,7 +129,7 @@ export function useStartRecording() {
 export function useStopRecording() {
   return useMutation({
     mutationFn: (captureSessionId: string) =>
-      apiFetch<{ recording_id: string }>(`/recordings/${captureSessionId}/stop`, { method: 'POST' }),
+      apiFetch<{ pending_id: string }>(`/recordings/${captureSessionId}/stop`, { method: 'POST' }),
   })
 }
 
