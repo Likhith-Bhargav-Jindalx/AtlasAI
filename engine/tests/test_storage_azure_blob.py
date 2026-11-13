@@ -165,3 +165,15 @@ def test_run_dir_upload_goes_through_with_retry(monkeypatch):
     run.upload("golden.py")
 
     assert calls == [1]
+
+
+def test_uploads_use_small_blocks_and_a_long_send_timeout():
+    # Sentry: video uploads from a slow clinic uplink hit "The write operation
+    # timed out" under the SDK defaults (one request up to 64 MB, 20s to send).
+    store = _store()
+    config = store._container_client._config
+    assert config.max_single_put_size == 4 * 1024 * 1024
+    assert config.max_block_size == 4 * 1024 * 1024
+    transport = store._container_client._pipeline._transport
+    transport = getattr(transport, "_transport", transport)
+    assert transport.connection_config.timeout == 120

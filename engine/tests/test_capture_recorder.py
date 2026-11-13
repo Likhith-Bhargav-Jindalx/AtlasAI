@@ -713,3 +713,31 @@ def test_capture_session_records_no_modifiers_for_a_plain_click(fixture_portal_u
         browser.close()
 
     assert capture.actions[0].modifiers == []
+
+
+def test_a_tab_closed_recorded_after_undo_and_exit_gets_a_fresh_index():
+    # Prod upload failure (video_steps unique violation): live_capture exits a
+    # tab's capture, which applies Undo removals, and only then closes the
+    # browser -- firing the tab's close handler. Numbering by len(actions)
+    # reused the highest index.
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto("data:text/html,<button id=a>a</button><button id=b>b</button><button id=c>c</button>")
+
+        capture = CaptureSession(page)
+        capture.__enter__()
+        page.wait_for_timeout(200)
+        page.click("#a")
+        page.click("#b")
+        page.click("#c")
+        page.wait_for_timeout(200)
+        assert capture._on_undo_last({}) is True  # removes b
+        capture.__exit__(None, None, None)
+        capture.record_tab_closed()
+
+        browser.close()
+
+    indexes = [a.index for a in capture.actions]
+    assert [a.kind for a in capture.actions] == ["click", "click", "tab_closed"]
+    assert len(indexes) == len(set(indexes)), indexes

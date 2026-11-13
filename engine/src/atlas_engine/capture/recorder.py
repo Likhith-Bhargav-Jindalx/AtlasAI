@@ -323,6 +323,13 @@ class CaptureSession:
         if self._removed:
             self.actions = [a for a in self.actions if a.index not in self._removed]
 
+    def _next_index(self) -> int:
+        # Not len(self.actions): once Undo removals are applied the list is
+        # shorter than the highest index, and a tab_closed recorded after that
+        # (live_capture closes the browser after exiting each tab's capture)
+        # would reuse an index and break video_steps' unique constraint.
+        return self.actions[-1].index + 1 if self.actions else 0
+
     def _finalize_pending(self, *, url_after: str, dom_after: str) -> None:
         if self._pending is None:
             return
@@ -330,7 +337,7 @@ class CaptureSession:
         self._pending = None
         self.actions.append(
             RecordedAction(
-                index=len(self.actions),
+                index=self._next_index(),
                 kind=pending["kind"],
                 selector_candidates=pending["selector_candidates"],
                 value=pending["value"],
@@ -370,7 +377,7 @@ class CaptureSession:
         self._finalize_pending(url_after=url, dom_after=dom)
         self.actions.append(
             RecordedAction(
-                index=len(self.actions), kind=kind, selector_candidates=[], value=value,
+                index=self._next_index(), kind=kind, selector_candidates=[], value=value,
                 url_before=url, url_after=url, dom_before=dom, dom_after=dom, tab_origin=tab_origin,
             )
         )

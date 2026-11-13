@@ -198,3 +198,25 @@ def test_tab_lifecycle_actions_get_their_own_captions():
     opened.value = "https://x.test/start"
     assert _caption_for(opened) == "Open new tab at https://x.test/start"
     assert _caption_for(_action(1, "tab_closed")) == "Close tab"
+
+
+def test_a_failed_pending_upload_leaves_no_failed_recording_row(monkeypatch):
+    # Each retry of a failing Upload used to add another status="failed" row;
+    # the pending folder is the copy that survives instead.
+    org_id = _make_org()
+    pending_id = write_pending_recording(org_id, "https://x.test", [_action(0)])
+
+    from atlas_engine.storage.local import RunDir
+
+    def _boom(self, name, data):
+        raise ConnectionError("simulated network failure")
+
+    monkeypatch.setattr(RunDir, "write_json", _boom)
+
+    for _ in range(2):
+        with pytest.raises(ConnectionError):
+            upload_pending_recording(str(pending_id))
+
+    assert get_pending_dir(str(pending_id)).exists()
+    with session_scope() as session:
+        assert session.query(Recording).filter_by(org_id=uuid.UUID(org_id)).count() == 0

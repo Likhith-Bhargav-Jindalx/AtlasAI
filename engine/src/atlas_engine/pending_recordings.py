@@ -241,6 +241,7 @@ def upload_pending_recording(pending_id: str) -> uuid.UUID:
             page_extractions=page_extractions or None,
             codegen_script=codegen_script,
             capture_artifacts=capture_artifacts or None,
+            keep_failed_row=False,  # the pending folder is the copy that survives a failed upload
         )
     except Exception as exc:
         manifest.upload_error = f"{type(exc).__name__}: {exc}"

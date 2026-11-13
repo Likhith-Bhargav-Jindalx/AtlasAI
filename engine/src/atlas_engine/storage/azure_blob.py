@@ -18,6 +18,14 @@ from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_b
 # more than one.
 _confirmed_containers: set[str] = set()
 
+# Slow uplinks (Sentry: one clinic machine, 4 video uploads) timed out with
+# the SDK defaults: files under 64 MB go up as ONE request, and each request
+# must finish sending within connection_timeout (20s; urllib3 applies it to
+# writing the body too). 4 MB blocks with 120s each need only ~0.3 Mbps, and
+# a failed block is retried on its own instead of restarting the whole file.
+_UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+_UPLOAD_SEND_TIMEOUT_SECONDS = 120
+
 
 def _with_retry(func, *, attempts: int = 3, base_delay: float = 0.5):
     """Retries a transient Azure Blob Storage network call up to `attempts`
@@ -96,7 +104,12 @@ class AzureBlobRunStore:
     """
 
     def __init__(self, connection_string: str, container: str):
-        self._client = BlobServiceClient.from_connection_string(connection_string)
+        self._client = BlobServiceClient.from_connection_string(
+            connection_string,
+            max_single_put_size=_UPLOAD_CHUNK_BYTES,
+            max_block_size=_UPLOAD_CHUNK_BYTES,
+            connection_timeout=_UPLOAD_SEND_TIMEOUT_SECONDS,
+        )
         self._container_client = self._client.get_container_client(container)
         if container not in _confirmed_containers:
             try:
