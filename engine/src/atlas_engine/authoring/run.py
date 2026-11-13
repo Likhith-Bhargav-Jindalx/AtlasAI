@@ -10,7 +10,7 @@ from atlas_engine.authoring.replay import run_replay_phase
 from atlas_engine.authoring.state import update_run
 from atlas_engine.brain.models import ReferenceTrajectory
 from atlas_engine.brain.serialize import trajectory_from_dict
-from atlas_engine.capture.codegen import build_codegen_trajectory, parse_codegen_actions
+from atlas_engine.capture.codegen import build_codegen_trajectory, parse_codegen_actions, strip_note_markers
 from atlas_engine.db import session_scope
 from atlas_engine.db.models import AuthoringRun, GoldenScript, PortalProfile, Recording, RecordingRequest
 from atlas_engine.db.models import ReferenceTrajectory as ReferenceTrajectoryModel
@@ -41,7 +41,9 @@ def apply_stored_codegen_selectors(
     codegen_blob_ref = f"{capture_blob_prefix}/codegen.py"
     if not store.exists(codegen_blob_ref):
         return trajectory, False
-    codegen_actions = parse_codegen_actions(store.read_text(codegen_blob_ref))
+    # Re-stripped here (idempotent) so scripts stored before the note filter
+    # existed are cleaned at authoring time, with no blob rewrite.
+    codegen_actions = parse_codegen_actions(strip_note_markers(store.read_text(codegen_blob_ref)))
     rebuilt = build_codegen_trajectory(codegen_actions)
     if rebuilt is None:
         return trajectory, False

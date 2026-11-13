@@ -264,6 +264,32 @@ def test_apply_stored_codegen_selectors_rebuilds_the_trajectory_from_the_script(
     assert enriched.steps[1].value == "demo"
 
 
+def test_apply_stored_codegen_selectors_strips_notes_from_scripts_stored_before_the_filter():
+    # The 8 prod recordings captured before the note filter still have the
+    # Add-note span in their stored codegen.py.
+    trajectory = ReferenceTrajectory(
+        steps=(TrajectoryStep(0, "click", [{"selector": "#old-btn", "rank": 1}], None, "none"),)
+    )
+    prefix = f"recordings/{uuid.uuid4()}"
+    codegen_dir = Path(settings.ensure_run_root()) / prefix
+    codegen_dir.mkdir(parents=True, exist_ok=True)
+    (codegen_dir / "codegen.py").write_text(
+        'page.locator("text=Search").click()\n'
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.get_by_role("textbox").fill("why this step")\n'
+        'page.get_by_role("button", name="Continue").click()\n'
+        'page.locator("text=Next").click()\n'
+    )
+
+    enriched, applied = apply_stored_codegen_selectors(trajectory, prefix)
+
+    assert applied is True
+    assert [s.selector_candidates[0]["selector"] for s in enriched.steps] == [
+        'codegen_expr:page.locator("text=Search")',
+        'codegen_expr:page.locator("text=Next")',
+    ]
+
+
 def test_apply_stored_codegen_selectors_is_a_noop_without_a_script():
     trajectory = ReferenceTrajectory(
         steps=(
