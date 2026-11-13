@@ -748,7 +748,7 @@ git commit -m "feat: default live capture's Stop to the local pending folder ins
 - Create: `engine/tests/test_api_pending_recordings.py`
 
 **Interfaces:**
-- Consumes: everything produced by Tasks 3–7.
+- Consumes: everything produced by Tasks 1–5.
 - Produces: `GET /pending-recordings`, `GET /pending-recordings/{pending_id}`, `GET /pending-recordings/{pending_id}/video/{page_index}`, `POST /pending-recordings/{pending_id}/upload`, `POST /pending-recordings/{pending_id}/discard`; `StopRecordingResponse.pending_id` (renamed from `.recording_id`). Used by Task 7 (frontend).
 
 - [ ] **Step 1: Update the existing stop-endpoint test for the field rename and new default**
@@ -1087,11 +1087,11 @@ git commit -m "feat: add pending-recordings API endpoints, rename stop response 
 
 **Interfaces:**
 - Consumes: `apiFetch` from `frontend/src/lib/api.ts` (existing, unchanged).
-- Produces: `PendingRecordingSummary`, `PendingRecordingDetail`, `PendingPageDetail`, `PendingPageStep` types; `usePendingRecordings()`, `usePendingRecordingDetail(pendingId)`, `useUploadPendingRecording(pendingId)`, `useDiscardPendingRecording(pendingId)` hooks; `pendingRecordingVideoUrl(pendingId, pageIndex)`. Used by Tasks 10, 11, 12.
+- Produces: `PendingRecordingSummary`, `PendingRecordingDetail`, `PendingPageDetail`, `PendingPageStep` types; `usePendingRecordings()`, `usePendingRecordingDetail(pendingId)`, `useUploadPendingRecording(pendingId)`, `useDiscardPendingRecording(pendingId)` hooks; `pendingRecordingVideoUrl(pendingId, pageIndex)`. Used by Tasks 8, 9, 10.
 
 - [ ] **Step 1: Write the file**
 
-(No backend to stand up for a `.ts` lib file with no logic beyond `fetch` wiring — this task has no test of its own; Tasks 10/11's component tests exercise it.)
+(No backend to stand up for a `.ts` lib file with no logic beyond `fetch` wiring — this task has no test of its own; Tasks 8/9's component tests exercise it.)
 
 ```typescript
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -1601,7 +1601,7 @@ and add the two routes alongside the existing `/agent/...` routes:
 - [ ] **Step 5: Run the full frontend test suite**
 
 Run: `cd frontend && npx vitest run`
-Expected: PASS, every test file — in particular `LiveRecordingPage` has no existing test file to update (confirmed via `ls frontend/src/pages/agent/*.test.tsx` showing only `AgentLibraryPage.test.tsx`, `ReviewPage.test.tsx`, and the two new ones from Tasks 10–11), so there's nothing else to touch here.
+Expected: PASS, every test file — in particular `LiveRecordingPage` has no existing test file to update (confirmed via `ls frontend/src/pages/agent/*.test.tsx` showing only `AgentLibraryPage.test.tsx`, `ReviewPage.test.tsx`, and the two new ones from Tasks 8–9), so there's nothing else to touch here.
 
 - [ ] **Step 6: Manually verify the flow once, end to end**
 
