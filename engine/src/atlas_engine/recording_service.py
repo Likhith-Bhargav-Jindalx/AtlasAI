@@ -70,6 +70,7 @@ def persist_recording(
     page_extractions: list[dict] | None = None,
     codegen_script: str | None = None,
     capture_artifacts: list[tuple[str, Path]] | None = None,
+    keep_failed_row: bool = True,
 ) -> uuid.UUID:
     """Persists a captured recording — actions.json, the extracted
     trajectory, one VideoAsset per page (main plus any tabs/popups opened
@@ -83,7 +84,9 @@ def persist_recording(
     status="failed" on an unrecoverable upload error (after Task 3's
     retries are exhausted) — so a network blip during upload leaves a
     visibly-failed row behind instead of silently discarding a completed
-    recording session.
+    recording session. keep_failed_row=False deletes that row instead, for
+    callers that still hold the recording elsewhere (the local pending
+    queue), so each retried upload doesn't leave another "failed" row.
     """
     store = get_store()
     run_dir = store.new_run_dir(prefix="recordings")
@@ -192,13 +195,14 @@ def persist_recording(
 
             recording.status = "captured"
     except Exception:
-        logger.exception(
-            "Failed to persist recording %s after it was created — marking it failed", recording_id
-        )
+        logger.exception("Failed to persist recording %s after it was created", recording_id)
         with session_scope() as session:
-            recording = session.get(Recording, recording_id)
-            if recording is not None:
-                recording.status = "failed"
+            if keep_failed_row:
+                recording = session.get(Recording, recording_id)
+                if recording is not None:
+                    recording.status = "failed"
+            else:
+                session.query(Recording).filter_by(id=recording_id).delete()
         raise
 
     return recording_id

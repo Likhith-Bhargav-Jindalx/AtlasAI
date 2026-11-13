@@ -948,3 +948,28 @@ def test_persist_recording_saves_steps_whose_actions_share_an_index(tmp_path, fi
         steps = sorted(session.query(VideoStep).filter_by(video_asset_id=video_asset.id), key=lambda s: s.order_index)
         assert [s.order_index for s in steps] == [0, 1, 2]
         assert [s.caption_text for s in steps] == ["Click #a", "Click #c", "Close tab"]
+
+
+def test_persist_recording_deletes_the_row_on_failure_when_asked(monkeypatch, fixture_portal_url):
+    with session_scope() as session:
+        org = Organization(name="Delete On Failure Org", slug=f"delete-on-failure-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    actions = [
+        RecordedAction(0, "click", [{"selector": "#login-btn", "rank": 0}], None, f"{fixture_portal_url}/login.html", f"{fixture_portal_url}/dashboard.html", "", ""),
+    ]
+
+    from atlas_engine.storage.local import RunDir
+
+    def _boom(self, name, data):
+        raise ConnectionError("simulated network failure")
+
+    monkeypatch.setattr(RunDir, "write_json", _boom)
+
+    with pytest.raises(ConnectionError, match="simulated network failure"):
+        persist_recording(org_id, f"{fixture_portal_url}/login.html", actions, keep_failed_row=False)
+
+    with session_scope() as session:
+        assert session.query(Recording).filter_by(org_id=uuid.UUID(org_id)).count() == 0
