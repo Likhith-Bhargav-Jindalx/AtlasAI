@@ -6,8 +6,9 @@ import pytest
 
 from atlas_engine.capture.events import RecordedAction
 from atlas_engine.pending_recordings import (
-    PendingManifest, get_pending_dir, get_pending_recording, list_pending_recordings,
-    load_pending_actions, pending_recording_steps, pending_root, write_pending_recording,
+    PendingManifest, discard_pending_recording, get_pending_dir, get_pending_recording,
+    list_pending_recordings, load_pending_actions, pending_recording_steps, pending_root,
+    write_pending_recording,
 )
 
 
@@ -111,3 +112,18 @@ def test_pending_recording_steps_computes_captions_and_offsets():
     assert steps[0]["caption"] == "Click #go"
     assert steps[0]["offset_ms"] == 0
     assert steps[1]["offset_ms"] == 10
+
+
+def test_discard_pending_recording_removes_the_folder():
+    pending_id = write_pending_recording("org-1", "https://x.test", [_action(0)])
+    pending_dir = get_pending_dir(str(pending_id))
+    assert pending_dir.is_dir()
+
+    discard_pending_recording(str(pending_id))
+
+    assert not pending_dir.exists()
+
+
+def test_discard_pending_recording_raises_for_an_unknown_id():
+    with pytest.raises(ValueError, match="No pending recording"):
+        discard_pending_recording(str(uuid.uuid4()))

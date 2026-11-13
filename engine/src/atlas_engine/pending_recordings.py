@@ -1,4 +1,5 @@
 import json
+import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -184,3 +185,7 @@ def pending_recording_steps(actions: list[RecordedAction], video_started_at_ms: 
             offset_ms = max(0, action.timestamp_ms - video_started_at_ms)
         steps.append({"order_index": action.index, "caption": _caption_for(action), "offset_ms": offset_ms})
     return steps
+
+
+def discard_pending_recording(pending_id: str) -> None:
+    shutil.rmtree(get_pending_dir(pending_id))
