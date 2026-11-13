@@ -38,7 +38,10 @@ def test_login_then_record_and_author_using_only_the_api(fixture_portal_url):
     capture_session_id = start_response.json()["capture_session_id"]
 
     stop_response = client.post(f"/recordings/{capture_session_id}/stop")
-    recording_id = stop_response.json()["recording_id"]
+    pending_id = stop_response.json()["pending_id"]
+
+    upload_response = client.post(f"/pending-recordings/{pending_id}/upload")
+    recording_id = upload_response.json()["recording_id"]
 
     result = author_from_recording(uuid.UUID(recording_id))
     # This capture session is stopped immediately with zero captured

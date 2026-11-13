@@ -46,7 +46,7 @@ def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
             context, page, video_started_at_ms, video_dir = start_capture_context(browser)
             codegen_dir = Path(tempfile.mkdtemp(prefix="atlas-codegen-"))
             codegen_path = codegen_dir / "codegen.py"
-            from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers
+            from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers, strip_note_markers
             attach_codegen_recorder(context, codegen_path)
             page.goto(url)
 
@@ -66,7 +66,7 @@ def record(url: str, org_id: str, request_id: str | None, role: str) -> None:
 
         try:
             if codegen_path.exists() and codegen_path.stat().st_size > 0:
-                codegen_script = strip_extraction_markers(codegen_path.read_text())
+                codegen_script = strip_note_markers(strip_extraction_markers(codegen_path.read_text()))
         except Exception:
             pass
 

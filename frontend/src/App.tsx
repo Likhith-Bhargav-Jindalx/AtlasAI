@@ -4,6 +4,8 @@ import { InboxPage } from './pages/agent/InboxPage'
 import { LiveRecordingPage } from './pages/agent/LiveRecordingPage'
 import { ReviewPage } from './pages/agent/ReviewPage'
 import { AgentLibraryPage } from './pages/agent/AgentLibraryPage'
+import { PendingRecordingsPage } from './pages/agent/PendingRecordingsPage'
+import { PendingReviewPage } from './pages/agent/PendingReviewPage'
 import { LibraryPage } from './pages/dev/LibraryPage'
 import { AuthoringPage } from './pages/dev/AuthoringPage'
 import { RequestQueuePage } from './pages/dev/RequestQueuePage'
@@ -40,6 +42,8 @@ export default function App() {
           <Route path="/agent/record" element={<LiveRecordingPage />} />
           <Route path="/agent/library" element={<AgentLibraryPage />} />
           <Route path="/agent/recordings/:recordingId" element={<ReviewPage />} />
+          <Route path="/agent/pending" element={<PendingRecordingsPage />} />
+          <Route path="/agent/pending/:pendingId" element={<PendingReviewPage />} />
           <Route element={<RequireDeveloperAccess />}>
             <Route path="/dev" element={<LibraryPage />} />
             <Route path="/dev/requests" element={<RequestQueuePage />} />

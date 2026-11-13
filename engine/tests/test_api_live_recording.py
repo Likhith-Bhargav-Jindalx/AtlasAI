@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from atlas_engine.api import app
 from atlas_engine.db import session_scope
-from atlas_engine.db.models import Organization, Recording
+from atlas_engine.db.models import Organization
 
 
 def test_start_and_stop_recording_endpoints(fixture_portal_url):
@@ -25,11 +25,11 @@ def test_start_and_stop_recording_endpoints(fixture_portal_url):
 
     stop_response = client.post(f"/recordings/{capture_session_id}/stop")
     assert stop_response.status_code == 200
-    recording_id = stop_response.json()["recording_id"]
+    pending_id = stop_response.json()["pending_id"]
 
-    with session_scope() as session:
-        recording = session.get(Recording, uuid.UUID(recording_id))
-        assert recording.status == "captured"
+    detail_response = client.get(f"/pending-recordings/{pending_id}")
+    assert detail_response.status_code == 200
+    assert detail_response.json()["org_id"] == org_id
 
 
 def test_stop_recording_endpoint_404s_for_an_unknown_session():

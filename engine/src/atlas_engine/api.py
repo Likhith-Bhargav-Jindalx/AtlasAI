@@ -37,6 +37,15 @@ from atlas_engine.db.models import (
 )
 from atlas_engine.db.repo import next_golden_script_version
 from atlas_engine.live_capture import start_live_capture, stop_live_capture
+from atlas_engine.pending_recordings import (
+    discard_pending_recording,
+    get_pending_dir,
+    get_pending_recording,
+    list_pending_recordings,
+    load_pending_actions,
+    pending_recording_steps,
+    upload_pending_recording,
+)
 from atlas_engine.llm.factory import create_llm_client
 from atlas_engine.llm.usage import list_llm_usage_summary
 from atlas_engine.recording_form_validation import (
@@ -611,7 +620,7 @@ class StartRecordingResponse(BaseModel):
 
 
 class StopRecordingResponse(BaseModel):
-    recording_id: str
+    pending_id: str
 
 
 @app.get("/recordings")
@@ -669,7 +678,7 @@ def start_recording_endpoint(body: StartRecordingBody) -> StartRecordingResponse
 @app.post("/recordings/{capture_session_id}/stop", response_model=StopRecordingResponse)
 def stop_recording_endpoint(capture_session_id: str) -> StopRecordingResponse:
     try:
-        recording_id = stop_live_capture(uuid.UUID(capture_session_id))
+        result_id = stop_live_capture(uuid.UUID(capture_session_id))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except TimeoutError as exc:
@@ -686,7 +695,129 @@ def stop_recording_endpoint(capture_session_id: str) -> StopRecordingResponse:
         # logged; see observability.configure_logging's ATLAS_LOG_FILE for
         # where a packaged .app's build of that log ends up).
         raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
-    return StopRecordingResponse(recording_id=str(recording_id))
+    return StopRecordingResponse(pending_id=str(result_id))
+
+
+class PendingPageStep(BaseModel):
+    order_index: int
+    caption: str
+    offset_ms: int | None
+
+
+class PendingPageDetail(BaseModel):
+    page_index: int
+    has_video: bool
+    duration_seconds: int | None
+    steps: list[PendingPageStep]
+
+
+class PendingRecordingSummary(BaseModel):
+    id: str
+    org_id: str
+    user_id: str | None
+    start_url: str
+    role: str
+    request_id: str | None
+    created_at: str
+    duration_seconds: int | None
+    action_count: int
+    has_video: bool
+    upload_error: str | None
+
+
+class PendingRecordingDetail(PendingRecordingSummary):
+    pages: list[PendingPageDetail]
+
+
+def _duration_seconds(started_at_ms: int | None, ended_at_ms: int | None) -> int | None:
+    if started_at_ms is None or ended_at_ms is None:
+        return None
+    return max(0, round((ended_at_ms - started_at_ms) / 1000))
+
+
+def _pending_summary(manifest) -> PendingRecordingSummary:
+    return PendingRecordingSummary(
+        id=manifest.id, org_id=manifest.org_id, user_id=manifest.user_id,
+        start_url=manifest.start_url, role=manifest.role, request_id=manifest.request_id,
+        created_at=manifest.created_at,
+        duration_seconds=_duration_seconds(manifest.video_started_at_ms, manifest.video_ended_at_ms),
+        action_count=manifest.action_count, has_video=manifest.has_video,
+        upload_error=manifest.upload_error,
+    )
+
+
+@app.get("/pending-recordings", response_model=list[PendingRecordingSummary])
+def list_pending_recordings_endpoint() -> list[PendingRecordingSummary]:
+    return [_pending_summary(manifest) for manifest in list_pending_recordings()]
+
+
+@app.get("/pending-recordings/{pending_id}", response_model=PendingRecordingDetail)
+def get_pending_recording_endpoint(pending_id: str) -> PendingRecordingDetail:
+    try:
+        manifest = get_pending_recording(pending_id)
+        pending_dir = get_pending_dir(pending_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    main_actions = load_pending_actions(pending_dir, "actions.json")
+    pages = [PendingPageDetail(
+        page_index=0, has_video=manifest.has_video,
+        duration_seconds=_duration_seconds(manifest.video_started_at_ms, manifest.video_ended_at_ms),
+        steps=[PendingPageStep(**step) for step in pending_recording_steps(main_actions, manifest.video_started_at_ms)],
+    )]
+    for page_info in manifest.pages:
+        page_actions = load_pending_actions(pending_dir, f"actions-page{page_info['page_index']}.json")
+        pages.append(PendingPageDetail(
+            page_index=page_info["page_index"], has_video=page_info["has_video"],
+            duration_seconds=_duration_seconds(page_info["video_started_at_ms"], page_info["video_ended_at_ms"]),
+            steps=[
+                PendingPageStep(**step)
+                for step in pending_recording_steps(page_actions, page_info["video_started_at_ms"])
+            ],
+        ))
+
+    return PendingRecordingDetail(**_pending_summary(manifest).model_dump(), pages=pages)
+
+
+@app.get("/pending-recordings/{pending_id}/video/{page_index}")
+def get_pending_recording_video_endpoint(pending_id: str, page_index: int):
+    try:
+        pending_dir = get_pending_dir(pending_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    filename = "video.webm" if page_index == 0 else f"video-page{page_index}.webm"
+    video_path = pending_dir / filename
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="No video for this pending recording page")
+    return FileResponse(video_path, media_type="video/webm")
+
+
+class UploadPendingRecordingResponse(BaseModel):
+    recording_id: str
+
+
+@app.post("/pending-recordings/{pending_id}/upload", response_model=UploadPendingRecordingResponse)
+def upload_pending_recording_endpoint(pending_id: str) -> UploadPendingRecordingResponse:
+    try:
+        recording_id = upload_pending_recording(pending_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        # Same reasoning as stop_recording_endpoint: this endpoint's only
+        # caller is the single agent reviewing their own pending queue, who
+        # needs the real error (e.g. the Azure failure this whole feature
+        # exists to make non-destructive) rather than a content-free 500.
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+    return UploadPendingRecordingResponse(recording_id=str(recording_id))
+
+
+@app.post("/pending-recordings/{pending_id}/discard", status_code=204)
+def discard_pending_recording_endpoint(pending_id: str) -> None:
+    try:
+        discard_pending_recording(pending_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
 
 class SubmitCaptureResponse(BaseModel):

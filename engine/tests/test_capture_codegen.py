@@ -9,6 +9,7 @@ from atlas_engine.capture.codegen import (
     build_codegen_trajectory,
     parse_codegen_actions,
     strip_extraction_markers,
+    strip_note_markers,
 )
 
 
@@ -304,6 +305,87 @@ def test_parse_codegen_actions_recognizes_the_extract_marker():
     actions = parse_codegen_actions(codegen)
     assert [a.kind for a in actions] == ["extract", "click"]
     assert actions[0].selector == ""
+
+
+def test_strip_note_markers_removes_the_whole_span_closed_by_continue():
+    # Reproduces the real sequence captured by native codegen for an
+    # operator who clicked "Add note", typed something, then clicked
+    # "Continue" -- none of that UI exists outside the record session.
+    codegen = (
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.get_by_role("textbox").fill("add note")\n'
+        'page.get_by_role("button", name="Continue").click()\n'
+        'page.click("#next")\n'
+    )
+    clean = strip_note_markers(codegen)
+    assert "Add note" not in clean
+    assert "textbox" not in clean
+    assert "Continue" not in clean
+    assert 'page.click("#next")' in clean
+
+
+def test_strip_note_markers_removes_a_use_default_click_inside_the_span():
+    codegen = (
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.get_by_role("button", name="Use Default").click()\n'
+        'page.get_by_role("button", name="Continue").click()\n'
+        'page.click("#next")\n'
+    )
+    clean = strip_note_markers(codegen)
+    assert "Use Default" not in clean
+    assert "Continue" not in clean
+    assert 'page.click("#next")' in clean
+
+
+def test_strip_note_markers_ends_the_span_on_an_enter_keypress():
+    # The modal's textbox also submits on Enter, with no button click at
+    # all -- the span must still end there, not swallow the rest of the
+    # script.
+    codegen = (
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.get_by_role("textbox").fill("add note")\n'
+        'page.get_by_role("textbox").press("Enter")\n'
+        'page.click("#next")\n'
+    )
+    clean = strip_note_markers(codegen)
+    assert "Add note" not in clean
+    assert "press" not in clean
+    assert 'page.click("#next")' in clean
+
+
+def test_strip_note_markers_preserves_position_as_a_marker_comment():
+    codegen = (
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.get_by_role("button", name="Continue").click()\n'
+        'page.click("#next")\n'
+    )
+    stripped = strip_note_markers(codegen)
+    lines = stripped.splitlines()
+    assert lines[0] == "# __ATLAS_NOTE__"
+    assert lines[1] == 'page.click("#next")'
+
+
+def test_parse_codegen_actions_drops_the_note_marker_with_no_step():
+    codegen = "# __ATLAS_NOTE__\npage.click(\"#next\")\n"
+    actions = parse_codegen_actions(codegen)
+    assert [a.kind for a in actions] == ["click"]
+
+
+def test_build_codegen_trajectory_has_no_note_steps_after_stripping():
+    # End-to-end reproduction of the real bug: a recording with a note
+    # attached must not replay a click on "Add note", a fill into its
+    # textbox, or a click on "Continue".
+    codegen = (
+        'page.goto("https://x.test")\n'
+        'page.get_by_role("button", name="Search").click()\n'
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.get_by_role("textbox").fill("why this step")\n'
+        'page.get_by_role("button", name="Continue").click()\n'
+    )
+    clean = strip_note_markers(strip_extraction_markers(codegen))
+    actions = parse_codegen_actions(clean)
+    trajectory = build_codegen_trajectory(actions)
+    assert [s.kind for s in trajectory.steps] == ["click"]
 
 
 def test_build_codegen_trajectory_includes_extract_steps():
