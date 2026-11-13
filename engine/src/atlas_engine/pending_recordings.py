@@ -1,0 +1,144 @@
+import json
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from atlas_engine.brain.serialize import trajectory_to_dict
+from atlas_engine.capture.events import RecordedAction
+from atlas_engine.config import settings
+from atlas_engine.recording_service import PageCapture, _merge_actions_for_trajectory
+from atlas_engine.trajectory.extract import extract_trajectory
+
+
+def pending_root() -> Path:
+    root = settings.ensure_run_root() / "pending_recordings"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+@dataclass
+class PendingManifest:
+    """One pending recording's metadata, stored as manifest.json next to
+    its actions.json/trajectory.json/video.webm in its own folder under
+    pending_root(). `pages` holds one dict per additional (non-main) tab,
+    each shaped {"page_index": int, "has_video": bool,
+    "video_started_at_ms": int | None, "video_ended_at_ms": int | None} —
+    enough for upload_pending_recording to rebuild the exact PageCapture
+    list persist_recording expects."""
+
+    id: str
+    org_id: str
+    start_url: str
+    role: str
+    created_at: str
+    request_id: str | None = None
+    user_id: str | None = None
+    video_started_at_ms: int | None = None
+    video_ended_at_ms: int | None = None
+    action_count: int = 0
+    has_video: bool = False
+    pages: list[dict] = field(default_factory=list)
+    upload_error: str | None = None
+
+    @classmethod
+    def load(cls, pending_dir: Path) -> "PendingManifest":
+        return cls(**json.loads((pending_dir / "manifest.json").read_text()))
+
+    def save(self, pending_dir: Path) -> None:
+        (pending_dir / "manifest.json").write_text(json.dumps(asdict(self), indent=2))
+
+
+def _write_actions_json(pending_dir: Path, filename: str, actions: list[RecordedAction]) -> None:
+    (pending_dir / filename).write_text(json.dumps(
+        [{k: v for k, v in vars(a).items() if k not in ("dom_before", "dom_after")} for a in actions],
+        indent=2,
+    ))
+
+
+def write_pending_recording(
+    org_id: str,
+    start_url: str,
+    actions: list[RecordedAction],
+    *,
+    request_id: uuid.UUID | None = None,
+    role: str = "demo",
+    user_id: str | None = None,
+    video_path: Path | None = None,
+    video_started_at_ms: int | None = None,
+    video_ended_at_ms: int | None = None,
+    additional_pages: list[PageCapture] | None = None,
+    page_extractions: list[dict] | None = None,
+    codegen_script: str | None = None,
+    capture_artifacts: list[tuple[str, Path]] | None = None,
+) -> uuid.UUID:
+    """Writes a captured recording to a local-only pending folder — no
+    Postgres row, no Azure upload, so nothing here can fail on a network
+    problem. This is live_capture.py's default persist_fn for the Stop
+    button; upload_pending_recording() is what actually calls
+    recording_service.persist_recording() later, once the agent reviews
+    and explicitly chooses to upload. Same keyword arguments as
+    persist_recording — the one exception is capture_artifacts, which,
+    like persist_recording, writes each artifact to its own named file in
+    the recording's folder (trace.zip / network.har today)."""
+    pending_id = uuid.uuid4()
+    pending_dir = pending_root() / str(pending_id)
+    pending_dir.mkdir(parents=True)
+
+    _write_actions_json(pending_dir, "actions.json", actions)
+
+    pages_info = []
+    for page_capture in additional_pages or []:
+        if page_capture.actions:
+            _write_actions_json(pending_dir, f"actions-page{page_capture.page_index}.json", page_capture.actions)
+
+        has_page_video = bool(
+            page_capture.video_path and page_capture.video_path.exists()
+            and page_capture.video_path.stat().st_size > 0
+        )
+        if has_page_video:
+            (pending_dir / f"video-page{page_capture.page_index}.webm").write_bytes(
+                page_capture.video_path.read_bytes()
+            )
+        pages_info.append({
+            "page_index": page_capture.page_index,
+            "has_video": has_page_video,
+            "video_started_at_ms": page_capture.video_started_at_ms,
+            "video_ended_at_ms": page_capture.video_ended_at_ms,
+        })
+
+    trajectory = extract_trajectory(_merge_actions_for_trajectory(actions, additional_pages))
+    (pending_dir / "trajectory.json").write_text(json.dumps(trajectory_to_dict(trajectory), indent=2))
+
+    if codegen_script is not None:
+        (pending_dir / "codegen.py").write_text(codegen_script)
+
+    for filename, artifact_path in capture_artifacts or []:
+        if artifact_path.exists() and artifact_path.is_file() and artifact_path.stat().st_size > 0:
+            (pending_dir / filename).write_bytes(artifact_path.read_bytes())
+
+    if page_extractions:
+        for i, extraction in enumerate(page_extractions):
+            (pending_dir / f"extraction-{i}.json").write_text(json.dumps(extraction, indent=2))
+
+    has_video = bool(video_path and video_path.exists() and video_path.stat().st_size > 0)
+    if has_video:
+        (pending_dir / "video.webm").write_bytes(video_path.read_bytes())
+
+    manifest = PendingManifest(
+        id=str(pending_id),
+        org_id=org_id,
+        start_url=start_url,
+        role=role,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        request_id=str(request_id) if request_id else None,
+        user_id=user_id,
+        video_started_at_ms=video_started_at_ms,
+        video_ended_at_ms=video_ended_at_ms,
+        action_count=len(actions),
+        has_video=has_video,
+        pages=pages_info,
+    )
+    manifest.save(pending_dir)
+
+    return pending_id
