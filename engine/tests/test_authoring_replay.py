@@ -42,7 +42,7 @@ def test_run_replay_phase_completes_automatically_when_every_step_succeeds(fixtu
     start_url = f"{fixture_portal_url}/login.html"
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
         result = run_replay_phase(
@@ -122,7 +122,7 @@ def test_run_replay_phase_captures_reference_evidence_per_step(fixture_portal_ur
     start_url = f"{fixture_portal_url}/login.html"
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
         result = run_replay_phase(
@@ -159,7 +159,7 @@ def test_run_replay_phase_does_not_pause_for_developer_on_a_failed_step(fixture_
     fixture_portal_server.set_drift_mode(True)
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
+            browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(start_url)
             result = run_replay_phase(
@@ -185,7 +185,7 @@ def test_run_replay_phase_returns_none_when_stopped_mid_replay(fixture_portal_ur
     stop_event.set()  # stopped before the replay starts
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
         result = run_replay_phase(
@@ -216,7 +216,7 @@ def test_run_replay_phase_executes_codegen_popup_steps_on_the_popup(fixture_port
     )
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{fixture_portal_url}/popup_trigger.html")
         result = run_replay_phase(
@@ -317,7 +317,7 @@ def test_run_replay_phase_captures_expects_popup_trigger_from_codegen(fixture_po
 
     authoring_run_id = _make_authoring_run()
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(f"{fixture_portal_url}/popup_trigger.html")
         result = run_replay_phase(

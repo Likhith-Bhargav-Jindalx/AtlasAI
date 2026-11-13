@@ -193,7 +193,9 @@ def persist_recording(
             recording.status = "captured"
     except Exception:
         logger.exception(
-            "Failed to persist recording %s after it was created — marking it failed", recording_id
+            "Failed to persist recording %s after it was created — marking it failed. "
+            "Whatever was already written locally is still at %s",
+            recording_id, run_dir.path,
         )
         with session_scope() as session:
             recording = session.get(Recording, recording_id)
