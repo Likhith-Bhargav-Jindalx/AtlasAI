@@ -12,7 +12,8 @@ from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extracti
 from atlas_engine.capture.extraction import attach_extraction_button, collect_page_data
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
-from atlas_engine.recording_service import PageCapture, persist_recording
+from atlas_engine.pending_recordings import write_pending_recording
+from atlas_engine.recording_service import PageCapture
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class _LiveCaptureSession:
 
     def __init__(
         self, org_id: str, start_url: str, request_id: uuid.UUID | None, role: str, user_id: str | None = None,
-        persist_fn=persist_recording,
+        persist_fn=write_pending_recording,
     ):
         self.org_id = org_id
         self.start_url = start_url
@@ -94,7 +95,7 @@ class _LiveCaptureSession:
         self.persist_fn = persist_fn
         self.stop_event = threading.Event()
         self.done_event = threading.Event()
-        self.recording_id: uuid.UUID | None = None
+        self.result_id: uuid.UUID | None = None
         self.error: Exception | None = None
         self.thread = threading.Thread(target=self._run, daemon=True)
 
@@ -265,7 +266,7 @@ class _LiveCaptureSession:
                 # the recording that already happened.
                 logger.exception("Failed to read the native codegen script")
 
-            self.recording_id = self.persist_fn(
+            self.result_id = self.persist_fn(
                 self.org_id, self.start_url, actions,
                 request_id=self.request_id, role=self.role, user_id=self.user_id,
                 video_path=video_path,
@@ -294,12 +295,12 @@ class _LiveCaptureSession:
             raise TimeoutError("Capture session did not finish stopping in time")
         if self.error is not None:
             raise self.error
-        return self.recording_id
+        return self.result_id
 
 
 def start_live_capture(
     org_id: str, start_url: str, *, request_id: uuid.UUID | None = None, role: str = "demo",
-    user_id: str | None = None, persist_fn=persist_recording,
+    user_id: str | None = None, persist_fn=write_pending_recording,
 ) -> uuid.UUID:
     session_id = uuid.uuid4()
     session = _LiveCaptureSession(org_id, start_url, request_id, role, user_id, persist_fn=persist_fn)

@@ -21,7 +21,9 @@ def test_start_and_stop_live_capture_persists_a_recording(fixture_portal_url):
 
     start_url = f"{fixture_portal_url}/login.html"
 
-    capture_session_id = start_live_capture(org_id, start_url)
+    from atlas_engine.recording_service import persist_recording
+
+    capture_session_id = start_live_capture(org_id, start_url, persist_fn=persist_recording)
     recording_id = stop_live_capture(capture_session_id)
 
     with session_scope() as session:
@@ -32,6 +34,21 @@ def test_start_and_stop_live_capture_persists_a_recording(fixture_portal_url):
         video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one()
         assert video_asset.status == "ready"
         assert (settings.run_root / video_asset.storage_ref).stat().st_size > 0
+
+
+def test_start_and_stop_live_capture_defaults_to_a_local_pending_folder(fixture_portal_url):
+    from atlas_engine.pending_recordings import get_pending_dir
+
+    org_id = str(uuid.uuid4())
+    start_url = f"{fixture_portal_url}/login.html"
+
+    capture_session_id = start_live_capture(org_id, start_url)
+    result_id = stop_live_capture(capture_session_id)
+
+    pending_dir = get_pending_dir(str(result_id))
+    assert (pending_dir / "actions.json").exists()
+    with session_scope() as session:
+        assert session.get(Recording, result_id) is None
 
 
 def test_start_live_capture_uses_a_custom_persist_fn(fixture_portal_url):
@@ -159,7 +176,9 @@ def test_stop_live_capture_stores_a_native_codegen_script(fixture_portal_url):
 
     start_url = f"{fixture_portal_url}/login.html"
 
-    capture_session_id = start_live_capture(org_id, start_url)
+    from atlas_engine.recording_service import persist_recording
+
+    capture_session_id = start_live_capture(org_id, start_url, persist_fn=persist_recording)
     recording_id = stop_live_capture(capture_session_id)
 
     with session_scope() as session:
@@ -305,7 +324,11 @@ def test_start_live_capture_stores_user_id(fixture_portal_url):
         session.flush()
         user_id = str(user.id)
 
-    capture_session_id = start_live_capture(org_id, f"{fixture_portal_url}/login.html", user_id=user_id)
+    from atlas_engine.recording_service import persist_recording
+
+    capture_session_id = start_live_capture(
+        org_id, f"{fixture_portal_url}/login.html", user_id=user_id, persist_fn=persist_recording,
+    )
     recording_id = stop_live_capture(capture_session_id)
 
     with session_scope() as session:
