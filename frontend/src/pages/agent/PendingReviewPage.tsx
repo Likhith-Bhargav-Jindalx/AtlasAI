@@ -1,4 +1,6 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import { Loader2 } from 'lucide-react'
 import {
   pendingRecordingVideoUrl, useDiscardPendingRecording, usePendingRecordingDetail, useUploadPendingRecording,
 } from '../../lib/pendingRecordings'
@@ -10,6 +12,7 @@ export function PendingReviewPage() {
   const { data: pending, isLoading } = usePendingRecordingDetail(pendingId)
   const upload = useUploadPendingRecording(pendingId)
   const discard = useDiscardPendingRecording(pendingId)
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false)
 
   if (isLoading || !pending) return <div className="p-9 text-sm text-atlas-body">Loading…</div>
 
@@ -21,6 +24,7 @@ export function PendingReviewPage() {
   }
 
   async function handleDiscard() {
+    setShowDiscardConfirm(false)
     await discard.mutateAsync()
     navigate('/agent/pending')
   }
@@ -40,7 +44,7 @@ export function PendingReviewPage() {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={handleDiscard}
+            onClick={() => setShowDiscardConfirm(true)}
             disabled={upload.isPending || discard.isPending}
             className="px-5 py-2.5 rounded-full border border-atlas-border text-[13.5px] font-medium disabled:opacity-60"
           >
@@ -49,12 +53,38 @@ export function PendingReviewPage() {
           <button
             onClick={handleUpload}
             disabled={upload.isPending || discard.isPending}
-            className="px-5 py-2.5 rounded-full bg-atlas-primary hover:bg-atlas-primaryHover text-white text-[13.5px] font-medium disabled:opacity-60"
+            className="flex items-center gap-2 px-5 py-2.5 rounded-full bg-atlas-primary hover:bg-atlas-primaryHover text-white text-[13.5px] font-medium disabled:opacity-60"
           >
+            {upload.isPending && <Loader2 size={14} className="animate-spin" />}
             {upload.isPending ? 'Uploading…' : 'Upload'}
           </button>
         </div>
       </div>
+
+      {showDiscardConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-6">
+          <div className="bg-atlas-card rounded-2xl w-full max-w-sm p-6 flex flex-col gap-4">
+            <div className="font-display text-lg font-semibold tracking-tight">Discard this recording?</div>
+            <div className="text-[13.5px] text-atlas-body">
+              This deletes the local video and actions for good — it was never uploaded, so there's nothing to undo.
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-1">
+              <button
+                onClick={() => setShowDiscardConfirm(false)}
+                className="px-4 py-2 rounded-full border border-atlas-border text-[13.5px] font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDiscard}
+                className="px-4 py-2 rounded-full bg-atlas-danger hover:bg-atlas-dangerHover text-white text-[13.5px] font-medium"
+              >
+                Discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {upload.isError && (
         <div className="text-[13px] text-atlas-danger">{(upload.error as Error).message}</div>

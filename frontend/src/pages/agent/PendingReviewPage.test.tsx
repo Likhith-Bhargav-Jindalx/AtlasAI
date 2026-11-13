@@ -28,6 +28,9 @@ beforeEach(() => {
     if (path === '/pending-recordings/pending-1/upload' && init?.method === 'POST') {
       return Promise.resolve(jsonResponse({ recording_id: 'rec-9' }))
     }
+    if (path === '/pending-recordings/pending-1/discard' && init?.method === 'POST') {
+      return Promise.resolve({ ok: true, status: 204, json: async () => undefined })
+    }
     return Promise.reject(new Error(`unexpected fetch: ${path}`))
   }))
 })
@@ -41,6 +44,7 @@ function renderPage() {
           <Routes>
             <Route path="/agent/pending/:pendingId" element={<PendingReviewPage />} />
             <Route path="/agent/recordings/:recordingId" element={<div>Review page for rec-9</div>} />
+            <Route path="/agent/pending" element={<div>Pending queue</div>} />
           </Routes>
         </MemoryRouter>
       </AuthProvider>
@@ -56,5 +60,30 @@ describe('PendingReviewPage', () => {
     fireEvent.click(screen.getByText('Upload'))
 
     await waitFor(() => expect(screen.getByText('Review page for rec-9')).toBeInTheDocument())
+  })
+
+  it('cancelling the discard confirmation does not discard anything', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Click #go')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('Discard'))
+    await waitFor(() => expect(screen.getByText('Discard this recording?')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('Cancel'))
+
+    expect(screen.queryByText('Discard this recording?')).not.toBeInTheDocument()
+    expect(screen.getByText('Click #go')).toBeInTheDocument()
+  })
+
+  it('confirming the discard dialog discards and returns to the pending queue', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Click #go')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByText('Discard'))
+    await waitFor(() => expect(screen.getByText('Discard this recording?')).toBeInTheDocument())
+
+    fireEvent.click(screen.getAllByText('Discard')[1])
+
+    await waitFor(() => expect(screen.getByText('Pending queue')).toBeInTheDocument())
   })
 })
