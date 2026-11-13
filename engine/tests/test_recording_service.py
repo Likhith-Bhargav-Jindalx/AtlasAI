@@ -918,3 +918,33 @@ def test_master_data_list_functions_return_only_active_rows_for_the_org(fixture_
     assert len(codes) == 1
     assert codes[0]["code"] == "CO-16"
     assert codes[0]["is_multi_use"] is True
+
+
+def test_persist_recording_saves_steps_whose_actions_share_an_index(tmp_path, fixture_portal_url):
+    # Recordings captured before the recorder's _next_index fix can carry a
+    # duplicate action index after an Undo; uploading them must still work.
+    video_file = tmp_path / "session.webm"
+    video_file.write_bytes(b"fake-webm-bytes")
+    with session_scope() as session:
+        org = Organization(name="Dup Org", slug=f"dup-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    start_url = f"{fixture_portal_url}/login.html"
+    actions = [
+        RecordedAction(0, "click", [{"selector": "#a", "rank": 0}], None, start_url, start_url, "", "", timestamp_ms=1000),
+        RecordedAction(2, "click", [{"selector": "#c", "rank": 0}], None, start_url, start_url, "", "", timestamp_ms=1100),
+        RecordedAction(2, "tab_closed", [], None, "", "", "", "", timestamp_ms=1200),
+    ]
+
+    recording_id = persist_recording(
+        org_id, start_url, actions,
+        video_path=video_file, video_started_at_ms=500, video_ended_at_ms=2500,
+    )
+
+    with session_scope() as session:
+        video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one()
+        steps = sorted(session.query(VideoStep).filter_by(video_asset_id=video_asset.id), key=lambda s: s.order_index)
+        assert [s.order_index for s in steps] == [0, 1, 2]
+        assert [s.caption_text for s in steps] == ["Click #a", "Click #c", "Close tab"]

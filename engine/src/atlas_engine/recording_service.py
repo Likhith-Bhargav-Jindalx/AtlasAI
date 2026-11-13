@@ -226,10 +226,10 @@ def _persist_video_asset(
         dom_events_blob_ref = run_dir.write_json(
             f"{Path(filename).stem}-dom-events.json",
             {
-                str(action.index): {
+                str(position): {
                     "kind": action.kind, "selector_candidates": action.selector_candidates, "value": action.value,
                 }
-                for action in actions
+                for position, action in enumerate(actions)
             },
         )
 
@@ -247,14 +247,16 @@ def _persist_video_asset(
     session.add(video_asset)
     session.flush()
 
-    for action in actions:
+    # Numbered by position, not action.index: recordings captured before the
+    # recorder's _next_index fix can carry a duplicate index after an Undo.
+    for position, action in enumerate(actions):
         offset_ms = None
         if video_started_at_ms is not None:
             offset_ms = max(0, action.timestamp_ms - video_started_at_ms)
         session.add(
             VideoStep(
                 video_asset_id=video_asset.id,
-                order_index=action.index,
+                order_index=position,
                 caption_text=_caption_for(action),
                 offset_ms=offset_ms,
             )
