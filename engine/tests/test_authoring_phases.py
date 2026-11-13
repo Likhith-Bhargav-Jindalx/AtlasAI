@@ -57,7 +57,7 @@ def test_run_brain_phase_completes_on_track_when_nothing_has_drifted(fixture_por
     )
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(start_url)
         outcomes = run_brain_phase(page, trajectory, authoring_run_id)
@@ -86,7 +86,7 @@ def test_run_brain_phase_repairs_a_drifted_selector_with_the_llm(fixture_portal_
     try:
         fake_llm = FakeLlmClient(responses=[{"action": "replace_selector", "selector": "#run-report-btn"}])
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
+            browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(start_url)
             outcomes = run_brain_phase(page, trajectory, authoring_run_id, llm=fake_llm)
@@ -116,7 +116,7 @@ def test_run_brain_phase_logs_a_warning_for_a_step_that_stays_off_track(fixture_
     fixture_portal_server.set_drift_mode(True)
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=False)
+            browser = playwright.chromium.launch(headless=True)
             page = browser.new_page()
             page.goto(start_url)
             outcomes = run_brain_phase(page, trajectory, authoring_run_id)  # no llm -> can't repair

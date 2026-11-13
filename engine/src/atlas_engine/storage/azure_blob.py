@@ -1,5 +1,5 @@
 import json
-import tempfile
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -10,6 +10,10 @@ from typing import Any
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_blob_sas
 
+from atlas_engine.config import settings
+
+logger = logging.getLogger(__name__)
+
 # get_store() constructs a fresh AzureBlobRunStore on every call (no
 # singleton), so without this, __init__'s create_container() would fire a
 # real create-container request -- and log a noisy 409 ContainerAlreadyExists
@@ -19,11 +23,13 @@ from azure.storage.blob import BlobServiceClient, BlobSasPermissions, generate_b
 _confirmed_containers: set[str] = set()
 
 
-def _with_retry(func, *, attempts: int = 3, base_delay: float = 0.5):
+def _with_retry(func, *, attempts: int = 6, base_delay: float = 0.5):
     """Retries a transient Azure Blob Storage network call up to `attempts`
-    times with exponential backoff (0.5s, 1s, 2s, ...) before giving up —
-    'a wrong cached action is worse than a slow one' extends to uploads
-    too: a completed-but-slow upload beats a lost recording."""
+    times with exponential backoff (0.5s, 1s, 2s, 4s, 8s, ... ~31s total)
+    before giving up — 'a wrong cached action is worse than a slow one'
+    extends to uploads too: a completed-but-slow upload beats a lost
+    recording. Long enough to ride out a dropped wifi reconnecting, too
+    short to make /stop hang forever on a truly dead connection."""
     last_exc: Exception | None = None
     for attempt in range(attempts):
         try:
@@ -77,7 +83,16 @@ class AzureRunDir:
     def upload(self, name: str) -> str:
         """Uploads a file already written to `self.path / name` (directly,
         or via write_json/write_bytes) to Blob Storage. Returns the full
-        blob_ref."""
+        blob_ref.
+
+        The local file at `self.path / name` is left on disk either way —
+        callers never delete it. If every retry is exhausted (e.g. the
+        operator's connection actually dropped, not just blipped), the
+        bytes aren't lost: they're still sitting at that path, under
+        ATLAS_RUN_ROOT's stable staging area rather than a sweep-prone OS
+        temp dir, and the path is logged here so it can be re-uploaded by
+        hand or by a future retry pass instead of only existing as a
+        'failed' row in the database with nothing to point back to it."""
         blob_ref = f"{self.blob_ref}/{name}"
         blob_client = self._store._container_client.get_blob_client(blob_ref)
 
@@ -85,7 +100,14 @@ class AzureRunDir:
             with open(self.path / name, "rb") as fh:
                 blob_client.upload_blob(fh, overwrite=True)
 
-        _with_retry(_do_upload)
+        try:
+            _with_retry(_do_upload)
+        except Exception:
+            logger.exception(
+                "Upload to blob '%s' failed after all retries — the local file is still at %s",
+                blob_ref, self.path / name,
+            )
+            raise
         return blob_ref
 
 
@@ -104,7 +126,13 @@ class AzureBlobRunStore:
             except ResourceExistsError:
                 pass
             _confirmed_containers.add(container)
-        self._staging_root = Path(tempfile.mkdtemp(prefix="atlas-azure-staging-"))
+        # Lives under ATLAS_RUN_ROOT rather than the OS temp dir: a run
+        # whose upload permanently fails leaves its local files here
+        # (upload() never deletes them), and an OS temp dir is fair game
+        # for a reboot/cleanup sweep to purge before anyone notices —
+        # this stable, well-known location isn't.
+        self._staging_root = settings.ensure_run_root() / "azure-staging"
+        self._staging_root.mkdir(parents=True, exist_ok=True)
 
     def new_run_dir(self, prefix: str) -> AzureRunDir:
         run_id = str(uuid.uuid4())
