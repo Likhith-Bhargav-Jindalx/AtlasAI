@@ -75,29 +75,48 @@ def attach_codegen_recorder(context: BrowserContext, output_path: Path) -> None:
 
 
 def strip_note_markers(codegen: str) -> str:
-    """Replaces the "Add note" button's click line, and everything up to
-    the note modal's own close (its Continue button, or pressing Enter in
-    its textbox), with a single marker comment — none of that UI exists
-    outside the record session. Unlike extraction there's no replayable
+    """Replaces the "Add note" button's click line with a single marker
+    comment and drops every line that targets the note modal (until its
+    Continue button or Enter closes it) — none of that UI exists outside
+    the record session. Unlike extraction there's no replayable
     "note" step to turn it into (the note text itself is already captured
     separately, as RecordedAction.operator_note, by the other in-process
     recorder — this one only needs to stop feeding the span's clicks/fills
     into parse_codegen_actions as if they were real page interactions),
     so the marker is simply skipped as a comment there, dropping the whole
     span with no action appended."""
+    # Drops only lines that target the note UI, never "everything until the
+    # modal closes": the close isn't always recorded, and the portal's own
+    # top-layer dialogs sit above the overlay, so clicks on them in the span
+    # are real page interactions.
     kept = []
     in_note_span = False
     for line in codegen.splitlines():
-        if not in_note_span and ("__atlasNoteBtn" in line or "Add note" in line):
+        if "__atlasNoteBtn" in line or "Add note" in line:
             in_note_span = True
             kept.append("# __ATLAS_NOTE__")
             continue
-        if in_note_span:
-            if "__atlasNoteModalContinueBtn" in line or "Continue" in line or ".press(" in line:
+        if "__atlasNoteModal" in line:
+            if "__atlasNoteModalContinueBtn" in line or '.press("Enter")' in line:
+                in_note_span = False
+            continue
+        if in_note_span and _NOTE_UI_LINE.search(line):
+            if '"Continue"' in line or '.press("Enter")' in line:
                 in_note_span = False
             continue
         kept.append(line)
     return "\n".join(kept)
+
+
+# Selectors codegen falls back to for the note modal's own widgets (its bare
+# textbox, its buttons, its label text, or the page root behind the overlay).
+_NOTE_UI_LINE = re.compile(
+    r'get_by_role\("textbox"\)\.'
+    r'|locator\("input\[type=\\"text\\"\]"\)\.'
+    r'|get_by_role\("button", name="(Continue|Use Default)"\)'
+    r'|get_by_text\("Why this step\?'
+    r'|locator\("html"\)\.'
+)
 
 
 def strip_extraction_markers(codegen: str) -> str:
