@@ -353,6 +353,79 @@ def test_strip_note_markers_ends_the_span_on_an_enter_keypress():
     assert 'page.click("#next")' in clean
 
 
+def test_strip_note_markers_keeps_the_rest_of_the_script_when_the_close_is_never_recorded():
+    # Prod recording 3b251fee: a note opened with no Continue/Enter after it
+    # used to swallow every later line, including real clicks and the
+    # script's own teardown.
+    codegen = (
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.locator("#claimModal1793993320917").click()\n'
+        'page.get_by_text("Why this step?Use").click()\n'
+        'page.locator("[id=\\"__atlasNoteModal\\"]").click()\n'
+        'expect(page.get_by_role("button", name="Use Default")).to_be_visible()\n'
+        'page.get_by_role("button", name="Yes").click()\n'
+        '# __ATLAS_EXTRACT__\n'
+        'page.get_by_role("button", name="Close").click()\n'
+        'page.close()\n'
+    )
+    lines = strip_note_markers(codegen).splitlines()
+    assert lines == [
+        "# __ATLAS_NOTE__",
+        'page.locator("#claimModal1793993320917").click()',
+        'page.get_by_role("button", name="Yes").click()',
+        "# __ATLAS_EXTRACT__",
+        'page.get_by_role("button", name="Close").click()',
+        "page.close()",
+    ]
+
+
+def test_strip_note_markers_keeps_real_page_clicks_made_while_the_note_is_open():
+    # Prod recording 1309a784: the portal's own modal sits in the top layer,
+    # above the note overlay, so clicks on it are real; page-root clicks and
+    # the note modal's own lines are not.
+    codegen = (
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.locator("html").click()\n'
+        'page.locator("#claimModal1793993711661").dblclick()\n'
+        'page.locator("[id=\\"__atlasNoteModal\\"]").click()\n'
+        'page.get_by_text("Building").press("Escape")\n'
+    )
+    lines = strip_note_markers(codegen).splitlines()
+    assert lines == [
+        "# __ATLAS_NOTE__",
+        'page.locator("#claimModal1793993711661").dblclick()',
+        'page.get_by_text("Building").press("Escape")',
+    ]
+
+
+def test_strip_note_markers_drops_every_keypress_in_the_note_textbox():
+    # Prod recording 98049365: Ctrl+A doesn't close the modal, so the span
+    # must not end there and leave the following Ctrl+C behind.
+    codegen = (
+        'page.get_by_role("button", name="✎ Add note").click()\n'
+        'page.locator("[id=\\"__atlasNoteModal\\"]").get_by_role("textbox").fill("x")\n'
+        'page.locator("[id=\\"__atlasNoteModal\\"]").get_by_role("textbox").press("ControlOrMeta+a")\n'
+        'page.locator("[id=\\"__atlasNoteModal\\"]").get_by_role("textbox").press("ControlOrMeta+c")\n'
+        'page.locator("[id=\\"__atlasNoteModalContinueBtn\\"]").click()\n'
+        'page.get_by_role("textbox").fill("real field")\n'
+    )
+    lines = strip_note_markers(codegen).splitlines()
+    # after Continue the span is closed, so a bare textbox is a real page field again
+    assert lines == ["# __ATLAS_NOTE__", 'page.get_by_role("textbox").fill("real field")']
+
+
+def test_strip_note_markers_handles_a_note_inside_an_iframe():
+    frame = 'page.locator("iframe[name=\\"Claim-frame1\\"]").content_frame'
+    codegen = (
+        f'{frame}.get_by_role("button", name="✎ Add note").click()\n'
+        f'{frame}.get_by_role("textbox").fill("x")\n'
+        f'{frame}.get_by_role("button", name="Continue").click()\n'
+        f'{frame}.get_by_role("button", name="Submit").click()\n'
+    )
+    lines = strip_note_markers(codegen).splitlines()
+    assert lines == ["# __ATLAS_NOTE__", f'{frame}.get_by_role("button", name="Submit").click()']
+
+
 def test_strip_note_markers_preserves_position_as_a_marker_comment():
     codegen = (
         'page.get_by_role("button", name="✎ Add note").click()\n'
@@ -363,6 +436,17 @@ def test_strip_note_markers_preserves_position_as_a_marker_comment():
     lines = stripped.splitlines()
     assert lines[0] == "# __ATLAS_NOTE__"
     assert lines[1] == 'page.click("#next")'
+
+
+def test_parse_codegen_actions_skips_undo_button_clicks():
+    codegen = (
+        'page.get_by_role("button", name="Search").click()\n'
+        'page.get_by_role("button", name="↶ Undo last step").click()\n'
+        'page.locator("#__atlasUndoBtn").click()\n'
+        'page.click("#next")\n'
+    )
+    actions = parse_codegen_actions(codegen)
+    assert [a.selector for a in actions] == ['codegen_expr:page.get_by_role("button", name="Search")', "#next"]
 
 
 def test_parse_codegen_actions_drops_the_note_marker_with_no_step():
