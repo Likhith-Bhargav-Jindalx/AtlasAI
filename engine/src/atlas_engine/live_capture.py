@@ -8,7 +8,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers
+from atlas_engine.capture.codegen import attach_codegen_recorder, strip_extraction_markers, strip_note_markers
 from atlas_engine.capture.extraction import attach_extraction_button, collect_page_data
 from atlas_engine.capture.recorder import CaptureSession
 from atlas_engine.capture.video import finalize_video, start_capture_context, video_path_for_page
@@ -260,7 +260,7 @@ class _LiveCaptureSession:
             codegen_script = None
             try:
                 if codegen_path.exists() and codegen_path.stat().st_size > 0:
-                    codegen_script = strip_extraction_markers(codegen_path.read_text())
+                    codegen_script = strip_note_markers(strip_extraction_markers(codegen_path.read_text()))
             except Exception:
                 # Best-effort side artifact: a failed read must never abort
                 # the recording that already happened.

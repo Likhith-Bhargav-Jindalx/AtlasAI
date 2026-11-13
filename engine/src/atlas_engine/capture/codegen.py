@@ -74,6 +74,32 @@ def attach_codegen_recorder(context: BrowserContext, output_path: Path) -> None:
         )
 
 
+def strip_note_markers(codegen: str) -> str:
+    """Replaces the "Add note" button's click line, and everything up to
+    the note modal's own close (its Continue button, or pressing Enter in
+    its textbox), with a single marker comment — none of that UI exists
+    outside the record session. Unlike extraction there's no replayable
+    "note" step to turn it into (the note text itself is already captured
+    separately, as RecordedAction.operator_note, by the other in-process
+    recorder — this one only needs to stop feeding the span's clicks/fills
+    into parse_codegen_actions as if they were real page interactions),
+    so the marker is simply skipped as a comment there, dropping the whole
+    span with no action appended."""
+    kept = []
+    in_note_span = False
+    for line in codegen.splitlines():
+        if not in_note_span and ("__atlasNoteBtn" in line or "Add note" in line):
+            in_note_span = True
+            kept.append("# __ATLAS_NOTE__")
+            continue
+        if in_note_span:
+            if "__atlasNoteModalContinueBtn" in line or "Continue" in line or ".press(" in line:
+                in_note_span = False
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def strip_extraction_markers(codegen: str) -> str:
     """Replaces the extraction button's click line with a positional
     marker comment (the button itself never exists outside the record
