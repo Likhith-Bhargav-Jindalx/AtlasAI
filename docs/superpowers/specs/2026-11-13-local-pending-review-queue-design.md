@@ -30,9 +30,6 @@ cause a recording to be lost or marked failed.
 - A pending (not-yet-uploaded) recording is visible only on the machine
   that recorded it — no other agent, and no shared list, can see it until
   it's uploaded.
-- Fold in a fix for a separate, smaller stop-time risk: `stop()`'s browser
-  teardown (video flush, close) can still hang if the browser itself is
-  frozen, independent of anything Azure-related.
 
 ## Non-goals
 
@@ -46,6 +43,22 @@ cause a recording to be lost or marked failed.
   anything downstream of a recording actually being uploaded — all of that
   continues to work exactly as it does today, once a recording reaches
   Postgres.
+- **The frozen-browser teardown timeout** (`stop()`'s `page.title()`/
+  `context.close()`/`browser.close()` calls hanging if the browser is
+  frozen rather than dead) was originally folded into this spec, then
+  dropped during implementation: Playwright's sync API is thread-affine —
+  every call against `page`/`context`/`browser` must run on the exact
+  thread that opened the `sync_playwright()` session, so wrapping one of
+  these calls in a `ThreadPoolExecutor`-based timeout doesn't bound it,
+  it just makes every call fail instantly with
+  `greenlet.error: cannot switch to a different thread`. Confirmed with a
+  minimal repro and by reverting the attempt (3 existing `live_capture`
+  tests that depend on real popup/tab timing started failing the moment
+  the guard was added, and passed again once it was reverted). Fixing this
+  for real would mean rewriting the capture loop on Playwright's async API
+  (where `asyncio.wait_for(..., timeout=...)` works correctly) — out of
+  scope here; today's existing outer `stop()` timeout remains the only
+  safety net for a frozen browser.
 
 ## Architecture
 
@@ -167,25 +180,6 @@ New nav entry in `AppLayout.tsx`'s `NAV.agent`, alongside the existing two:
   is the handoff point where the new flow rejoins today's existing one,
   unchanged from here on.
 
-## Folded-in fix: frozen-browser teardown timeout
-
-Separate from Azure: `stop()`'s teardown still calls into the live browser
-(`page.title()` health checks in `_wait_for_stop_or_disconnect`,
-`context.close()` in `finalize_video`, `browser.close()`) to flush video to
-disk. These are real Playwright calls that can hang if the browser is
-frozen (not dead — a dead browser already fails fast via the existing
-disconnect-detection path). This is unrelated to anything above and isn't
-fixed by removing the Azure call from Stop, since local-only writing still
-requires the video to have been flushed first.
-
-Fix: wrap these specific calls with a short, explicit wall-clock guard
-(Playwright's sync API doesn't expose a per-call timeout for `title()` or
-`close()`, so this needs a small helper — e.g. running the call via a
-`ThreadPoolExecutor` future and calling `.result(timeout=5)`). On timeout,
-treat it the same as the existing "browser disconnected" path: proceed with
-whatever's already flushed to disk rather than silently consuming most of
-`stop()`'s overall budget waiting on a frozen process.
-
 ## Error handling
 
 - **Local disk write fails during Stop** (disk full, permissions) — this is
@@ -199,11 +193,6 @@ whatever's already flushed to disk rather than silently consuming most of
   `GET /pending-recordings` just re-lists whatever's on disk. No
   reconciliation needed; no orphaned DB rows are possible since none were
   ever created for a pending item.
-- **Frozen browser during teardown** — guard times out, proceeds with
-  whatever was flushed before the hang (may mean a partial/missing video in
-  the pending folder, same risk that exists today if a browser dies mid-
-  teardown; actions/trajectory are unaffected since they come from
-  already-in-memory capture data, not a live browser call).
 
 ## Testing
 
@@ -215,9 +204,6 @@ whatever's already flushed to disk rather than silently consuming most of
   path). Upload runs `persist_recording`, the DB row and `VideoAsset`s
   appear, the pending folder is removed. Discard removes the folder and
   touches nothing else.
-- **Frozen-browser guard**: a test that makes `page.title()`/
-  `context.close()` block past the short guard timeout and asserts `stop()`
-  proceeds instead of hanging out to its outer timeout.
 - **Frontend**: `PendingRecordingsPage`/`PendingReviewPage` tests mirroring
   the existing `AgentLibraryPage.test.tsx`/`ReviewPage.test.tsx` patterns;
   `LiveRecordingPage` test updated for the new navigation target.

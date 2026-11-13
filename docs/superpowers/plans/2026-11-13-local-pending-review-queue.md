@@ -4,7 +4,9 @@
 
 **Goal:** Decouple "Stop and review" from Azure Blob upload and Postgres entirely — a recording lands in a local-only pending folder first, and the agent explicitly chooses to Upload or Discard it after reviewing, so an upload failure can never again cause a recording to be lost.
 
-**Architecture:** `live_capture.py`'s default `persist_fn` changes from `recording_service.persist_recording` (local write + Azure upload + Postgres row, all synchronous) to a new `pending_recordings.write_pending_recording` (local write only, into `ATLAS_RUN_ROOT/pending_recordings/<uuid>/`). A new local-only FastAPI router lists/reads/serves video for pending recordings straight off disk, and exposes `upload` (which now calls today's `persist_recording` on demand) and `discard`. Frontend gets two new pages (`PendingRecordingsPage`, `PendingReviewPage`) and the Stop button's navigation target changes to the new pending-review page instead of the existing (Postgres-backed) `ReviewPage`. A separate, unrelated fix is folded in: a short explicit timeout guard around the browser-teardown calls in `_wait_for_stop_or_disconnect`/`finalize_video`/`browser.close()`, so a frozen (not dead) browser can't silently consume the whole stop budget.
+**Architecture:** `live_capture.py`'s default `persist_fn` changes from `recording_service.persist_recording` (local write + Azure upload + Postgres row, all synchronous) to a new `pending_recordings.write_pending_recording` (local write only, into `ATLAS_RUN_ROOT/pending_recordings/<uuid>/`). A new local-only FastAPI router lists/reads/serves video for pending recordings straight off disk, and exposes `upload` (which now calls today's `persist_recording` on demand) and `discard`. Frontend gets two new pages (`PendingRecordingsPage`, `PendingReviewPage`) and the Stop button's navigation target changes to the new pending-review page instead of the existing (Postgres-backed) `ReviewPage`.
+
+A separate, unrelated frozen-browser teardown timeout fix was originally folded into this plan and has been dropped: Playwright's sync API is thread-affine, so bounding `page.title()`/`context.close()`/`browser.close()` with a `ThreadPoolExecutor`-based timeout doesn't work — every call fails instantly with `greenlet.error: cannot switch to a different thread` instead of being bounded, as confirmed while implementing it (see the spec's Non-goals section). Today's existing outer `stop()` timeout remains the only safety net for a frozen browser; nothing below depends on that gap being closed.
 
 **Tech Stack:** Python 3.11, FastAPI, SQLAlchemy, pytest, Playwright (sync API), React, TypeScript, Vite, TanStack Query, Vitest + Testing Library.
 
@@ -13,303 +15,12 @@
 - No Alembic migration, no new `recording_status` enum value — pending recordings never get a Postgres row until Upload (per spec: `docs/superpowers/specs/2026-11-13-local-pending-review-queue-design.md`).
 - `/recordings/submit-capture` and everything downstream of a recording actually reaching Postgres (Section B form, submit-for-authoring) are unchanged.
 - No automatic background retry/upload — Upload is manual, agent-triggered only.
-- This plan assumes PR #21 (`fix/recording-upload-retry-and-slow-tests` — the upload retry-count bump and stable staging path) is merged into `main` first, or this branch is rebased onto it, since `upload_pending_recording` (Task 6) calls `recording_service.persist_recording` unchanged and benefits from that fix automatically. The branch `design/local-pending-review-queue` this plan's commits land on was created from `main` *before* PR #21, specifically to keep that already-open PR free of this larger feature's commits — rebase it onto `main` once PR #21 merges, before starting Task 1.
+- This plan assumes PR #21 (`fix/recording-upload-retry-and-slow-tests` — the upload retry-count bump and stable staging path) is merged into `main` first, or this branch is rebased onto it, since `upload_pending_recording` (Task 2) calls `recording_service.persist_recording` unchanged and benefits from that fix automatically. The branch `design/local-pending-review-queue` this plan's commits land on was created from `main` *before* PR #21, specifically to keep that already-open PR free of this larger feature's commits — rebase it onto `main` once PR #21 merges, before starting Task 1 (not yet done as of this plan's execution; proceeding without it was an explicit judgment call, not an oversight).
 - Follow existing code style: no module/function docstrings beyond explaining non-obvious *why*, mirror naming conventions already used in `recording_service.py`/`live_capture.py`/`api.py`.
 
 ---
 
-### Task 1: Timeout guard helper
-
-**Files:**
-- Create: `engine/src/atlas_engine/capture/timeout_guard.py`
-- Test: `engine/tests/test_capture_timeout_guard.py`
-
-**Interfaces:**
-- Produces: `run_with_timeout(func: Callable[[], T], timeout_seconds: float) -> T`, raising `StepTimedOut` (a plain `Exception` subclass) if `func` doesn't return within `timeout_seconds`. Used by Task 2.
-
-- [ ] **Step 1: Write the failing tests**
-
-```python
-import time
-
-import pytest
-
-from atlas_engine.capture.timeout_guard import StepTimedOut, run_with_timeout
-
-
-def test_run_with_timeout_returns_the_result_when_func_finishes_in_time():
-    assert run_with_timeout(lambda: 42, timeout_seconds=1.0) == 42
-
-
-def test_run_with_timeout_raises_step_timed_out_when_func_hangs():
-    def hangs():
-        time.sleep(5)
-        return "too late"
-
-    start = time.monotonic()
-    with pytest.raises(StepTimedOut):
-        run_with_timeout(hangs, timeout_seconds=0.2)
-    assert time.monotonic() - start < 1.0
-
-
-def test_run_with_timeout_reraises_funcs_own_exception():
-    def raises():
-        raise ValueError("boom")
-
-    with pytest.raises(ValueError, match="boom"):
-        run_with_timeout(raises, timeout_seconds=1.0)
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `cd engine && .venv/bin/python -m pytest tests/test_capture_timeout_guard.py -v`
-Expected: FAIL with `ModuleNotFoundError: No module named 'atlas_engine.capture.timeout_guard'`
-
-- [ ] **Step 3: Write the implementation**
-
-```python
-import concurrent.futures
-from typing import Callable, TypeVar
-
-T = TypeVar("T")
-
-
-class StepTimedOut(Exception):
-    """Raised by run_with_timeout when func didn't return within the bound."""
-
-
-def run_with_timeout(func: Callable[[], T], timeout_seconds: float) -> T:
-    """Runs func on a helper thread and enforces a wall-clock bound that
-    Playwright's own sync-API calls (page.title(), context.close(),
-    browser.close()) don't otherwise expose -- a frozen (not dead) browser
-    can hang one of those calls well past what live_capture.py's own
-    stop() timeout budget can absorb. The helper thread is abandoned, not
-    killed, on timeout; it's daemon-owned by the ThreadPoolExecutor and
-    the process doesn't wait on it at exit."""
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(func)
-    try:
-        return future.result(timeout=timeout_seconds)
-    except concurrent.futures.TimeoutError:
-        raise StepTimedOut(f"did not finish within {timeout_seconds}s") from None
-    finally:
-        executor.shutdown(wait=False)
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-Run: `cd engine && .venv/bin/python -m pytest tests/test_capture_timeout_guard.py -v`
-Expected: PASS, all 3 tests
-
-- [ ] **Step 5: Commit**
-
-```bash
-cd /Users/siddharthsingh/Downloads/code/AtlasAI
-git add engine/src/atlas_engine/capture/timeout_guard.py engine/tests/test_capture_timeout_guard.py
-git commit -m "feat: add run_with_timeout helper for bounding Playwright teardown calls"
-```
-
----
-
-### Task 2: Apply the timeout guard to browser teardown
-
-**Files:**
-- Modify: `engine/src/atlas_engine/live_capture.py` (`_wait_for_stop_or_disconnect`, and `_run`'s `browser.close()` call)
-- Modify: `engine/src/atlas_engine/capture/video.py` (`finalize_video`)
-- Test: `engine/tests/test_live_capture.py` (new test alongside the existing `test_wait_for_stop_or_disconnect_*` tests)
-- Test: `engine/tests/test_capture_video.py` (new test alongside existing `finalize_video` tests)
-
-**Interfaces:**
-- Consumes: `run_with_timeout`, `StepTimedOut` from Task 1 (`atlas_engine.capture.timeout_guard`).
-
-- [ ] **Step 1: Write the failing tests**
-
-Add to `engine/tests/test_capture_video.py`:
-
-```python
-import time
-
-from atlas_engine.capture.video import finalize_video, start_capture_context
-
-
-def test_finalize_video_proceeds_if_context_close_hangs(fixture_portal_url):
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        context, page, started_at_ms, video_dir = start_capture_context(browser)
-        try:
-            page.goto(f"{fixture_portal_url}/login.html")
-
-            def hanging_close(*, reason=None):
-                time.sleep(5)
-
-            context.close = hanging_close
-
-            start = time.monotonic()
-            video_path, ended_at_ms = finalize_video(context, page, close_timeout_seconds=0.2)
-            elapsed = time.monotonic() - start
-
-            assert elapsed < 2.0
-            assert video_path is not None
-            browser.close()
-        finally:
-            shutil.rmtree(video_dir, ignore_errors=True)
-```
-
-Add to `engine/tests/test_live_capture.py`, alongside the existing `_wait_for_stop_or_disconnect` tests:
-
-```python
-def test_wait_for_stop_or_disconnect_treats_a_hanging_title_call_as_disconnected():
-    class HangingPage:
-        def title(self):
-            time.sleep(5)
-
-    stop_event = threading.Event()
-    start = time.monotonic()
-    result = _wait_for_stop_or_disconnect(stop_event, HangingPage(), poll_interval=0.1, title_timeout_seconds=0.2)
-    elapsed = time.monotonic() - start
-
-    assert result is True
-    assert elapsed < 2.0
-```
-
-(`threading` and `time` are already imported at the top of `test_live_capture.py` — if not, add `import threading` and `import time`.)
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-Run: `cd engine && .venv/bin/python -m pytest tests/test_capture_video.py::test_finalize_video_proceeds_if_context_close_hangs tests/test_live_capture.py::test_wait_for_stop_or_disconnect_treats_a_hanging_title_call_as_disconnected -v`
-Expected: FAIL — `finalize_video() got an unexpected keyword argument 'close_timeout_seconds'`, and `_wait_for_stop_or_disconnect() got an unexpected keyword argument 'title_timeout_seconds'`
-
-- [ ] **Step 3: Implement `finalize_video`'s guard**
-
-In `engine/src/atlas_engine/capture/video.py`, replace:
-
-```python
-def finalize_video(context: BrowserContext, page: Page) -> tuple[Path | None, int]:
-    """Closes the context — which flushes the recorded video to disk —
-    and returns its path (None if this page had no video recording) plus
-    the wall-clock time recording finished (epoch ms). Closing is
-    best-effort: if the browser already disconnected on its own (e.g. a
-    human closed the window before stopping the recording), the context
-    is already gone and there is nothing left to close — that's not a
-    failure worth propagating, since the video path itself doesn't
-    require a live connection to read."""
-    video_path = Path(page.video.path()) if page.video else None
-    try:
-        context.close()
-    except Exception:
-        pass
-    ended_at_ms = int(time.time() * 1000)
-    return video_path, ended_at_ms
-```
-
-with:
-
-```python
-def finalize_video(
-    context: BrowserContext, page: Page, *, close_timeout_seconds: float = 5.0,
-) -> tuple[Path | None, int]:
-    """Closes the context — which flushes the recorded video to disk —
-    and returns its path (None if this page had no video recording) plus
-    the wall-clock time recording finished (epoch ms). Closing is
-    best-effort: if the browser already disconnected on its own (e.g. a
-    human closed the window before stopping the recording), the context
-    is already gone and there is nothing left to close — that's not a
-    failure worth propagating, since the video path itself doesn't
-    require a live connection to read. Bounded by run_with_timeout too: a
-    frozen (not dead) browser can otherwise hang this call indefinitely
-    instead of raising."""
-    video_path = Path(page.video.path()) if page.video else None
-    try:
-        run_with_timeout(context.close, close_timeout_seconds)
-    except Exception:
-        pass
-    ended_at_ms = int(time.time() * 1000)
-    return video_path, ended_at_ms
-```
-
-Add to the imports at the top of `video.py`:
-
-```python
-from atlas_engine.capture.timeout_guard import run_with_timeout
-```
-
-- [ ] **Step 4: Implement `_wait_for_stop_or_disconnect`'s guard and `browser.close()`'s guard**
-
-In `engine/src/atlas_engine/live_capture.py`, replace the `_wait_for_stop_or_disconnect` function:
-
-```python
-def _wait_for_stop_or_disconnect(
-    stop_event: threading.Event, page, *, poll_interval: float = 1.0, on_tick=lambda: None,
-    title_timeout_seconds: float = 5.0,
-) -> bool:
-    """Blocks until stop_event is set (an explicit /stop call) or the
-    browser stops responding to a cheap health check (it died on its own —
-    most often a human closing the window before clicking Stop) —
-    whichever happens first. Returns True if it was the browser that died.
-
-    ... (keep the rest of the existing docstring unchanged) ...
-
-    Each page.title() call is bounded by run_with_timeout: a frozen (not
-    dead) browser can otherwise hang the call past any reasonable budget
-    instead of raising — treated the same as a dead one here, since
-    either way nothing useful can be read from it."""
-    while not stop_event.wait(timeout=poll_interval):
-        on_tick()
-        try:
-            run_with_timeout(page.title, title_timeout_seconds)
-        except Exception:
-            on_tick()
-            return True
-    on_tick()
-    try:
-        run_with_timeout(page.title, title_timeout_seconds)
-    except Exception:
-        return True
-    return False
-```
-
-Add to the imports at the top of `live_capture.py`:
-
-```python
-from atlas_engine.capture.timeout_guard import run_with_timeout
-```
-
-In `_run`, replace:
-
-```python
-            video_path, video_ended_at_ms = finalize_video(context, page)
-            try:
-                browser.close()
-            except Exception:
-                pass
-```
-
-with:
-
-```python
-            video_path, video_ended_at_ms = finalize_video(context, page)
-            try:
-                run_with_timeout(browser.close, 5.0)
-            except Exception:
-                pass
-```
-
-- [ ] **Step 5: Run tests to verify they pass**
-
-Run: `cd engine && .venv/bin/python -m pytest tests/test_capture_video.py tests/test_live_capture.py -v`
-Expected: PASS, including the two new tests and every pre-existing test in both files
-
-- [ ] **Step 6: Commit**
-
-```bash
-cd /Users/siddharthsingh/Downloads/code/AtlasAI
-git add engine/src/atlas_engine/capture/video.py engine/src/atlas_engine/live_capture.py engine/tests/test_capture_video.py engine/tests/test_live_capture.py
-git commit -m "fix: bound browser-teardown calls with a short timeout so a frozen browser can't hang stop()"
-```
-
----
-
-### Task 3: `pending_recordings.py` — manifest + local-only writer
+### Task 1: `pending_recordings.py` — manifest + local-only writer
 
 **Files:**
 - Create: `engine/src/atlas_engine/pending_recordings.py`
@@ -317,7 +28,7 @@ git commit -m "fix: bound browser-teardown calls with a short timeout so a froze
 
 **Interfaces:**
 - Consumes: `atlas_engine.recording_service.PageCapture` (existing dataclass, unchanged), `atlas_engine.capture.events.RecordedAction`, `atlas_engine.config.settings`.
-- Produces: `pending_root() -> Path`; `PendingManifest` dataclass with fields `id, org_id, start_url, role, created_at, request_id, user_id, video_started_at_ms, video_ended_at_ms, action_count, has_video, pages, upload_error` and `.load(pending_dir)` / `.save(pending_dir)`; `write_pending_recording(org_id, start_url, actions, *, request_id=None, role="demo", user_id=None, video_path=None, video_started_at_ms=None, video_ended_at_ms=None, additional_pages=None, page_extractions=None, codegen_script=None, capture_artifacts=None) -> uuid.UUID`. Used by Task 4, 5, 6, 7.
+- Produces: `pending_root() -> Path`; `PendingManifest` dataclass with fields `id, org_id, start_url, role, created_at, request_id, user_id, video_started_at_ms, video_ended_at_ms, action_count, has_video, pages, upload_error` and `.load(pending_dir)` / `.save(pending_dir)`; `write_pending_recording(org_id, start_url, actions, *, request_id=None, role="demo", user_id=None, video_path=None, video_started_at_ms=None, video_ended_at_ms=None, additional_pages=None, page_extractions=None, codegen_script=None, capture_artifacts=None) -> uuid.UUID`. Used by Task 2, 3, 4, 5.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -425,7 +136,7 @@ class PendingManifest:
     pending_root(). `pages` holds one dict per additional (non-main) tab,
     each shaped {"page_index": int, "has_video": bool,
     "video_started_at_ms": int | None, "video_ended_at_ms": int | None} —
-    enough for upload_pending_recording (Task 6) to rebuild the exact
+    enough for upload_pending_recording (Task 4) to rebuild the exact
     PageCapture list persist_recording expects."""
 
     id: str
@@ -476,7 +187,7 @@ def write_pending_recording(
     """Writes a captured recording to a local-only pending folder — no
     Postgres row, no Azure upload, so nothing here can fail on a network
     problem. This is live_capture.py's default persist_fn for the Stop
-    button; upload_pending_recording() (Task 6) is what actually calls
+    button; upload_pending_recording() (Task 4) is what actually calls
     recording_service.persist_recording() later, once the agent reviews
     and explicitly chooses to upload. Same keyword arguments as
     persist_recording — the one exception is capture_artifacts, which,
@@ -560,7 +271,7 @@ git commit -m "feat: add pending_recordings module — local-only recording writ
 
 ---
 
-### Task 4: List and read a pending recording's detail
+### Task 2: List and read a pending recording's detail
 
 **Files:**
 - Modify: `engine/src/atlas_engine/pending_recordings.py`
@@ -568,7 +279,7 @@ git commit -m "feat: add pending_recordings module — local-only recording writ
 
 **Interfaces:**
 - Consumes: `atlas_engine.recording_service._caption_for` (existing pure function, unchanged).
-- Produces: `get_pending_dir(pending_id: str) -> Path` (raises `ValueError` if missing); `list_pending_recordings() -> list[PendingManifest]`; `get_pending_recording(pending_id: str) -> PendingManifest`; `pending_recording_steps(actions: list[RecordedAction], video_started_at_ms: int | None) -> list[dict]` (each `{"order_index": int, "caption": str, "offset_ms": int | None}`); `load_pending_actions(pending_dir: Path, filename: str) -> list[RecordedAction]`. Used by Task 6 and Task 8.
+- Produces: `get_pending_dir(pending_id: str) -> Path` (raises `ValueError` if missing); `list_pending_recordings() -> list[PendingManifest]`; `get_pending_recording(pending_id: str) -> PendingManifest`; `pending_recording_steps(actions: list[RecordedAction], video_started_at_ms: int | None) -> list[dict]` (each `{"order_index": int, "caption": str, "offset_ms": int | None}`); `load_pending_actions(pending_dir: Path, filename: str) -> list[RecordedAction]`. Used by Task 4 and Task 6.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -691,14 +402,14 @@ git commit -m "feat: add list/read/caption helpers for pending recordings"
 
 ---
 
-### Task 5: Discard a pending recording
+### Task 3: Discard a pending recording
 
 **Files:**
 - Modify: `engine/src/atlas_engine/pending_recordings.py`
 - Test: `engine/tests/test_pending_recordings.py`
 
 **Interfaces:**
-- Produces: `discard_pending_recording(pending_id: str) -> None` (raises `ValueError` if the id doesn't exist). Used by Task 8.
+- Produces: `discard_pending_recording(pending_id: str) -> None` (raises `ValueError` if the id doesn't exist). Used by Task 6.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -752,7 +463,7 @@ git commit -m "feat: add discard_pending_recording"
 
 ---
 
-### Task 6: Upload a pending recording
+### Task 4: Upload a pending recording
 
 **Files:**
 - Modify: `engine/src/atlas_engine/pending_recordings.py`
@@ -760,7 +471,7 @@ git commit -m "feat: add discard_pending_recording"
 
 **Interfaces:**
 - Consumes: `atlas_engine.recording_service.persist_recording` (existing function, unchanged — imported lazily inside the function body to keep `pending_recordings.py` free of a module-load-time dependency on `recording_service`, matching how `live_capture.py` already injects `persist_fn` rather than importing `persist_recording` for its own sake).
-- Produces: `upload_pending_recording(pending_id: str) -> uuid.UUID` (the real `Recording.id`). On failure, re-raises whatever `persist_recording` raised, after recording it on the manifest's `upload_error` field and leaving the pending folder in place. Used by Task 8.
+- Produces: `upload_pending_recording(pending_id: str) -> uuid.UUID` (the real `Recording.id`). On failure, re-raises whatever `persist_recording` raised, after recording it on the manifest's `upload_error` field and leaving the pending folder in place. Used by Task 6.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -912,15 +623,15 @@ git commit -m "feat: add upload_pending_recording, calling persist_recording on 
 
 ---
 
-### Task 7: Wire `live_capture.py` to the new default and update existing tests
+### Task 5: Wire `live_capture.py` to the new default and update existing tests
 
 **Files:**
 - Modify: `engine/src/atlas_engine/live_capture.py`
 - Modify: `engine/tests/test_live_capture.py`
 
 **Interfaces:**
-- Consumes: `atlas_engine.pending_recordings.write_pending_recording` (Task 3).
-- Produces: `_LiveCaptureSession.result_id` (renamed from `recording_id`, since it's no longer a `Recording.id` by default); `start_live_capture(...)`'s and `stop_live_capture(...)`'s default behavior now returns a pending id instead of a `Recording.id`. Used by Task 8.
+- Consumes: `atlas_engine.pending_recordings.write_pending_recording` (Task 1).
+- Produces: `_LiveCaptureSession.result_id` (renamed from `recording_id`, since it's no longer a `Recording.id` by default); `start_live_capture(...)`'s and `stop_live_capture(...)`'s default behavior now returns a pending id instead of a `Recording.id`. Used by Task 6.
 
 - [ ] **Step 1: Update the existing tests that assume the old default**
 
@@ -1029,7 +740,7 @@ git commit -m "feat: default live capture's Stop to the local pending folder ins
 
 ---
 
-### Task 8: API endpoints
+### Task 6: API endpoints
 
 **Files:**
 - Modify: `engine/src/atlas_engine/api.py`
@@ -1038,7 +749,7 @@ git commit -m "feat: default live capture's Stop to the local pending folder ins
 
 **Interfaces:**
 - Consumes: everything produced by Tasks 3–7.
-- Produces: `GET /pending-recordings`, `GET /pending-recordings/{pending_id}`, `GET /pending-recordings/{pending_id}/video/{page_index}`, `POST /pending-recordings/{pending_id}/upload`, `POST /pending-recordings/{pending_id}/discard`; `StopRecordingResponse.pending_id` (renamed from `.recording_id`). Used by Task 9 (frontend).
+- Produces: `GET /pending-recordings`, `GET /pending-recordings/{pending_id}`, `GET /pending-recordings/{pending_id}/video/{page_index}`, `POST /pending-recordings/{pending_id}/upload`, `POST /pending-recordings/{pending_id}/discard`; `StopRecordingResponse.pending_id` (renamed from `.recording_id`). Used by Task 7 (frontend).
 
 - [ ] **Step 1: Update the existing stop-endpoint test for the field rename and new default**
 
@@ -1222,7 +933,7 @@ with:
     return StopRecordingResponse(pending_id=str(result_id))
 ```
 
-(and rename the local variable `recording_id` to `result_id` throughout that function body for clarity, matching Task 7's rename — `recording_id = stop_live_capture(uuid.UUID(capture_session_id))` becomes `result_id = stop_live_capture(uuid.UUID(capture_session_id))`.)
+(and rename the local variable `recording_id` to `result_id` throughout that function body for clarity, matching Task 5's rename — `recording_id = stop_live_capture(uuid.UUID(capture_session_id))` becomes `result_id = stop_live_capture(uuid.UUID(capture_session_id))`.)
 
 Add the new endpoints, right after `stop_recording_endpoint`:
 
@@ -1357,7 +1068,7 @@ Expected: PASS, every test in both files
 - [ ] **Step 6: Run the full backend test suite's non-Playwright-heavy subset to check for any other caller of the renamed field**
 
 Run: `cd engine && grep -rn '"recording_id"\]' tests/ src/ | grep -v test_api_pending_recordings.py`
-Expected: no remaining reads of a `/recordings/.../stop` response's `"recording_id"` key outside what was just updated. If the frontend's `useStopRecording` type shows up here first (it's TypeScript, this grep is Python-only, so it won't) — that's handled in Task 12.
+Expected: no remaining reads of a `/recordings/.../stop` response's `"recording_id"` key outside what was just updated. If the frontend's `useStopRecording` type shows up here first (it's TypeScript, this grep is Python-only, so it won't) — that's handled in Task 10.
 
 - [ ] **Step 7: Commit**
 
@@ -1369,7 +1080,7 @@ git commit -m "feat: add pending-recordings API endpoints, rename stop response 
 
 ---
 
-### Task 9: Frontend `lib/pendingRecordings.ts`
+### Task 7: Frontend `lib/pendingRecordings.ts`
 
 **Files:**
 - Create: `frontend/src/lib/pendingRecordings.ts`
@@ -1464,15 +1175,15 @@ git commit -m "feat: add frontend hooks for the pending-recordings API"
 
 ---
 
-### Task 10: `PendingRecordingsPage`
+### Task 8: `PendingRecordingsPage`
 
 **Files:**
 - Create: `frontend/src/pages/agent/PendingRecordingsPage.tsx`
 - Create: `frontend/src/pages/agent/PendingRecordingsPage.test.tsx`
 
 **Interfaces:**
-- Consumes: `usePendingRecordings` (Task 9). Mirrors `AgentLibraryPage.tsx`'s layout and `apiFetch`-mock test pattern from `AgentLibraryPage.test.tsx`.
-- Produces: `PendingRecordingsPage` component, navigating to `/agent/pending/:pendingId` on card click. Used by Task 12's route wiring.
+- Consumes: `usePendingRecordings` (Task 7). Mirrors `AgentLibraryPage.tsx`'s layout and `apiFetch`-mock test pattern from `AgentLibraryPage.test.tsx`.
+- Produces: `PendingRecordingsPage` component, navigating to `/agent/pending/:pendingId` on card click. Used by Task 10's route wiring.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1606,15 +1317,15 @@ git commit -m "feat: add PendingRecordingsPage listing the local pending queue"
 
 ---
 
-### Task 11: `PendingReviewPage`
+### Task 9: `PendingReviewPage`
 
 **Files:**
 - Create: `frontend/src/pages/agent/PendingReviewPage.tsx`
 - Create: `frontend/src/pages/agent/PendingReviewPage.test.tsx`
 
 **Interfaces:**
-- Consumes: `usePendingRecordingDetail`, `useUploadPendingRecording`, `useDiscardPendingRecording`, `pendingRecordingVideoUrl` (Task 9); `VideoStepPlayer` (existing component, unchanged — it already takes a `recordingId`/`pageIndex` pair and builds its own video `<src>` via a URL-building function, so this page passes it a small per-page wrapper, see Step 3).
-- Produces: `PendingReviewPage` component. On successful Upload, navigates to `/agent/recordings/:recording_id` (the existing `ReviewPage`). On Discard, navigates to `/agent/pending`. Used by Task 12's route wiring.
+- Consumes: `usePendingRecordingDetail`, `useUploadPendingRecording`, `useDiscardPendingRecording`, `pendingRecordingVideoUrl` (Task 7); `VideoStepPlayer` (existing component, unchanged — it already takes a `recordingId`/`pageIndex` pair and builds its own video `<src>` via a URL-building function, so this page passes it a small per-page wrapper, see Step 3).
+- Produces: `PendingReviewPage` component. On successful Upload, navigates to `/agent/recordings/:recording_id` (the existing `ReviewPage`). On Discard, navigates to `/agent/pending`. Used by Task 10's route wiring.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1782,7 +1493,7 @@ git commit -m "feat: add PendingReviewPage with Upload/Discard actions"
 
 ---
 
-### Task 12: Wire navigation, nav entry, and routes
+### Task 10: Wire navigation, nav entry, and routes
 
 **Files:**
 - Modify: `frontend/src/pages/agent/LiveRecordingPage.tsx`
@@ -1791,7 +1502,7 @@ git commit -m "feat: add PendingReviewPage with Upload/Discard actions"
 - Modify: `frontend/src/lib/recordings.ts` (`useStopRecording`'s return type)
 
 **Interfaces:**
-- Consumes: `PendingRecordingsPage` (Task 10), `PendingReviewPage` (Task 11).
+- Consumes: `PendingRecordingsPage` (Task 8), `PendingReviewPage` (Task 9).
 - Produces: the fully wired end-to-end flow — Stop click now lands on `/agent/pending/:pendingId`.
 
 - [ ] **Step 1: Update `useStopRecording`'s type**
