@@ -189,3 +189,63 @@ def pending_recording_steps(actions: list[RecordedAction], video_started_at_ms: 
 
 def discard_pending_recording(pending_id: str) -> None:
     shutil.rmtree(get_pending_dir(pending_id))
+
+
+def upload_pending_recording(pending_id: str) -> uuid.UUID:
+    from atlas_engine.recording_service import persist_recording
+
+    pending_dir = get_pending_dir(pending_id)
+    manifest = PendingManifest.load(pending_dir)
+
+    actions = load_pending_actions(pending_dir, "actions.json")
+    main_video_path = pending_dir / "video.webm"
+    main_video_path = main_video_path if main_video_path.exists() else None
+
+    additional_pages = [
+        PageCapture(
+            page_index=page_info["page_index"],
+            actions=load_pending_actions(pending_dir, f"actions-page{page_info['page_index']}.json"),
+            video_path=(
+                pending_dir / f"video-page{page_info['page_index']}.webm" if page_info["has_video"] else None
+            ),
+            video_started_at_ms=page_info["video_started_at_ms"],
+            video_ended_at_ms=page_info["video_ended_at_ms"],
+        )
+        for page_info in manifest.pages
+    ]
+
+    page_extractions = []
+    i = 0
+    while (pending_dir / f"extraction-{i}.json").exists():
+        page_extractions.append(json.loads((pending_dir / f"extraction-{i}.json").read_text()))
+        i += 1
+
+    codegen_path = pending_dir / "codegen.py"
+    codegen_script = codegen_path.read_text() if codegen_path.exists() else None
+
+    capture_artifacts = [
+        (filename, pending_dir / filename)
+        for filename in ("trace.zip", "network.har")
+        if (pending_dir / filename).exists()
+    ]
+
+    try:
+        recording_id = persist_recording(
+            manifest.org_id, manifest.start_url, actions,
+            request_id=uuid.UUID(manifest.request_id) if manifest.request_id else None,
+            role=manifest.role, user_id=manifest.user_id,
+            video_path=main_video_path,
+            video_started_at_ms=manifest.video_started_at_ms,
+            video_ended_at_ms=manifest.video_ended_at_ms,
+            additional_pages=additional_pages or None,
+            page_extractions=page_extractions or None,
+            codegen_script=codegen_script,
+            capture_artifacts=capture_artifacts or None,
+        )
+    except Exception as exc:
+        manifest.upload_error = f"{type(exc).__name__}: {exc}"
+        manifest.save(pending_dir)
+        raise
+
+    shutil.rmtree(pending_dir)
+    return recording_id

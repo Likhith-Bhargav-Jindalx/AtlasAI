@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 
 from atlas_engine.capture.events import RecordedAction
+from atlas_engine.db import session_scope
+from atlas_engine.db.models import Organization, Recording, VideoAsset
 from atlas_engine.pending_recordings import (
     PendingManifest, discard_pending_recording, get_pending_dir, get_pending_recording,
     list_pending_recordings, load_pending_actions, pending_recording_steps, pending_root,
-    write_pending_recording,
+    upload_pending_recording, write_pending_recording,
 )
 
 
@@ -127,3 +129,58 @@ def test_discard_pending_recording_removes_the_folder():
 def test_discard_pending_recording_raises_for_an_unknown_id():
     with pytest.raises(ValueError, match="No pending recording"):
         discard_pending_recording(str(uuid.uuid4()))
+
+
+def _make_org() -> str:
+    with session_scope() as session:
+        org = Organization(name="Pending Upload Org", slug=f"pending-upload-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        return str(org.id)
+
+
+def test_upload_pending_recording_persists_to_postgres_and_removes_the_pending_folder():
+    org_id = _make_org()
+    pending_id = write_pending_recording(org_id, "https://x.test", [_action(0), _action(1)])
+    pending_dir = get_pending_dir(str(pending_id))
+
+    recording_id = upload_pending_recording(str(pending_id))
+
+    assert not pending_dir.exists()
+    with session_scope() as session:
+        recording = session.get(Recording, recording_id)
+        assert recording.status == "captured"
+
+
+def test_upload_pending_recording_with_video_creates_a_video_asset(tmp_path):
+    org_id = _make_org()
+    video_path = tmp_path / "video.webm"
+    video_path.write_bytes(b"fake-webm-bytes")
+    pending_id = write_pending_recording(
+        org_id, "https://x.test", [_action(0)],
+        video_path=video_path, video_started_at_ms=1000, video_ended_at_ms=5000,
+    )
+
+    recording_id = upload_pending_recording(str(pending_id))
+
+    with session_scope() as session:
+        video_asset = session.query(VideoAsset).filter_by(recording_id=recording_id).one()
+        assert video_asset.page_index == 0
+
+
+def test_upload_pending_recording_keeps_the_folder_and_records_the_error_on_failure(monkeypatch):
+    org_id = _make_org()
+    pending_id = write_pending_recording(org_id, "https://x.test", [_action(0)])
+    pending_dir = get_pending_dir(str(pending_id))
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("blob upload exploded")
+
+    monkeypatch.setattr("atlas_engine.recording_service.persist_recording", _raise)
+
+    with pytest.raises(RuntimeError, match="blob upload exploded"):
+        upload_pending_recording(str(pending_id))
+
+    assert pending_dir.exists()
+    manifest = get_pending_recording(str(pending_id))
+    assert "blob upload exploded" in manifest.upload_error
