@@ -122,6 +122,41 @@ def test_check_for_update_reports_no_update_when_already_current(monkeypatch):
     assert result == UpdateCheckResult(update_available=False)
 
 
+def test_check_for_update_sends_bearer_token_when_set(monkeypatch):
+    # Private repo: every GitHub Releases call 401s without this header.
+    monkeypatch.setenv("ATLAS_GITHUB_RELEASES_TOKEN", "secret-token")
+    payload = _release_payload("desktop-v1.0.0", "atlas-desktop-app-1.0.0.zip", None)
+    get_calls = []
+
+    def fake_get(url, **kwargs):
+        get_calls.append(kwargs)
+        if "checksums.txt" in url:
+            return _FakeResponse(text_data="aaa111  atlas-desktop-app-1.0.0.zip\n")
+        return _FakeResponse(json_data=payload)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    check_for_update(local_version="0.9.0", local_vendor_version="1.49.0")
+
+    assert all(kwargs["headers"].get("Authorization") == "Bearer secret-token" for kwargs in get_calls)
+
+
+def test_check_for_update_omits_auth_header_when_token_unset(monkeypatch):
+    monkeypatch.delenv("ATLAS_GITHUB_RELEASES_TOKEN", raising=False)
+    payload = _release_payload("desktop-v1.0.0", "atlas-desktop-app-1.0.0.zip", None)
+    get_calls = []
+
+    def fake_get(url, **kwargs):
+        get_calls.append(kwargs)
+        if "checksums.txt" in url:
+            return _FakeResponse(text_data="aaa111  atlas-desktop-app-1.0.0.zip\n")
+        return _FakeResponse(json_data=payload)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    check_for_update(local_version="0.9.0", local_vendor_version="1.49.0")
+
+    assert all("Authorization" not in kwargs["headers"] for kwargs in get_calls)
+
+
 def test_check_for_update_reports_available_update_without_vendor_change(monkeypatch):
     payload = _release_payload("desktop-v1.1.0", "atlas-desktop-app-1.1.0.zip", "atlas-desktop-vendor-1.49.0.zip")
     checksums_text = (
@@ -154,7 +189,10 @@ def test_check_for_update_reports_available_update_without_vendor_change(monkeyp
     # treats the unfollowed redirect itself as an error and this whole
     # check silently reports no update — this mock wouldn't catch that on
     # its own, so assert the call site actually asks to follow redirects.
-    assert checksums_calls == [{"timeout": _REQUEST_TIMEOUT_SECONDS, "follow_redirects": True}]
+    assert checksums_calls == [{
+        "timeout": _REQUEST_TIMEOUT_SECONDS, "follow_redirects": True,
+        "headers": {"Accept": "application/octet-stream"},
+    }]
 
 
 def test_check_for_update_requires_vendor_zip_when_vendor_version_changed(monkeypatch):

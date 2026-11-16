@@ -127,6 +127,7 @@ jobs:
           ATLAS_AZURE_STORAGE_CONTAINER=atlas-runs
           ATLAS_REQUIRE_AZURE_STORAGE=true
           ATLAS_SENTRY_DSN=${{ secrets.SENTRY_DSN }}
+          ATLAS_GITHUB_RELEASES_TOKEN=${{ secrets.ATLAS_GITHUB_RELEASES_TOKEN }}
           EOF
 
       - name: Build desktop exe

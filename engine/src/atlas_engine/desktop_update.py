@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import subprocess
 import zipfile
 from dataclasses import dataclass
@@ -26,6 +27,18 @@ GITHUB_RELEASES_LATEST_URL = (
     "https://api.github.com/repos/Likhith-Bhargav-Jindalx/AtlasAI/releases/latest"
 )
 _REQUEST_TIMEOUT_SECONDS = 3.0
+
+
+def _github_auth_headers() -> dict[str, str]:
+    """The repo is private — every GitHub Releases call (metadata, checksums,
+    and the asset downloads themselves) 401s without this. Fine-grained PAT,
+    Contents: Read-only, scoped to just this one repo — baked into
+    desktop/production.env the same way the DB/storage credentials are (see
+    build-exe.yml's "Write baked-in production credentials" step), never
+    committed. Returns {} when unset so a dev build without the token still
+    runs (update check just fails closed, same as any other network error)."""
+    token = os.environ.get("ATLAS_GITHUB_RELEASES_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def parse_version(version: str) -> tuple[int, int, int]:
@@ -84,7 +97,7 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
         response = httpx.get(
             GITHUB_RELEASES_LATEST_URL,
             timeout=_REQUEST_TIMEOUT_SECONDS,
-            headers={"Accept": "application/vnd.github+json"},
+            headers={"Accept": "application/vnd.github+json", **_github_auth_headers()},
         )
         response.raise_for_status()
         payload = response.json()
@@ -103,7 +116,15 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
         # GitHub release asset URLs 302-redirect to signed blob storage URLs —
         # without follow_redirects, raise_for_status() treats that redirect
         # itself as an error and this whole check silently reports no update.
-        checksums_response = httpx.get(checksums_url, timeout=_REQUEST_TIMEOUT_SECONDS, follow_redirects=True)
+        # On a private repo, browser_download_url only serves the actual
+        # asset bytes (not an HTML/JSON error page) when both the auth header
+        # AND this Accept header are present.
+        checksums_response = httpx.get(
+            checksums_url,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"Accept": "application/octet-stream", **_github_auth_headers()},
+        )
         checksums_response.raise_for_status()
         checksums = parse_checksums(checksums_response.text)
 
@@ -148,7 +169,8 @@ def _download_and_verify(
     hasher = hashlib.sha256()
     downloaded = 0
     with dest_zip.open("wb") as f:
-        with httpx.stream("GET", url, timeout=120.0, follow_redirects=True) as response:
+        headers = {"Accept": "application/octet-stream", **_github_auth_headers()}
+        with httpx.stream("GET", url, timeout=120.0, follow_redirects=True, headers=headers) as response:
             response.raise_for_status()
             content_length = response.headers.get("content-length")
             total_bytes = int(content_length) if content_length is not None else None
