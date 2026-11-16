@@ -183,6 +183,9 @@ def _run_update_in_background(result) -> None:
     try:
         stage_update(result, staging_dir, on_progress=_on_download_progress)
     except UpdateApplyError as exc:
+        import sentry_sdk
+
+        sentry_sdk.capture_exception(exc)
         _set_update_progress(phase="error", error=str(exc))
         return
 

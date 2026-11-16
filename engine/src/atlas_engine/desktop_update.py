@@ -124,6 +124,9 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
         )
     except Exception:
         logger.warning("desktop update check failed", exc_info=True)
+        import sentry_sdk
+
+        sentry_sdk.capture_exception()
         return UpdateCheckResult(update_available=False)
 
 
