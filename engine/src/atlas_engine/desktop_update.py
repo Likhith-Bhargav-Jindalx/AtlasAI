@@ -201,11 +201,20 @@ def stage_update(
         vendor_zip.unlink()
 
 
+# Written into install_dir by the swap script when, after the copy, the
+# VERSION file on disk still doesn't match what was supposed to be
+# installed -- the only way a silent partial robocopy (locked file, AV
+# holding a handle, disk full) gets noticed at all. Checked and cleared by
+# app.py on the next launch.
+UPDATE_FAILURE_MARKER_NAME = "update_failed.marker"
+
 _SWAP_SCRIPT_TEMPLATE = """\
 $targetPid = {pid}
 $staging = "{staging}"
 $install = "{install}"
 $exe = "{exe_name}"
+$expectedVersion = "{expected_version}"
+$marker = Join-Path $install "{marker_name}"
 
 while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) {{
     Start-Sleep -Milliseconds 500
@@ -213,19 +222,36 @@ while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) {{
 
 robocopy $staging $install /E | Out-Null
 Remove-Item -Recurse -Force $staging
+
+$versionFile = Join-Path $install "_internal\\VERSION"
+$actualVersion = $null
+if (Test-Path $versionFile) {{
+    $actualVersion = (Get-Content $versionFile -Raw).Trim()
+}}
+if ($actualVersion -ne $expectedVersion) {{
+    Set-Content -Path $marker -Value "expected=$expectedVersion actual=$actualVersion"
+}} else {{
+    Remove-Item -Path $marker -ErrorAction SilentlyContinue
+}}
+
 Start-Process -FilePath (Join-Path $install $exe)
 """
 
 
 def write_swap_script(
-    *, pid: int, staging_dir: Path, install_dir: Path, exe_name: str, script_path: Path
+    *, pid: int, staging_dir: Path, install_dir: Path, exe_name: str, expected_version: str, script_path: Path
 ) -> None:
     """Plain (non-mirroring) robocopy: only files present in staging_dir
     are touched, so the install dir's existing playwright/ subfolder is
     left alone whenever a vendor update wasn't staged."""
     script_path.write_text(
         _SWAP_SCRIPT_TEMPLATE.format(
-            pid=pid, staging=staging_dir, install=install_dir, exe_name=exe_name
+            pid=pid,
+            staging=staging_dir,
+            install=install_dir,
+            exe_name=exe_name,
+            expected_version=expected_version,
+            marker_name=UPDATE_FAILURE_MARKER_NAME,
         )
     )
 

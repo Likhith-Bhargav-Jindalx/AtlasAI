@@ -9,6 +9,7 @@ import pytest
 
 from atlas_engine.desktop_update import (
     _REQUEST_TIMEOUT_SECONDS,
+    UPDATE_FAILURE_MARKER_NAME,
     UpdateApplyError,
     UpdateCheckResult,
     check_for_update,
@@ -326,6 +327,7 @@ def test_write_swap_script_contains_pid_and_paths(tmp_path):
         staging_dir=tmp_path / "staging",
         install_dir=tmp_path / "install",
         exe_name="atlas-desktop.exe",
+        expected_version="1.2.3",
         script_path=script_path,
     )
 
@@ -334,7 +336,28 @@ def test_write_swap_script_contains_pid_and_paths(tmp_path):
     assert str(tmp_path / "staging") in content
     assert str(tmp_path / "install") in content
     assert "atlas-desktop.exe" in content
+    assert "1.2.3" in content
     assert "robocopy" in content.lower()
+
+
+def test_write_swap_script_checks_version_after_copy_and_marks_mismatch(tmp_path):
+    script_path = tmp_path / "swap.ps1"
+
+    write_swap_script(
+        pid=4242,
+        staging_dir=tmp_path / "staging",
+        install_dir=tmp_path / "install",
+        exe_name="atlas-desktop.exe",
+        expected_version="9.9.9",
+        script_path=script_path,
+    )
+
+    content = script_path.read_text()
+    # Verification must happen after the copy, and the marker gets written
+    # on mismatch / cleared on match -- not written unconditionally.
+    assert content.index("robocopy") < content.index("$actualVersion")
+    assert UPDATE_FAILURE_MARKER_NAME in content
+    assert "$actualVersion -ne $expectedVersion" in content
 
 
 def test_launch_swap_script_invokes_powershell_detached(tmp_path, monkeypatch):

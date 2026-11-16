@@ -123,12 +123,34 @@ from fastapi.staticfiles import StaticFiles
 
 from atlas_engine.api import app as fastapi_app
 from atlas_engine.desktop_update import (
+    UPDATE_FAILURE_MARKER_NAME,
     UpdateApplyError,
     check_for_update,
     launch_swap_script,
     stage_update,
     write_swap_script,
 )
+
+
+def _report_stale_update_marker() -> None:
+    """Checked once per launch -- the swap script (desktop_update.py)
+    writes this marker when, after copying, the install dir's VERSION
+    still doesn't match what the update claimed to install. Reports it to
+    Sentry once, then clears it so a healthy run doesn't keep re-reporting
+    a failure from a previous launch."""
+    if not getattr(sys, "frozen", False):
+        return
+    marker = Path(sys.executable).resolve().parent / UPDATE_FAILURE_MARKER_NAME
+    if not marker.exists():
+        return
+
+    import sentry_sdk
+
+    sentry_sdk.capture_message(f"desktop self-update left a version mismatch: {marker.read_text().strip()}")
+    marker.unlink(missing_ok=True)
+
+
+_report_stale_update_marker()
 
 
 def _run_server() -> None:
@@ -198,6 +220,7 @@ def _run_update_in_background(result) -> None:
         staging_dir=staging_dir,
         install_dir=install_dir,
         exe_name="atlas-desktop.exe",
+        expected_version=result.latest_version,
         script_path=script_path,
     )
     launch_swap_script(script_path)
