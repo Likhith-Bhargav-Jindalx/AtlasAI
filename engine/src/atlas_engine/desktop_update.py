@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import subprocess
 import zipfile
 from dataclasses import dataclass
@@ -26,6 +27,18 @@ GITHUB_RELEASES_LATEST_URL = (
     "https://api.github.com/repos/Likhith-Bhargav-Jindalx/AtlasAI/releases/latest"
 )
 _REQUEST_TIMEOUT_SECONDS = 3.0
+
+
+def _github_auth_headers() -> dict[str, str]:
+    """The repo is private — every GitHub Releases call (metadata, checksums,
+    and the asset downloads themselves) 401s without this. Fine-grained PAT,
+    Contents: Read-only, scoped to just this one repo — baked into
+    desktop/production.env the same way the DB/storage credentials are (see
+    build-exe.yml's "Write baked-in production credentials" step), never
+    committed. Returns {} when unset so a dev build without the token still
+    runs (update check just fails closed, same as any other network error)."""
+    token = os.environ.get("ATLAS_GITHUB_RELEASES_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def parse_version(version: str) -> tuple[int, int, int]:
@@ -84,7 +97,7 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
         response = httpx.get(
             GITHUB_RELEASES_LATEST_URL,
             timeout=_REQUEST_TIMEOUT_SECONDS,
-            headers={"Accept": "application/vnd.github+json"},
+            headers={"Accept": "application/vnd.github+json", **_github_auth_headers()},
         )
         response.raise_for_status()
         payload = response.json()
@@ -103,7 +116,15 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
         # GitHub release asset URLs 302-redirect to signed blob storage URLs —
         # without follow_redirects, raise_for_status() treats that redirect
         # itself as an error and this whole check silently reports no update.
-        checksums_response = httpx.get(checksums_url, timeout=_REQUEST_TIMEOUT_SECONDS, follow_redirects=True)
+        # On a private repo, browser_download_url only serves the actual
+        # asset bytes (not an HTML/JSON error page) when both the auth header
+        # AND this Accept header are present.
+        checksums_response = httpx.get(
+            checksums_url,
+            timeout=_REQUEST_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"Accept": "application/octet-stream", **_github_auth_headers()},
+        )
         checksums_response.raise_for_status()
         checksums = parse_checksums(checksums_response.text)
 
@@ -124,6 +145,9 @@ def check_for_update(local_version: str, local_vendor_version: str) -> UpdateChe
         )
     except Exception:
         logger.warning("desktop update check failed", exc_info=True)
+        import sentry_sdk
+
+        sentry_sdk.capture_exception()
         return UpdateCheckResult(update_available=False)
 
 
@@ -145,7 +169,8 @@ def _download_and_verify(
     hasher = hashlib.sha256()
     downloaded = 0
     with dest_zip.open("wb") as f:
-        with httpx.stream("GET", url, timeout=120.0, follow_redirects=True) as response:
+        headers = {"Accept": "application/octet-stream", **_github_auth_headers()}
+        with httpx.stream("GET", url, timeout=120.0, follow_redirects=True, headers=headers) as response:
             response.raise_for_status()
             content_length = response.headers.get("content-length")
             total_bytes = int(content_length) if content_length is not None else None
@@ -198,11 +223,20 @@ def stage_update(
         vendor_zip.unlink()
 
 
+# Written into install_dir by the swap script when, after the copy, the
+# VERSION file on disk still doesn't match what was supposed to be
+# installed -- the only way a silent partial robocopy (locked file, AV
+# holding a handle, disk full) gets noticed at all. Checked and cleared by
+# app.py on the next launch.
+UPDATE_FAILURE_MARKER_NAME = "update_failed.marker"
+
 _SWAP_SCRIPT_TEMPLATE = """\
 $targetPid = {pid}
 $staging = "{staging}"
 $install = "{install}"
 $exe = "{exe_name}"
+$expectedVersion = "{expected_version}"
+$marker = Join-Path $install "{marker_name}"
 
 while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) {{
     Start-Sleep -Milliseconds 500
@@ -210,19 +244,36 @@ while (Get-Process -Id $targetPid -ErrorAction SilentlyContinue) {{
 
 robocopy $staging $install /E | Out-Null
 Remove-Item -Recurse -Force $staging
+
+$versionFile = Join-Path $install "_internal\\VERSION"
+$actualVersion = $null
+if (Test-Path $versionFile) {{
+    $actualVersion = (Get-Content $versionFile -Raw).Trim()
+}}
+if ($actualVersion -ne $expectedVersion) {{
+    Set-Content -Path $marker -Value "expected=$expectedVersion actual=$actualVersion"
+}} else {{
+    Remove-Item -Path $marker -ErrorAction SilentlyContinue
+}}
+
 Start-Process -FilePath (Join-Path $install $exe)
 """
 
 
 def write_swap_script(
-    *, pid: int, staging_dir: Path, install_dir: Path, exe_name: str, script_path: Path
+    *, pid: int, staging_dir: Path, install_dir: Path, exe_name: str, expected_version: str, script_path: Path
 ) -> None:
     """Plain (non-mirroring) robocopy: only files present in staging_dir
     are touched, so the install dir's existing playwright/ subfolder is
     left alone whenever a vendor update wasn't staged."""
     script_path.write_text(
         _SWAP_SCRIPT_TEMPLATE.format(
-            pid=pid, staging=staging_dir, install=install_dir, exe_name=exe_name
+            pid=pid,
+            staging=staging_dir,
+            install=install_dir,
+            exe_name=exe_name,
+            expected_version=expected_version,
+            marker_name=UPDATE_FAILURE_MARKER_NAME,
         )
     )
 

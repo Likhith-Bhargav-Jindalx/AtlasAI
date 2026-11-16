@@ -9,6 +9,7 @@ import pytest
 
 from atlas_engine.desktop_update import (
     _REQUEST_TIMEOUT_SECONDS,
+    UPDATE_FAILURE_MARKER_NAME,
     UpdateApplyError,
     UpdateCheckResult,
     check_for_update,
@@ -121,6 +122,41 @@ def test_check_for_update_reports_no_update_when_already_current(monkeypatch):
     assert result == UpdateCheckResult(update_available=False)
 
 
+def test_check_for_update_sends_bearer_token_when_set(monkeypatch):
+    # Private repo: every GitHub Releases call 401s without this header.
+    monkeypatch.setenv("ATLAS_GITHUB_RELEASES_TOKEN", "secret-token")
+    payload = _release_payload("desktop-v1.0.0", "atlas-desktop-app-1.0.0.zip", None)
+    get_calls = []
+
+    def fake_get(url, **kwargs):
+        get_calls.append(kwargs)
+        if "checksums.txt" in url:
+            return _FakeResponse(text_data="aaa111  atlas-desktop-app-1.0.0.zip\n")
+        return _FakeResponse(json_data=payload)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    check_for_update(local_version="0.9.0", local_vendor_version="1.49.0")
+
+    assert all(kwargs["headers"].get("Authorization") == "Bearer secret-token" for kwargs in get_calls)
+
+
+def test_check_for_update_omits_auth_header_when_token_unset(monkeypatch):
+    monkeypatch.delenv("ATLAS_GITHUB_RELEASES_TOKEN", raising=False)
+    payload = _release_payload("desktop-v1.0.0", "atlas-desktop-app-1.0.0.zip", None)
+    get_calls = []
+
+    def fake_get(url, **kwargs):
+        get_calls.append(kwargs)
+        if "checksums.txt" in url:
+            return _FakeResponse(text_data="aaa111  atlas-desktop-app-1.0.0.zip\n")
+        return _FakeResponse(json_data=payload)
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    check_for_update(local_version="0.9.0", local_vendor_version="1.49.0")
+
+    assert all("Authorization" not in kwargs["headers"] for kwargs in get_calls)
+
+
 def test_check_for_update_reports_available_update_without_vendor_change(monkeypatch):
     payload = _release_payload("desktop-v1.1.0", "atlas-desktop-app-1.1.0.zip", "atlas-desktop-vendor-1.49.0.zip")
     checksums_text = (
@@ -153,7 +189,10 @@ def test_check_for_update_reports_available_update_without_vendor_change(monkeyp
     # treats the unfollowed redirect itself as an error and this whole
     # check silently reports no update — this mock wouldn't catch that on
     # its own, so assert the call site actually asks to follow redirects.
-    assert checksums_calls == [{"timeout": _REQUEST_TIMEOUT_SECONDS, "follow_redirects": True}]
+    assert checksums_calls == [{
+        "timeout": _REQUEST_TIMEOUT_SECONDS, "follow_redirects": True,
+        "headers": {"Accept": "application/octet-stream"},
+    }]
 
 
 def test_check_for_update_requires_vendor_zip_when_vendor_version_changed(monkeypatch):
@@ -326,6 +365,7 @@ def test_write_swap_script_contains_pid_and_paths(tmp_path):
         staging_dir=tmp_path / "staging",
         install_dir=tmp_path / "install",
         exe_name="atlas-desktop.exe",
+        expected_version="1.2.3",
         script_path=script_path,
     )
 
@@ -334,7 +374,28 @@ def test_write_swap_script_contains_pid_and_paths(tmp_path):
     assert str(tmp_path / "staging") in content
     assert str(tmp_path / "install") in content
     assert "atlas-desktop.exe" in content
+    assert "1.2.3" in content
     assert "robocopy" in content.lower()
+
+
+def test_write_swap_script_checks_version_after_copy_and_marks_mismatch(tmp_path):
+    script_path = tmp_path / "swap.ps1"
+
+    write_swap_script(
+        pid=4242,
+        staging_dir=tmp_path / "staging",
+        install_dir=tmp_path / "install",
+        exe_name="atlas-desktop.exe",
+        expected_version="9.9.9",
+        script_path=script_path,
+    )
+
+    content = script_path.read_text()
+    # Verification must happen after the copy, and the marker gets written
+    # on mismatch / cleared on match -- not written unconditionally.
+    assert content.index("robocopy") < content.index("$actualVersion")
+    assert UPDATE_FAILURE_MARKER_NAME in content
+    assert "$actualVersion -ne $expectedVersion" in content
 
 
 def test_launch_swap_script_invokes_powershell_detached(tmp_path, monkeypatch):
