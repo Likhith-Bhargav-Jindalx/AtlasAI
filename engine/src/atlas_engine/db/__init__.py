@@ -23,7 +23,14 @@ _SessionFactory = None
 def get_engine(database_url: str | None = None):
     global _engine
     if _engine is None:
-        _engine = create_engine(database_url or settings.database_url, future=True)
+        # Azure Postgres Flexible Server (and managed Postgres generally)
+        # silently drops idle connections; pool_pre_ping avoids reusing a
+        # dead one and pool_recycle caps how long a connection sits idle in
+        # the pool before being proactively replaced.
+        _engine = create_engine(
+            database_url or settings.database_url, future=True,
+            pool_pre_ping=True, pool_recycle=1800,
+        )
     return _engine
 
 
