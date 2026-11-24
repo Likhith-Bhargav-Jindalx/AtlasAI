@@ -10,9 +10,11 @@ import { LibraryPage } from './pages/dev/LibraryPage'
 import { AuthoringPage } from './pages/dev/AuthoringPage'
 import { RequestQueuePage } from './pages/dev/RequestQueuePage'
 import { CostDashboardPage } from './pages/dev/CostDashboardPage'
+import { FormOptionsPage } from './pages/dev/FormOptionsPage'
 import { ApprovalsPage } from './pages/ApprovalsPage'
 import { ProtectedRoute } from './auth/ProtectedRoute'
 import { RequireDeveloperAccess } from './auth/RequireDeveloperAccess'
+import { RequireAdminAccess } from './auth/RequireAdminAccess'
 import { AppLayout } from './layout/AppLayout'
 import { RoleProvider } from './layout/RoleContext'
 
@@ -50,6 +52,9 @@ export default function App() {
             <Route path="/dev/costs" element={<CostDashboardPage />} />
             <Route path="/dev/recordings/:recordingId" element={<KeyedAuthoringPage />} />
             <Route path="/approvals" element={<ApprovalsPage />} />
+            <Route element={<RequireAdminAccess />}>
+              <Route path="/dev/form-options" element={<FormOptionsPage />} />
+            </Route>
           </Route>
         </Route>
       </Route>
