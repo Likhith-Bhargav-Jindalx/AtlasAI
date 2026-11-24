@@ -35,6 +35,18 @@ jobs:
     env:
       ATLAS_DATABASE_URL: ${{ secrets.ATLAS_DATABASE_URL }}
     steps:
+      - name: Refuse to run against anything but main
+        # workflow_dispatch lets anyone pick any branch as the ref — this job
+        # migrates the real production database and the next one publishes a
+        # signed public release, so a manual run off a feature branch must
+        # never get this far. Confirmed: a manual dispatch off an unmerged
+        # branch (its VERSION already bumped ahead) published desktop-v1.0.17
+        # as a real release, which GitHub's "latest" then handed to every
+        # production machine's self-update check.
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::build-exe.yml touches production (DB migration + signed release) and only runs from main. Triggered on '${{ github.ref }}' — refusing."
+          exit 1
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
