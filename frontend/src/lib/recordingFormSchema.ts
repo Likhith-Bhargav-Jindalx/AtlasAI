@@ -1,9 +1,8 @@
-// Recording form v2 — LOB-specific master lists for Client, Action, EHR.
+// Recording form v2 — LOB-specific Client/Action/EHR options.
 //
-// The form now shows two LOB tabs (AR, EV). Each tab has its own set of
-// clients, actions, and EHR systems — all hardcoded here rather than
-// fetched from the master-data API, since they're static operational
-// vocabulary that rarely changes.
+// The form shows two LOB tabs (AR, EV). Client/Action/EHR options per LOB
+// are database-backed (see `formOptions.ts`'s useFormOptions), not
+// hardcoded here — they can be managed from the Form options admin page.
 
 export type Lob = 'AR' | 'EV'
 
@@ -11,139 +10,6 @@ export const LOB_TABS: { lob: Lob; label: string }[] = [
   { lob: 'AR', label: 'AR' },
   { lob: 'EV', label: 'EV' },
 ]
-
-// ---------------------------------------------------------------------------
-// Client master lists — per LOB
-// ---------------------------------------------------------------------------
-
-export const CLIENT_OPTIONS: Record<Lob, string[]> = {
-  AR: [
-    'Audentes CSSL CSSC THSC',
-    'Audentes CPI',
-    'Audentes CSSA',
-    'Audentes XRS',
-    'Houston Heart Health',
-    'Maiden Lane Medical',
-    'MRI',
-    'Pediatric Associates at Ridge',
-    'Parkside Psychiatric Hospital Clinic',
-    'Penta',
-    'Tricity',
-    'Voyage Health',
-    'Urgent Care',
-    'NHS',
-    'PRMC',
-  ],
-  EV: [
-    'Audentes Verification',
-    'Voyage sales Verification',
-    'Voyage intake Verification',
-    'Housten Heart',
-    'Pediatrics Ridge',
-    'MRI Memorial Verification',
-    'MLM',
-    'TUC',
-    'STKS',
-    'NHS',
-    'Healing Biologics',
-  ],
-}
-
-// ---------------------------------------------------------------------------
-// Action master lists — per LOB
-// ---------------------------------------------------------------------------
-
-export const ACTION_OPTIONS: Record<Lob, string[]> = {
-  AR: [
-    'Report Extraction',
-    'Claim Submission',
-    'Claim Correction',
-    'Claim Resubmission',
-    'Claim Reconsideration',
-    'Void Claim',
-    'Replacement Claim',
-    'Secondary/Tertiary Billing',
-    'Claim Rejection',
-    'Denial Review',
-    'Denial Correction',
-    'Denial Resubmission',
-    'Denial Appeal',
-    'Appeal',
-    'Peer-to-Peer Review',
-    'Medical Necessity Appeal',
-    'Coding Appeal',
-    'Authorization Appeal',
-    'Claim Status Follow-up',
-    'Payer Call',
-    'Payer Portal Follow-up',
-    'Pending Claim Follow-up',
-    'Medical Records Request',
-    'Documentation Submission',
-    'Payer Escalation',
-    'Payment Posting',
-    'Underpayment Review',
-    'Underpayment Appeal',
-    'Contractual Adjustment',
-    'Payment Variance Review',
-    'Recoupment Review',
-    'Refund Processing',
-    'Eligibility Verification',
-    'Insurance Discovery',
-    'Insurance Update',
-    'COB Update',
-    'Payer Correction',
-    'Subscriber Information Correction',
-    'Authorization Verification',
-    'Patient Balance Review',
-    'Patient Statement Generation',
-    'Patient Billing',
-    'Patient Payment Follow-up',
-    'Payment Plan Setup',
-    'Financial Assistance Review',
-    'Patient Responsibility Adjustment',
-    'Bad Debt Transfer',
-    'Write-off',
-    'Small Balance Write-off',
-    'Administrative Adjustment',
-    'Charity Care Adjustment',
-    'Bad Debt',
-    'Account Closure',
-    'Zero Balance Resolution',
-    'Duplicate Account/Claim Resolution',
-    'Credit Balance Resolution',
-  ],
-  EV: [
-    'Portal Verification',
-    'Note Posting',
-    'Report Extraction',
-  ],
-}
-
-// ---------------------------------------------------------------------------
-// EHR master lists — per LOB
-// ---------------------------------------------------------------------------
-
-export const EHR_OPTIONS: Record<Lob, string[]> = {
-  AR: [
-    'HST',
-    'eCW',
-    'EXA',
-    'Netsmart',
-    'Modmed',
-    'Brightree',
-    'Experity',
-    'Cerner',
-    'Athena',
-  ],
-  EV: [
-    'eCW',
-    'Brightree',
-    'Exa',
-    'Experity',
-    'Cerner',
-    'Healing Biologix',
-  ],
-}
 
 // ---------------------------------------------------------------------------
 // Specificity options — EHR or Payor
