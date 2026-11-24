@@ -11,12 +11,16 @@ function jsonResponse(data: unknown) {
 }
 
 let role = 'member'
+let canManage = false
 
 beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     const path = String(url).replace('http://localhost:8000', '')
     if (path === '/auth/me') {
-      return Promise.resolve(jsonResponse({ user_id: 'u-1', org_id: 'org-1', email: 'x@x.com', role, job_function: 'developer' }))
+      return Promise.resolve(jsonResponse({
+        user_id: 'u-1', org_id: 'org-1', email: 'x@x.com', role, job_function: 'developer',
+        can_manage_form_options: canManage,
+      }))
     }
     return Promise.reject(new Error(`unexpected fetch: ${path}`))
   }))
@@ -45,6 +49,7 @@ function renderAtFormOptions() {
 describe('RequireAdminAccess', () => {
   it('redirects a member away', async () => {
     role = 'member'
+    canManage = false
     renderAtFormOptions()
     expect(await screen.findByText('Dev library content')).toBeInTheDocument()
     expect(screen.queryByText('Form options content')).toBeNull()
@@ -52,12 +57,23 @@ describe('RequireAdminAccess', () => {
 
   it('lets an owner through', async () => {
     role = 'owner'
+    canManage = false
     renderAtFormOptions()
     expect(await screen.findByText('Form options content')).toBeInTheDocument()
   })
 
   it('lets an admin through', async () => {
     role = 'admin'
+    canManage = false
+    renderAtFormOptions()
+    expect(await screen.findByText('Form options content')).toBeInTheDocument()
+  })
+})
+
+describe('RequireAdminAccess with an explicit grant', () => {
+  it('lets a granted member through', async () => {
+    role = 'member'
+    canManage = true
     renderAtFormOptions()
     expect(await screen.findByText('Form options content')).toBeInTheDocument()
   })

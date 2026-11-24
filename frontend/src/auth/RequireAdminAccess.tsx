@@ -7,6 +7,8 @@ import { useAuth } from './AuthContext'
 // mutation endpoints).
 export function RequireAdminAccess() {
   const { user } = useAuth()
-  if (user && user.role !== 'owner' && user.role !== 'admin') return <Navigate to="/dev" replace />
+  if (user && user.role !== 'owner' && user.role !== 'admin' && !user.can_manage_form_options) {
+    return <Navigate to="/dev" replace />
+  }
   return <Outlet />
 }

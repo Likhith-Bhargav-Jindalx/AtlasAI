@@ -33,6 +33,7 @@ export interface MeResponse {
   email: string
   role: string
   job_function: string | null
+  can_manage_form_options: boolean
 }
 
 export function login(email: string, password: string) {
