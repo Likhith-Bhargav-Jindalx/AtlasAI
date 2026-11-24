@@ -68,3 +68,25 @@ class CarcCode(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     org: Mapped["Organization"] = relationship()
+
+
+# Backs the recording form's Client/Action/EHR dropdowns (Section A) — see
+# docs/superpowers/specs/2026-11-24-recording-form-options-crud-design.md.
+# Unlike System/Payer/Client/CarcCode above, this one DOES have admin CRUD
+# (POST/PATCH in api.py), gated to owner/admin.
+FORM_OPTION_CATEGORIES = ("client", "action", "ehr")
+
+
+class FormOption(Base):
+    __tablename__ = "form_options"
+    __table_args__ = (UniqueConstraint("org_id", "lob", "category", "label"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    org_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
+    lob: Mapped[str]
+    category: Mapped[str]
+    label: Mapped[str]
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    org: Mapped["Organization"] = relationship()

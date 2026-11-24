@@ -920,6 +920,24 @@ def test_master_data_list_functions_return_only_active_rows_for_the_org(fixture_
     assert codes[0]["is_multi_use"] is True
 
 
+def test_form_option_model_enforces_uniqueness_per_org_lob_category_label(fixture_portal_url):
+    from sqlalchemy.exc import IntegrityError
+    from atlas_engine.db.models import FormOption
+
+    with session_scope() as session:
+        org = Organization(name="Form Option Model Org", slug=f"form-option-model-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        session.add(FormOption(org_id=org.id, lob="AR", category="action", label="Claim Submission"))
+        session.flush()
+        org_id = org.id
+
+    with pytest.raises(IntegrityError):
+        with session_scope() as session:
+            session.add(FormOption(org_id=org_id, lob="AR", category="action", label="Claim Submission"))
+            session.flush()
+
+
 def test_persist_recording_saves_steps_whose_actions_share_an_index(tmp_path, fixture_portal_url):
     # Recordings captured before the recorder's _next_index fix can carry a
     # duplicate action index after an Undo; uploading them must still work.
