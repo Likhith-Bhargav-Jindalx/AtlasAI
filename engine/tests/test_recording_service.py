@@ -991,3 +991,67 @@ def test_persist_recording_deletes_the_row_on_failure_when_asked(monkeypatch, fi
 
     with session_scope() as session:
         assert session.query(Recording).filter_by(org_id=uuid.UUID(org_id)).count() == 0
+
+
+def test_list_form_options_filters_by_lob_category_org_and_active(fixture_portal_url):
+    from atlas_engine.db.models import FormOption
+    from atlas_engine.recording_service import list_form_options
+
+    with session_scope() as session:
+        org = Organization(name="Form Options Org", slug=f"form-options-org-{uuid.uuid4()}")
+        other_org = Organization(name="Other Form Options Org", slug=f"other-form-options-org-{uuid.uuid4()}")
+        session.add_all([org, other_org])
+        session.flush()
+        org_id = str(org.id)
+        session.add_all([
+            FormOption(org_id=org.id, lob="AR", category="action", label="Active AR Action", active=True),
+            FormOption(org_id=org.id, lob="AR", category="action", label="Inactive AR Action", active=False),
+            FormOption(org_id=org.id, lob="EV", category="action", label="EV Action", active=True),
+            FormOption(org_id=org.id, lob="AR", category="client", label="AR Client", active=True),
+            FormOption(org_id=other_org.id, lob="AR", category="action", label="Other Org Action", active=True),
+        ])
+
+    assert [o["label"] for o in list_form_options(org_id, "AR", "action")] == ["Active AR Action"]
+    all_ar_actions = list_form_options(org_id, "AR", "action", include_inactive=True)
+    assert sorted(o["label"] for o in all_ar_actions) == ["Active AR Action", "Inactive AR Action"]
+    assert [o["label"] for o in list_form_options(org_id, "EV", "action")] == ["EV Action"]
+    assert [o["label"] for o in list_form_options(org_id, "AR", "client")] == ["AR Client"]
+
+
+def test_create_form_option_raises_integrity_error_on_duplicate(fixture_portal_url):
+    from sqlalchemy.exc import IntegrityError
+    from atlas_engine.recording_service import create_form_option
+
+    with session_scope() as session:
+        org = Organization(name="Create Form Option Org", slug=f"create-form-option-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    created = create_form_option(org_id, "AR", "action", "New Action")
+    assert created["label"] == "New Action"
+    assert created["active"] is True
+
+    with pytest.raises(IntegrityError):
+        create_form_option(org_id, "AR", "action", "New Action")
+
+
+def test_update_form_option_sets_only_provided_fields(fixture_portal_url):
+    from atlas_engine.recording_service import create_form_option, list_form_options, update_form_option
+
+    with session_scope() as session:
+        org = Organization(name="Update Form Option Org", slug=f"update-form-option-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+
+    created = create_form_option(org_id, "AR", "action", "Original Label")
+
+    updated = update_form_option(created["id"], active=False)
+    assert updated["label"] == "Original Label"
+    assert updated["active"] is False
+    assert [o["label"] for o in list_form_options(org_id, "AR", "action")] == []
+
+    renamed = update_form_option(created["id"], label="Renamed Action")
+    assert renamed["label"] == "Renamed Action"
+    assert renamed["active"] is False  # untouched by this call
