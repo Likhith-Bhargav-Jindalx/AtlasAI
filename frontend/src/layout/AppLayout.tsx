@@ -14,6 +14,7 @@ const NAV: Record<ViewRole, { to: string; label: string }[]> = {
     { to: '/dev/requests', label: 'Request queue' },
     { to: '/dev/costs', label: 'Cost dashboard' },
     { to: '/approvals', label: 'Heal approvals' },
+    { to: '/dev/form-options', label: 'Form options' },
   ],
   approver: [
     { to: '/approvals', label: 'Heal approvals' },
@@ -44,7 +45,9 @@ export function AppLayout() {
 
         <div className="flex flex-col gap-1">
           <div className="text-[10px] tracking-wider uppercase text-atlas-muted px-2 pb-1.5">{ROLE_LABELS[role]}</div>
-          {NAV[role].map((item) => (
+          {NAV[role]
+            .filter((item) => item.to !== '/dev/form-options' || user?.role === 'owner' || user?.role === 'admin' || user?.can_manage_form_options)
+            .map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

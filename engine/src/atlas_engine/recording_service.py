@@ -754,6 +754,42 @@ def list_carc_codes(org_id: str) -> list[dict]:
         return [{"id": str(c.id), "code": c.code, "description": c.description, "is_multi_use": c.is_multi_use} for c in rows]
 
 
+def list_form_options(org_id: str, lob: str, category: str, *, include_inactive: bool = False) -> list[dict]:
+    from atlas_engine.db.models import FormOption
+
+    with session_scope() as session:
+        query = session.query(FormOption).filter_by(org_id=uuid.UUID(org_id), lob=lob, category=category)
+        if not include_inactive:
+            query = query.filter_by(active=True)
+        rows = query.order_by(FormOption.label).all()
+        return [{"id": str(r.id), "label": r.label, "active": r.active} for r in rows]
+
+
+def create_form_option(org_id: str, lob: str, category: str, label: str) -> dict:
+    from atlas_engine.db.models import FormOption
+
+    with session_scope() as session:
+        option = FormOption(org_id=uuid.UUID(org_id), lob=lob, category=category, label=label)
+        session.add(option)
+        session.flush()
+        return {"id": str(option.id), "label": option.label, "active": option.active}
+
+
+def update_form_option(form_option_id: str, *, label: str | None = None, active: bool | None = None) -> dict:
+    from atlas_engine.db.models import FormOption
+
+    with session_scope() as session:
+        option = session.get(FormOption, uuid.UUID(form_option_id))
+        if option is None:
+            raise ValueError(f"No such form option: {form_option_id}")
+        if label is not None:
+            option.label = label
+        if active is not None:
+            option.active = active
+        session.flush()
+        return {"id": str(option.id), "label": option.label, "active": option.active}
+
+
 def claim_recording_request(request_id: uuid.UUID, developer_user_id: uuid.UUID) -> None:
     with session_scope() as session:
         request = session.get(RecordingRequest, request_id)

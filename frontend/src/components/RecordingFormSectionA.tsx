@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Search, X } from 'lucide-react'
-import {
-  ACTION_OPTIONS, CLIENT_OPTIONS, EHR_OPTIONS, LOB_TABS,
-  SPECIFICITY_OPTIONS, suggestWorkflowName, type Lob,
-} from '../lib/recordingFormSchema'
+import { LOB_TABS, SPECIFICITY_OPTIONS, suggestWorkflowName, type Lob } from '../lib/recordingFormSchema'
+import { useFormOptions } from '../lib/formOptions'
 
 export interface SectionAValues {
   targetUrl: string
@@ -140,6 +138,10 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
   const [specificTo, setSpecificTo] = useState('')
   const [ehr, setEhr] = useState('')
 
+  const clientOptions = useFormOptions(lob, 'client').data ?? []
+  const actionOptions = useFormOptions(lob, 'action').data ?? []
+  const ehrOptions = useFormOptions(lob, 'ehr').data ?? []
+
   // Auto-suggest title when inputs change (unless user has manually edited it)
   useEffect(() => {
     if (!workflowNameTouched) {
@@ -188,7 +190,7 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
           {/* Select Client */}
           <SearchableSelect
             label="Select Client"
-            options={CLIENT_OPTIONS[lob]}
+            options={clientOptions.map((o) => o.label)}
             value={client}
             onChange={setClient}
             placeholder="Type to search…"
@@ -197,7 +199,7 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
           {/* Select Action */}
           <SearchableSelect
             label="Select Action"
-            options={ACTION_OPTIONS[lob]}
+            options={actionOptions.map((o) => o.label)}
             value={action}
             onChange={setAction}
             placeholder="Type to search…"
@@ -227,7 +229,7 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
           {/* Select EHR */}
           <SearchableSelect
             label="Select EHR"
-            options={EHR_OPTIONS[lob]}
+            options={ehrOptions.map((o) => o.label)}
             value={ehr}
             onChange={setEhr}
             placeholder="Type to search…"

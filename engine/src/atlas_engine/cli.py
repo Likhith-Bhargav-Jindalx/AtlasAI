@@ -227,5 +227,19 @@ def create_user(org_id: str, email: str, password: str, role: str, job_function:
         click.echo(f"User created: {user.id}")
 
 
+@main.command("grant-form-options-access")
+@click.option("--user-id", required=True)
+@click.option("--revoke", is_flag=True, default=False)
+def grant_form_options_access(user_id: str, revoke: bool) -> None:
+    """Grant (or --revoke) a specific user access to manage Form options, independent of role."""
+    with session_scope() as session:
+        user = session.get(User, uuid.UUID(user_id))
+        if user is None:
+            raise click.ClickException(f"No such user: {user_id}")
+        user.can_manage_form_options = not revoke
+        session.add(user)
+        click.echo(f"{'Revoked' if revoke else 'Granted'} Form options access for {user.email}")
+
+
 if __name__ == "__main__":
     main()

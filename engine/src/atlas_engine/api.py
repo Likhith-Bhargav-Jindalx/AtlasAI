@@ -16,7 +16,7 @@ from atlas_engine.observability import RequestIdMiddleware, configure_logging, g
 
 logger = logging.getLogger(__name__)
 
-from atlas_engine.auth.deps import CurrentUser, get_current_user, require_job_function
+from atlas_engine.auth.deps import CurrentUser, get_current_user, require_form_options_access, require_job_function
 from atlas_engine.auth.passwords import verify_password
 from atlas_engine.auth.session import create_session_token, verify_session_token
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
@@ -56,11 +56,13 @@ from atlas_engine.recording_form_validation import (
 )
 from atlas_engine.recording_service import (
     claim_recording_request,
+    create_form_option,
     create_recording_folder,
     create_recording_request,
     get_recording_detail,
     list_carc_codes,
     list_clients,
+    list_form_options,
     list_page_extractions,
     list_payers,
     list_recording_folders,
@@ -69,6 +71,7 @@ from atlas_engine.recording_service import (
     list_systems,
     persist_recording,
     submit_recording_for_authoring,
+    update_form_option,
     update_recording_details,
 )
 from atlas_engine.storage import get_store
@@ -287,6 +290,48 @@ def list_clients_endpoint(_user: CurrentUser = Depends(get_current_user)) -> lis
 @app.get("/master-data/carc-codes")
 def list_carc_codes_endpoint(_user: CurrentUser = Depends(get_current_user)) -> list[dict]:
     return list_carc_codes(str(_user.org_id))
+
+
+class CreateFormOptionBody(BaseModel):
+    lob: str
+    category: str
+    label: str
+
+
+class UpdateFormOptionBody(BaseModel):
+    label: str | None = None
+    active: bool | None = None
+
+
+@app.get("/form-options")
+def list_form_options_endpoint(
+    lob: str, category: str, _user: CurrentUser = Depends(get_current_user),
+) -> list[dict]:
+    return list_form_options(str(_user.org_id), lob, category)
+
+
+@app.get("/form-options/all")
+def list_all_form_options_endpoint(
+    lob: str, category: str, _user: CurrentUser = Depends(require_form_options_access()),
+) -> list[dict]:
+    return list_form_options(str(_user.org_id), lob, category, include_inactive=True)
+
+
+@app.post("/form-options")
+def create_form_option_endpoint(
+    body: CreateFormOptionBody, _user: CurrentUser = Depends(require_form_options_access()),
+) -> dict:
+    try:
+        return create_form_option(str(_user.org_id), body.lob, body.category, body.label)
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f'"{body.label}" already exists for {body.lob}/{body.category}')
+
+
+@app.patch("/form-options/{form_option_id}")
+def update_form_option_endpoint(
+    form_option_id: str, body: UpdateFormOptionBody, _user: CurrentUser = Depends(require_form_options_access()),
+) -> dict:
+    return update_form_option(form_option_id, label=body.label, active=body.active)
 
 
 @app.post("/recording-requests/{request_id}/claim")
@@ -564,12 +609,14 @@ class MeResponse(BaseModel):
     email: str
     role: str
     job_function: str | None = None
+    can_manage_form_options: bool = False
 
 
 def _me_response_for(user: User) -> MeResponse:
     return MeResponse(
         user_id=str(user.id), org_id=str(user.org_id), email=user.email,
         role=user.role, job_function=user.job_function,
+        can_manage_form_options=user.can_manage_form_options,
     )
 
 
