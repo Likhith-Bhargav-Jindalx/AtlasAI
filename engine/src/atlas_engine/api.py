@@ -16,7 +16,7 @@ from atlas_engine.observability import RequestIdMiddleware, configure_logging, g
 
 logger = logging.getLogger(__name__)
 
-from atlas_engine.auth.deps import CurrentUser, get_current_user, require_job_function
+from atlas_engine.auth.deps import CurrentUser, get_current_user, require_form_options_access, require_job_function
 from atlas_engine.auth.passwords import verify_password
 from atlas_engine.auth.session import create_session_token, verify_session_token
 from atlas_engine.authoring.run import resume_authoring_run, start_authoring_run, stop_authoring_run
@@ -312,14 +312,14 @@ def list_form_options_endpoint(
 
 @app.get("/form-options/all")
 def list_all_form_options_endpoint(
-    lob: str, category: str, _user: CurrentUser = Depends(require_job_function()),
+    lob: str, category: str, _user: CurrentUser = Depends(require_form_options_access()),
 ) -> list[dict]:
     return list_form_options(str(_user.org_id), lob, category, include_inactive=True)
 
 
 @app.post("/form-options")
 def create_form_option_endpoint(
-    body: CreateFormOptionBody, _user: CurrentUser = Depends(require_job_function()),
+    body: CreateFormOptionBody, _user: CurrentUser = Depends(require_form_options_access()),
 ) -> dict:
     try:
         return create_form_option(str(_user.org_id), body.lob, body.category, body.label)
@@ -329,7 +329,7 @@ def create_form_option_endpoint(
 
 @app.patch("/form-options/{form_option_id}")
 def update_form_option_endpoint(
-    form_option_id: str, body: UpdateFormOptionBody, _user: CurrentUser = Depends(require_job_function()),
+    form_option_id: str, body: UpdateFormOptionBody, _user: CurrentUser = Depends(require_form_options_access()),
 ) -> dict:
     return update_form_option(form_option_id, label=body.label, active=body.active)
 
@@ -609,12 +609,14 @@ class MeResponse(BaseModel):
     email: str
     role: str
     job_function: str | None = None
+    can_manage_form_options: bool = False
 
 
 def _me_response_for(user: User) -> MeResponse:
     return MeResponse(
         user_id=str(user.id), org_id=str(user.org_id), email=user.email,
         role=user.role, job_function=user.job_function,
+        can_manage_form_options=user.can_manage_form_options,
     )
 
 

@@ -35,6 +35,7 @@ class User(Base):
     password_hash: Mapped[str]
     role: Mapped[str] = mapped_column(Enum(*USER_ROLES, name="user_role"), default="member")
     job_function: Mapped[str | None] = mapped_column(Enum(*JOB_FUNCTIONS, name="job_function"), default=None)
+    can_manage_form_options: Mapped[bool] = mapped_column(default=False)
     display_name: Mapped[str | None] = mapped_column(default=None)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

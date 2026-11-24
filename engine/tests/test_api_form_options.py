@@ -92,3 +92,29 @@ def test_patch_form_options_requires_owner_or_admin_and_deactivates():
 
     listed = owner_client.get("/form-options?lob=AR&category=action")
     assert "To Deactivate" not in [o["label"] for o in listed.json()]
+
+
+def test_post_form_options_allows_a_member_with_an_explicit_grant():
+    org_id, member_client = _make_user(role="member", job_function="developer")
+    with session_scope() as session:
+        user = session.query(User).filter_by(org_id=uuid.UUID(org_id)).one()
+        user.can_manage_form_options = True
+
+    response = member_client.post("/form-options", json={"lob": "AR", "category": "action", "label": "Granted Create"})
+    assert response.status_code == 200
+
+
+def test_get_form_options_all_allows_a_member_with_an_explicit_grant():
+    org_id, member_client = _make_user(role="member", job_function="developer")
+    with session_scope() as session:
+        user = session.query(User).filter_by(org_id=uuid.UUID(org_id)).one()
+        user.can_manage_form_options = True
+
+    response = member_client.get("/form-options/all?lob=AR&category=action")
+    assert response.status_code == 200
+
+
+def test_post_form_options_still_403_for_a_member_without_a_grant():
+    _, member_client = _make_user(role="member", job_function="developer")
+    response = member_client.post("/form-options", json={"lob": "AR", "category": "action", "label": "Ungranted"})
+    assert response.status_code == 403
