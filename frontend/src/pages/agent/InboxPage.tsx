@@ -26,6 +26,7 @@ export function InboxPage() {
       title: values.workflowName || values.targetUrl,
       lob: values.lob || undefined,
       action: values.action || undefined,
+      subscenario: values.subscenario || undefined,
       client_scope: values.client ? [values.client] : undefined,
       ehr: values.ehr || undefined,
       specific_to: values.specificTo || undefined,
