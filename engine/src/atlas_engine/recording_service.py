@@ -790,6 +790,45 @@ def update_form_option(form_option_id: str, *, label: str | None = None, active:
         return {"id": str(option.id), "label": option.label, "active": option.active}
 
 
+def list_subscenarios(action_id: str, *, include_inactive: bool = False) -> list[dict]:
+    from atlas_engine.db.models import Subscenario
+
+    with session_scope() as session:
+        query = session.query(Subscenario).filter_by(action_id=uuid.UUID(action_id))
+        if not include_inactive:
+            query = query.filter_by(active=True)
+        rows = query.order_by(Subscenario.label).all()
+        return [{"id": str(r.id), "label": r.label, "active": r.active} for r in rows]
+
+
+def create_subscenario(action_id: str, label: str) -> dict:
+    from atlas_engine.db.models import FormOption, Subscenario
+
+    with session_scope() as session:
+        action = session.get(FormOption, uuid.UUID(action_id))
+        if action is None or action.category != "action":
+            raise ValueError(f"Not an action form option: {action_id}")
+        subscenario = Subscenario(action_id=uuid.UUID(action_id), label=label)
+        session.add(subscenario)
+        session.flush()
+        return {"id": str(subscenario.id), "label": subscenario.label, "active": subscenario.active}
+
+
+def update_subscenario(subscenario_id: str, *, label: str | None = None, active: bool | None = None) -> dict:
+    from atlas_engine.db.models import Subscenario
+
+    with session_scope() as session:
+        subscenario = session.get(Subscenario, uuid.UUID(subscenario_id))
+        if subscenario is None:
+            raise ValueError(f"No such subscenario: {subscenario_id}")
+        if label is not None:
+            subscenario.label = label
+        if active is not None:
+            subscenario.active = active
+        session.flush()
+        return {"id": str(subscenario.id), "label": subscenario.label, "active": subscenario.active}
+
+
 def claim_recording_request(request_id: uuid.UUID, developer_user_id: uuid.UUID) -> None:
     with session_scope() as session:
         request = session.get(RecordingRequest, request_id)
