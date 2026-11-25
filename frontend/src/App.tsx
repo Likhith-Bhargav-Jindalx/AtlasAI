@@ -52,9 +52,12 @@ export default function App() {
             <Route path="/dev/costs" element={<CostDashboardPage />} />
             <Route path="/dev/recordings/:recordingId" element={<KeyedAuthoringPage />} />
             <Route path="/approvals" element={<ApprovalsPage />} />
-            <Route element={<RequireAdminAccess />}>
-              <Route path="/dev/form-options" element={<FormOptionsPage />} />
-            </Route>
+          </Route>
+          {/* Outside RequireDeveloperAccess: an operations_agent with can_manage_form_options
+              must reach this route directly, not just developers. RequireAdminAccess alone
+              gates it (owner/admin/can_manage_form_options). */}
+          <Route element={<RequireAdminAccess />}>
+            <Route path="/dev/form-options" element={<FormOptionsPage />} />
           </Route>
         </Route>
       </Route>
