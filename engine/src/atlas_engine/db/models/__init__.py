@@ -2,7 +2,7 @@ from atlas_engine.db.models.audit import AuditLog
 from atlas_engine.db.models.authoring import AuthoringRun, AuthoringRunEvent, CertificationRun
 from atlas_engine.db.models.execution import Run, UsageLedgerEntry
 from atlas_engine.db.models.identity import Organization, User
-from atlas_engine.db.models.masterdata import CarcCode, Client, FormOption, Payer, System
+from atlas_engine.db.models.masterdata import CarcCode, Client, FormOption, Payer, Subscenario, System
 from atlas_engine.db.models.portal import (
     PageExtraction,
     PortalProfile,
@@ -36,6 +36,7 @@ __all__ = [
     "ReferenceTrajectory",
     "Run",
     "SecretsRef",
+    "Subscenario",
     "System",
     "UsageLedgerEntry",
     "User",

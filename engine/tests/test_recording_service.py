@@ -1055,3 +1055,24 @@ def test_update_form_option_sets_only_provided_fields(fixture_portal_url):
     renamed = update_form_option(created["id"], label="Renamed Action")
     assert renamed["label"] == "Renamed Action"
     assert renamed["active"] is False  # untouched by this call
+
+
+def test_subscenario_model_enforces_uniqueness_per_action_and_label(fixture_portal_url):
+    from sqlalchemy.exc import IntegrityError
+    from atlas_engine.db.models import FormOption, Subscenario
+
+    with session_scope() as session:
+        org = Organization(name="Subscenario Model Org", slug=f"subscenario-model-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        action = FormOption(org_id=org.id, lob="AR", category="action", label="Denial Correction")
+        session.add(action)
+        session.flush()
+        action_id = action.id
+        session.add(Subscenario(action_id=action_id, label="Bundled Denial"))
+        session.flush()
+
+    with pytest.raises(IntegrityError):
+        with session_scope() as session:
+            session.add(Subscenario(action_id=action_id, label="Bundled Denial"))
+            session.flush()
