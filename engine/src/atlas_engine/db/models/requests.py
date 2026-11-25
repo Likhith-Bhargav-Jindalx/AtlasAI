@@ -56,6 +56,10 @@ class RecordingRequest(Base):
     # whether the recording is specific to an EHR or a Payor.
     ehr: Mapped[str | None] = mapped_column(default=None)
     specific_to: Mapped[str | None] = mapped_column(default=None)
+    # Chosen subscenario label (see subscenarios table) — plain text, not a
+    # FK, following the same precedent as action/ehr above: the request
+    # stores what was picked, independent of later edits to the lookup row.
+    subscenario: Mapped[str | None] = mapped_column(default=None)
 
     org: Mapped["Organization"] = relationship()
     requester: Mapped["User"] = relationship(foreign_keys=[requested_by])

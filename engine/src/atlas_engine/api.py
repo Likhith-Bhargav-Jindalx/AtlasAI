@@ -228,6 +228,7 @@ class CreateRecordingRequestBody(BaseModel):
     # Recording form v2
     ehr: str | None = None
     specific_to: str | None = None
+    subscenario: str | None = None
 
 
 class RecordingRequestCreatedResponse(BaseModel):
@@ -253,7 +254,7 @@ def create_recording_request_endpoint(
         str(_user.org_id), str(_user.id), body.target_url, body.title, body.description,
         lob=body.lob, category=body.category, action=body.action, system_id=body.system_id,
         client_scope=body.client_scope, reuse_scope=body.reuse_scope,
-        ehr=body.ehr, specific_to=body.specific_to,
+        ehr=body.ehr, specific_to=body.specific_to, subscenario=body.subscenario,
     )
     return RecordingRequestCreatedResponse(request_id=str(request_id))
 

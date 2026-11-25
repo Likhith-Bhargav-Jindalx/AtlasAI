@@ -362,6 +362,7 @@ def list_recordings(
                 "request_title": request.title if request is not None else None,
                 "lob": request.lob if request is not None else None,
                 "action": request.action if request is not None else None,
+                "subscenario": request.subscenario if request is not None else None,
                 "portal_domain": profile.domain if profile is not None else None,
                 "duration_seconds": recording.duration_seconds,
                 "has_video": video_asset is not None,
@@ -488,6 +489,7 @@ def get_recording_detail(recording_id: uuid.UUID) -> dict:
             "pages": pages,
             "lob": request.lob if request is not None else None,
             "action": request.action if request is not None else None,
+            "subscenario": request.subscenario if request is not None else None,
             "payer_scope": recording.payer_scope,
             "payer_ids": recording.payer_ids,
             "other_system_ids": recording.other_system_ids,
@@ -651,7 +653,7 @@ def create_recording_request(
     org_id: str, requested_by: str, target_url: str, title: str, description: str | None = None,
     *, lob: str | None = None, category: str | None = None, action: str | None = None,
     system_id: str | None = None, client_scope: list[str] | None = None, reuse_scope: str | None = None,
-    ehr: str | None = None, specific_to: str | None = None,
+    ehr: str | None = None, specific_to: str | None = None, subscenario: str | None = None,
 ) -> uuid.UUID:
     """target_url/title/description are the pre-existing fields; lob
     onward are Section A of the recording form (see
@@ -675,6 +677,7 @@ def create_recording_request(
             reuse_scope=reuse_scope,
             ehr=ehr,
             specific_to=specific_to,
+            subscenario=subscenario,
         )
         session.add(request)
         session.flush()
@@ -717,6 +720,7 @@ def list_recording_requests(
                 "reuse_scope": r.reuse_scope,
                 "ehr": r.ehr,
                 "specific_to": r.specific_to,
+                "subscenario": r.subscenario,
             }
             for r in rows
         ]

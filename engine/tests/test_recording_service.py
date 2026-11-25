@@ -1168,3 +1168,29 @@ def test_update_subscenario_sets_only_provided_fields(fixture_portal_url):
     renamed = update_subscenario(created["id"], label="Renamed Subscenario")
     assert renamed["label"] == "Renamed Subscenario"
     assert renamed["active"] is False  # untouched by this call
+
+
+def test_create_recording_request_persists_subscenario(fixture_portal_url):
+    from atlas_engine.recording_service import list_recording_requests
+
+    with session_scope() as session:
+        org = Organization(name="Subscenario Field Org", slug=f"subscenario-field-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="subscfield@example.com", password_hash="x", job_function="operations_agent")
+        session.add(agent)
+        session.flush()
+        agent_id = str(agent.id)
+
+    request_id = create_recording_request(
+        org_id, agent_id, f"{fixture_portal_url}/login.html", "Bundled Denial on Availity",
+        lob="AR", action="Denial Correction", subscenario="Bundled Denial",
+    )
+
+    with session_scope() as session:
+        request = session.get(RecordingRequest, request_id)
+        assert request.subscenario == "Bundled Denial"
+
+    listed = list_recording_requests(org_id)
+    assert listed[0]["subscenario"] == "Bundled Denial"
