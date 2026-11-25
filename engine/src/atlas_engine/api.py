@@ -59,6 +59,7 @@ from atlas_engine.recording_service import (
     create_form_option,
     create_recording_folder,
     create_recording_request,
+    create_subscenario,
     get_recording_detail,
     list_carc_codes,
     list_clients,
@@ -68,11 +69,13 @@ from atlas_engine.recording_service import (
     list_recording_folders,
     list_recording_requests,
     list_recordings,
+    list_subscenarios,
     list_systems,
     persist_recording,
     submit_recording_for_authoring,
     update_form_option,
     update_recording_details,
+    update_subscenario,
 )
 from atlas_engine.storage import get_store
 from atlas_engine.verify.heal import approve_heal_event, heal_golden_script, list_heal_events, reject_heal_event
@@ -225,6 +228,7 @@ class CreateRecordingRequestBody(BaseModel):
     # Recording form v2
     ehr: str | None = None
     specific_to: str | None = None
+    subscenario: str | None = None
 
 
 class RecordingRequestCreatedResponse(BaseModel):
@@ -250,7 +254,7 @@ def create_recording_request_endpoint(
         str(_user.org_id), str(_user.id), body.target_url, body.title, body.description,
         lob=body.lob, category=body.category, action=body.action, system_id=body.system_id,
         client_scope=body.client_scope, reuse_scope=body.reuse_scope,
-        ehr=body.ehr, specific_to=body.specific_to,
+        ehr=body.ehr, specific_to=body.specific_to, subscenario=body.subscenario,
     )
     return RecordingRequestCreatedResponse(request_id=str(request_id))
 
@@ -332,6 +336,49 @@ def update_form_option_endpoint(
     form_option_id: str, body: UpdateFormOptionBody, _user: CurrentUser = Depends(require_form_options_access()),
 ) -> dict:
     return update_form_option(form_option_id, label=body.label, active=body.active)
+
+
+class CreateSubscenarioBody(BaseModel):
+    action_id: str
+    label: str
+
+
+class UpdateSubscenarioBody(BaseModel):
+    label: str | None = None
+    active: bool | None = None
+
+
+@app.get("/subscenarios")
+def list_subscenarios_endpoint(
+    action_id: str, _user: CurrentUser = Depends(get_current_user),
+) -> list[dict]:
+    return list_subscenarios(action_id)
+
+
+@app.get("/subscenarios/all")
+def list_all_subscenarios_endpoint(
+    action_id: str, _user: CurrentUser = Depends(require_form_options_access()),
+) -> list[dict]:
+    return list_subscenarios(action_id, include_inactive=True)
+
+
+@app.post("/subscenarios")
+def create_subscenario_endpoint(
+    body: CreateSubscenarioBody, _user: CurrentUser = Depends(require_form_options_access()),
+) -> dict:
+    try:
+        return create_subscenario(body.action_id, body.label)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f'"{body.label}" already exists for this action')
+
+
+@app.patch("/subscenarios/{subscenario_id}")
+def update_subscenario_endpoint(
+    subscenario_id: str, body: UpdateSubscenarioBody, _user: CurrentUser = Depends(require_form_options_access()),
+) -> dict:
+    return update_subscenario(subscenario_id, label=body.label, active=body.active)
 
 
 @app.post("/recording-requests/{request_id}/claim")

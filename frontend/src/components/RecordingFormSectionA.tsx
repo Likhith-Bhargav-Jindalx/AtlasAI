@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, Search, X } from 'lucide-react'
 import { LOB_TABS, SPECIFICITY_OPTIONS, suggestWorkflowName, type Lob } from '../lib/recordingFormSchema'
 import { useFormOptions } from '../lib/formOptions'
+import { useSubscenarios } from '../lib/subscenarios'
 
 export interface SectionAValues {
   targetUrl: string
@@ -9,6 +10,7 @@ export interface SectionAValues {
   lob: Lob
   client: string
   action: string
+  subscenario: string
   specificTo: string
   ehr: string
 }
@@ -135,12 +137,15 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
   const [lob, setLob] = useState<Lob>('AR')
   const [client, setClient] = useState('')
   const [action, setAction] = useState('')
+  const [subscenario, setSubscenario] = useState('')
   const [specificTo, setSpecificTo] = useState('')
   const [ehr, setEhr] = useState('')
 
   const clientOptions = useFormOptions(lob, 'client').data ?? []
   const actionOptions = useFormOptions(lob, 'action').data ?? []
   const ehrOptions = useFormOptions(lob, 'ehr').data ?? []
+  const actionId = actionOptions.find((o) => o.label === action)?.id ?? null
+  const subscenarioOptions = useSubscenarios(actionId).data ?? []
 
   // Auto-suggest title when inputs change (unless user has manually edited it)
   useEffect(() => {
@@ -153,6 +158,7 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
     setLob(next)
     setClient('')
     setAction('')
+    setSubscenario('')
     setEhr('')
     setWorkflowNameTouched(false)
   }
@@ -201,9 +207,19 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
             label="Select Action"
             options={actionOptions.map((o) => o.label)}
             value={action}
-            onChange={setAction}
+            onChange={(next) => { setAction(next); setSubscenario('') }}
             placeholder="Type to search…"
           />
+
+          {subscenarioOptions.length > 0 && (
+            <SearchableSelect
+              label="Select Subscenario"
+              options={subscenarioOptions.map((o) => o.label)}
+              value={subscenario}
+              onChange={setSubscenario}
+              placeholder="Type to search…"
+            />
+          )}
 
           {/* Specific to */}
           <div className="flex flex-col gap-1.5">
@@ -261,7 +277,7 @@ export function RecordingFormSectionA({ onSubmit, onCancel, isSubmitting, error 
             disabled={!canSubmit || isSubmitting}
             onClick={() => {
               const effectiveTitle = workflowName.trim() || suggestWorkflowName(client || null, action || null, ehr || null) || targetUrl.trim()
-              onSubmit({ targetUrl: targetUrl.trim(), workflowName: effectiveTitle, lob, client, action, specificTo, ehr })
+              onSubmit({ targetUrl: targetUrl.trim(), workflowName: effectiveTitle, lob, client, action, subscenario, specificTo, ehr })
             }}
             className="bg-atlas-primary hover:bg-atlas-primaryHover text-white rounded-full py-2.5 text-[13.5px] font-medium disabled:opacity-60"
           >

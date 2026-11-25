@@ -1055,3 +1055,142 @@ def test_update_form_option_sets_only_provided_fields(fixture_portal_url):
     renamed = update_form_option(created["id"], label="Renamed Action")
     assert renamed["label"] == "Renamed Action"
     assert renamed["active"] is False  # untouched by this call
+
+
+def test_subscenario_model_enforces_uniqueness_per_action_and_label(fixture_portal_url):
+    from sqlalchemy.exc import IntegrityError
+    from atlas_engine.db.models import FormOption, Subscenario
+
+    with session_scope() as session:
+        org = Organization(name="Subscenario Model Org", slug=f"subscenario-model-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        action = FormOption(org_id=org.id, lob="AR", category="action", label="Denial Correction")
+        session.add(action)
+        session.flush()
+        action_id = action.id
+        session.add(Subscenario(action_id=action_id, label="Bundled Denial"))
+        session.flush()
+
+    with pytest.raises(IntegrityError):
+        with session_scope() as session:
+            session.add(Subscenario(action_id=action_id, label="Bundled Denial"))
+            session.flush()
+
+
+def test_list_subscenarios_filters_by_action_and_active(fixture_portal_url):
+    from atlas_engine.db.models import FormOption, Subscenario
+    from atlas_engine.recording_service import list_subscenarios
+
+    with session_scope() as session:
+        org = Organization(name="List Subscenarios Org", slug=f"list-subscenarios-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        action_a = FormOption(org_id=org.id, lob="AR", category="action", label="Denial Correction")
+        action_b = FormOption(org_id=org.id, lob="AR", category="action", label="Claim Submission")
+        session.add_all([action_a, action_b])
+        session.flush()
+        action_a_id, action_b_id = str(action_a.id), str(action_b.id)
+        session.add_all([
+            Subscenario(action_id=action_a.id, label="Bundled Denial", active=True),
+            Subscenario(action_id=action_a.id, label="Timely Filing Denial", active=False),
+            Subscenario(action_id=action_b.id, label="Unrelated", active=True),
+        ])
+
+    assert [s["label"] for s in list_subscenarios(action_a_id)] == ["Bundled Denial"]
+    all_for_a = list_subscenarios(action_a_id, include_inactive=True)
+    assert sorted(s["label"] for s in all_for_a) == ["Bundled Denial", "Timely Filing Denial"]
+    assert [s["label"] for s in list_subscenarios(action_b_id)] == ["Unrelated"]
+
+
+def test_create_subscenario_rejects_a_non_action_form_option(fixture_portal_url):
+    from atlas_engine.db.models import FormOption
+    from atlas_engine.recording_service import create_subscenario
+
+    with session_scope() as session:
+        org = Organization(name="Create Subscenario Org", slug=f"create-subscenario-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        client_option = FormOption(org_id=org.id, lob="AR", category="client", label="Acme Clinic")
+        session.add(client_option)
+        session.flush()
+        client_option_id = str(client_option.id)
+
+    with pytest.raises(ValueError):
+        create_subscenario(client_option_id, "Should Not Work")
+
+    with pytest.raises(ValueError):
+        create_subscenario(str(uuid.uuid4()), "No Such Action")
+
+
+def test_create_subscenario_raises_integrity_error_on_duplicate(fixture_portal_url):
+    from sqlalchemy.exc import IntegrityError
+    from atlas_engine.db.models import FormOption
+    from atlas_engine.recording_service import create_subscenario
+
+    with session_scope() as session:
+        org = Organization(name="Dup Subscenario Org", slug=f"dup-subscenario-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        action = FormOption(org_id=org.id, lob="AR", category="action", label="Denial Correction")
+        session.add(action)
+        session.flush()
+        action_id = str(action.id)
+
+    created = create_subscenario(action_id, "Bundled Denial")
+    assert created["label"] == "Bundled Denial"
+    assert created["active"] is True
+
+    with pytest.raises(IntegrityError):
+        create_subscenario(action_id, "Bundled Denial")
+
+
+def test_update_subscenario_sets_only_provided_fields(fixture_portal_url):
+    from atlas_engine.db.models import FormOption
+    from atlas_engine.recording_service import create_subscenario, list_subscenarios, update_subscenario
+
+    with session_scope() as session:
+        org = Organization(name="Update Subscenario Org", slug=f"update-subscenario-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        action = FormOption(org_id=org.id, lob="AR", category="action", label="Denial Correction")
+        session.add(action)
+        session.flush()
+        action_id = str(action.id)
+
+    created = create_subscenario(action_id, "Original Label")
+
+    updated = update_subscenario(created["id"], active=False)
+    assert updated["label"] == "Original Label"
+    assert updated["active"] is False
+    assert [s["label"] for s in list_subscenarios(action_id)] == []
+
+    renamed = update_subscenario(created["id"], label="Renamed Subscenario")
+    assert renamed["label"] == "Renamed Subscenario"
+    assert renamed["active"] is False  # untouched by this call
+
+
+def test_create_recording_request_persists_subscenario(fixture_portal_url):
+    from atlas_engine.recording_service import list_recording_requests
+
+    with session_scope() as session:
+        org = Organization(name="Subscenario Field Org", slug=f"subscenario-field-org-{uuid.uuid4()}")
+        session.add(org)
+        session.flush()
+        org_id = str(org.id)
+        agent = User(org_id=org.id, email="subscfield@example.com", password_hash="x", job_function="operations_agent")
+        session.add(agent)
+        session.flush()
+        agent_id = str(agent.id)
+
+    request_id = create_recording_request(
+        org_id, agent_id, f"{fixture_portal_url}/login.html", "Bundled Denial on Availity",
+        lob="AR", action="Denial Correction", subscenario="Bundled Denial",
+    )
+
+    with session_scope() as session:
+        request = session.get(RecordingRequest, request_id)
+        assert request.subscenario == "Bundled Denial"
+
+    listed = list_recording_requests(org_id)
+    assert listed[0]["subscenario"] == "Bundled Denial"

@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { LOB_TABS, type Lob } from '../../lib/recordingFormSchema'
 import { useAllFormOptions, useCreateFormOption, useUpdateFormOption, type FormOptionCategory } from '../../lib/formOptions'
+import { useAllSubscenarios, useCreateSubscenario, useUpdateSubscenario } from '../../lib/subscenarios'
 
 const CATEGORY_TABS: { category: FormOptionCategory; label: string }[] = [
   { category: 'client', label: 'Client' },
@@ -8,10 +9,68 @@ const CATEGORY_TABS: { category: FormOptionCategory; label: string }[] = [
   { category: 'ehr', label: 'EHR' },
 ]
 
+function SubscenarioManager({ actionId, actionLabel }: { actionId: string; actionLabel: string }) {
+  const [newLabel, setNewLabel] = useState('')
+  const { data: subscenarios = [] } = useAllSubscenarios(actionId)
+  const createSubscenario = useCreateSubscenario()
+  const updateSubscenario = useUpdateSubscenario()
+
+  function handleAdd() {
+    const label = newLabel.trim()
+    if (!label) return
+    createSubscenario.mutate({ action_id: actionId, label }, { onSuccess: () => setNewLabel('') })
+  }
+
+  return (
+    <div className="flex flex-col gap-3 pl-4 py-3 bg-atlas-bg">
+      <table className="w-full text-[12.5px] border border-atlas-border rounded-[10px] overflow-hidden">
+        <thead>
+          <tr className="bg-atlas-card text-left">
+            <th className="px-3 py-1.5">Subscenario</th>
+            <th className="px-3 py-1.5">Active</th>
+          </tr>
+        </thead>
+        <tbody>
+          {subscenarios.map((subscenario) => (
+            <tr key={subscenario.id} className="border-t border-atlas-border">
+              <td className="px-3 py-1.5">{subscenario.label}</td>
+              <td className="px-3 py-1.5">
+                <input
+                  type="checkbox"
+                  aria-label={`Deactivate ${subscenario.label}`}
+                  checked={subscenario.active}
+                  onChange={(e) => updateSubscenario.mutate({ id: subscenario.id, active: e.target.checked })}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="flex gap-2">
+        <input
+          value={newLabel}
+          onChange={(e) => setNewLabel(e.target.value)}
+          placeholder="New subscenario label"
+          className="px-3 py-2 rounded-[10px] border border-atlas-border outline-none text-[12.5px] flex-1"
+        />
+        <button
+          onClick={handleAdd}
+          disabled={!newLabel.trim() || createSubscenario.isPending}
+          className="bg-atlas-primary text-white rounded-full px-3 text-[12.5px] font-medium disabled:opacity-60"
+        >
+          Add subscenario
+        </button>
+      </div>
+      <div className="text-[11px] text-atlas-muted">Subscenarios for {actionLabel}</div>
+    </div>
+  )
+}
+
 export function FormOptionsPage() {
   const [lob, setLob] = useState<Lob>('AR')
   const [category, setCategory] = useState<FormOptionCategory>('action')
   const [newLabel, setNewLabel] = useState('')
+  const [expandedActionId, setExpandedActionId] = useState<string | null>(null)
 
   const { data: options = [] } = useAllFormOptions(lob, category)
   const createOption = useCreateFormOption()
@@ -60,21 +119,42 @@ export function FormOptionsPage() {
           <tr className="bg-atlas-bg text-left">
             <th className="px-3 py-2">Label</th>
             <th className="px-3 py-2">Active</th>
+            {category === 'action' && <th className="px-3 py-2" />}
           </tr>
         </thead>
         <tbody>
           {options.map((option) => (
-            <tr key={option.id} className="border-t border-atlas-border">
-              <td className="px-3 py-2">{option.label}</td>
-              <td className="px-3 py-2">
-                <input
-                  type="checkbox"
-                  aria-label={`Deactivate ${option.label}`}
-                  checked={option.active}
-                  onChange={(e) => updateOption.mutate({ id: option.id, active: e.target.checked })}
-                />
-              </td>
-            </tr>
+            <Fragment key={option.id}>
+              <tr className="border-t border-atlas-border">
+                <td className="px-3 py-2">{option.label}</td>
+                <td className="px-3 py-2">
+                  <input
+                    type="checkbox"
+                    aria-label={`Deactivate ${option.label}`}
+                    checked={option.active}
+                    onChange={(e) => updateOption.mutate({ id: option.id, active: e.target.checked })}
+                  />
+                </td>
+                {category === 'action' && (
+                  <td className="px-3 py-2">
+                    <button
+                      aria-label={`Manage subscenarios for ${option.label}`}
+                      onClick={() => setExpandedActionId(expandedActionId === option.id ? null : option.id)}
+                      className="text-[12px] text-atlas-primary font-medium"
+                    >
+                      {expandedActionId === option.id ? 'Hide' : 'Subscenarios'}
+                    </button>
+                  </td>
+                )}
+              </tr>
+              {category === 'action' && expandedActionId === option.id && (
+                <tr>
+                  <td colSpan={3} className="p-0">
+                    <SubscenarioManager actionId={option.id} actionLabel={option.label} />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

@@ -90,3 +90,21 @@ class FormOption(Base):
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     org: Mapped["Organization"] = relationship()
+
+
+# A named sub-scenario under one specific action (e.g. "Denial Correction" →
+# "Bundled Denial" / "Timely Filing Denial") — see
+# docs/superpowers/specs/2026-11-25-action-subscenarios-design.md. No
+# org_id/lob columns: scope is always inherited through action_id, so there
+# is nothing here that could drift out of sync with its parent FormOption.
+class Subscenario(Base):
+    __tablename__ = "subscenarios"
+    __table_args__ = (UniqueConstraint("action_id", "label"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    action_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("form_options.id", ondelete="CASCADE"))
+    label: Mapped[str]
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    action: Mapped["FormOption"] = relationship()
